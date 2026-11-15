@@ -1,0 +1,245 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+
+version: "3.0"
+
+set: ["e", "u", "pipefail"]
+
+vars:
+  PORTLIBS_DIR: .task/portlibs
+  JOBS: '$(nproc 2>/dev/null || sysctl -n hw.ncpu)'
+
+tasks:
+  default:
+    desc: "Check vitasdk and install the portlibs the app links against; rerun any time"
+    summary: |
+      Usage: task setup
+
+      Checks the toolchain, then builds the libs/*/VITABUILD recipes into
+      $VITASDK. Each package checks the library it installs, so once the SDK is
+      complete this is a handful of test -f checks and a no-op; run it after a
+      pull, after reinstalling vitasdk, or whenever a cmake build says it can't
+      find libssh2.h. Sources stage under .task/portlibs (~160 MB, gitignored);
+      task clean removes them, and a skipped package never re-downloads.
+    cmds:
+      - task: toolchain
+      - task: portlibs
+
+  toolchain:
+    desc: "Verify the vitasdk toolchain at $VITASDK (override with VITASDK=<path>)"
+    summary: |
+      Fails when no toolchain is present. Install vitasdk (https://docs.vitasdk.org,
+      or `brew install vitasdk`) and point VITASDK at it; the root taskfile
+      defaults VITASDK to ~/.local/opt/vitasdk and puts its bin on PATH.
+    cmds:
+      - '"{{.VITASDK}}/bin/arm-vita-eabi-gcc" --version | head -1 || { echo "vitasdk not found at {{.VITASDK}} (install it or export VITASDK; see https://docs.vitasdk.org)" >&2; exit 1; }'
+
+  portlibs:
+    desc: "Build and install OpenSSL 1.1.1 vita port, libssh2 and libssh into the SDK"
+    summary: |
+      Ordered on purpose: libssh2 and libssh both configure against the OpenSSL
+      built here, so these run as sequential cmds rather than parallel deps.
+      Each one checks the installed library itself, so this is cheap once the
+      SDK is complete and force-rebuilds a single package with:
+        task --force setup:openssl
+        task --force setup:libssh2
+        task --force setup:libssh
+    cmds:
+      - task: openssl
+      - task: libssh2
+      - task: libssh
+
+  openssl:
+    desc: "Build SonicMastr/vita-openssl3 (OpenSSL_1_1_1-vita) and install it into $VITASDK"
+    summary: |
+      Usage: task setup:openssl [--force]
+
+      Mirrors libs/openssl/VITABUILD: cross-configure the vita-cross target
+      with the same static-only flags and install into the SDK. install_sw (not
+      install) skips the man pages, which is all the VITABUILD deletes again
+      anyway. Sources stage under .task/portlibs/. Skips itself once the SDK
+      has the libraries, so a VITABUILD change needs --force to pick up.
+      Takes a few minutes on a fresh machine.
+    status:
+      - test -f {{.VITASDK}}/arm-vita-eabi/lib/libcrypto.a
+      - test -f {{.VITASDK}}/arm-vita-eabi/lib/libssl.a
+      - test -f {{.VITASDK}}/arm-vita-eabi/include/openssl/ssl.h
+    cmds:
+      - |
+        set -eu
+        # Exported here rather than in the root taskfile's `env:` — a variable already
+        # in the process environment outranks Taskfile env values, so PATH there is inert.
+        export PATH="{{.VITASDK}}/bin:$PATH"
+        root="$PWD"
+        base="$root/{{.PORTLIBS_DIR}}"
+        src="$base/vita-openssl3"
+        build="$base/openssl-build"
+        mkdir -p "$src"
+        [ -f "$src/Configure" ] || \
+          git clone --depth 1 -b OpenSSL_1_1_1-vita https://github.com/SonicMastr/vita-openssl3.git "$src"
+        # The port's install script is a perl module missing from macOS's perl.
+        printf '#!/bin/bash\nmkdir -p $@\n' > "$src/util/mkdir-p.pl"
+        # Out-of-tree and wiped first: a cached Makefile would keep whatever
+        # --prefix it was configured with, which is how a bad run poisons later ones.
+        rm -rf "$build"; mkdir -p "$build"; cd "$build"
+        "../$(basename "$src")/Configure" no-threads no-shared no-engine no-dso no-asm no-pic no-unit-test \
+          --prefix={{.VITASDK}}/arm-vita-eabi vita-cross > configure.log 2>&1 \
+          || { tail -20 configure.log >&2; exit 1; }
+        # The fork's Makefile has no build_sw target; plain make builds all the
+        # binaries, install_sw then skips the docs the VITABUILD deletes anyway.
+        make -j"{{.JOBS}}" > build.log 2>&1 || { tail -30 build.log >&2; exit 1; }
+        make install_sw > install.log 2>&1 || { tail -30 install.log >&2; exit 1; }
+        rm -rf "{{.VITASDK}}/arm-vita-eabi/share/man"
+
+  libssh2:
+    desc: "Build libssh2 against the SDK's OpenSSL port and install it into $VITASDK"
+    summary: |
+      Usage: task setup:libssh2 [--force]
+
+      Mirrors libs/libssh2/VITABUILD: configure --host=arm-vita-eabi against the
+      SDK's OpenSSL and zlib, static only. Run task setup:openssl first (or
+      task setup, which orders them). Host CPPFLAGS/LDFLAGS/PKG_CONFIG_* are
+      unset for configure on purpose: a Homebrew OpenSSL 3.x leaking into the
+      probe compiles 3.x-only code paths that fail to link against the 1.1.1
+      port later. Skips itself once the SDK has libssh2; --force rebuilds.
+    preconditions:
+      - sh: test -f "{{.VITASDK}}/arm-vita-eabi/lib/libssl.a"
+        msg: "OpenSSL port not installed in the SDK yet (run: task setup:openssl)"
+    status:
+      - test -f {{.VITASDK}}/arm-vita-eabi/lib/libssh2.a
+      - test -f {{.VITASDK}}/arm-vita-eabi/include/libssh2.h
+    vars:
+      # The version the VITABUILD pins, e.g. 1.11.1.
+      LIBSSH2_VERSION:
+        sh: sed -n 's/^pkgver=//p' libs/libssh2/VITABUILD | head -1
+    cmds:
+      - |
+        set -eu
+        # configure --host=arm-vita-eabi probes for arm-vita-eabi-gcc on PATH; the root
+        # taskfile cannot export it (process environment outranks Taskfile env values).
+        export PATH="{{.VITASDK}}/bin:$PATH"
+        root="$PWD"
+        base="$root/{{.PORTLIBS_DIR}}"
+        ver="{{.LIBSSH2_VERSION}}"
+        src="$base/libssh2-$ver"
+        build="$base/libssh2-build"
+        stage="$base/stage-libssh2"
+        mkdir -p "$base"
+        [ -f "$base/libssh2-$ver.tar.gz" ] || \
+          curl -sfL -o "$base/libssh2-$ver.tar.gz" \
+            "https://github.com/libssh2/libssh2/releases/download/libssh2-$ver/libssh2-$ver.tar.gz"
+        [ -f "$src/COPYING" ] || tar xzf "$base/libssh2-$ver.tar.gz" -C "$base"
+        # Out-of-tree and wiped first: a cached Makefile keeps the --prefix it was
+        # configured with, which is how a bad run poisons later ones.
+        rm -rf "$build" "$stage"; mkdir -p "$build"; cd "$build"
+        env -u CPPFLAGS -u CFLAGS -u CXXFLAGS -u LDFLAGS -u LIBS \
+          -u PKG_CONFIG_PATH -u PKG_CONFIG_LIBDIR \
+          PKG_CONFIG_LIBDIR={{.VITASDK}}/arm-vita-eabi/lib/pkgconfig \
+          "../libssh2-$ver/configure" --host=arm-vita-eabi \
+            --prefix="$stage{{.VITASDK}}/arm-vita-eabi" \
+            --with-libz --with-libz-prefix={{.VITASDK}}/arm-vita-eabi \
+            --with-libssl-prefix={{.VITASDK}}/arm-vita-eabi \
+            --disable-examples-build --disable-shared --enable-static > configure.log 2>&1 \
+            || { tail -20 configure.log >&2; exit 1; }
+        grep -q 'Crypto library: *OpenSSL' configure.log || { grep -E 'Crypto library|zlib' configure.log >&2; exit 1; }
+        make -j"{{.JOBS}}" > build.log 2>&1 || { tail -30 build.log >&2; exit 1; }
+        make install > install.log 2>&1 || { tail -30 install.log >&2; exit 1; }
+        rm -f "$stage{{.VITASDK}}/arm-vita-eabi/lib/libssh2.la"
+        cp -Rf "$stage{{.VITASDK}}/arm-vita-eabi/." "{{.VITASDK}}/arm-vita-eabi/"
+        # The VITABUILD ships no man pages; neither does the SDK need them.
+        rm -rf "{{.VITASDK}}/arm-vita-eabi/share/man"
+
+  libssh:
+    desc: "Build libssh (server + SFTP) against the SDK's OpenSSL port and install it into $VITASDK"
+    summary: |
+      Usage: task setup:libssh [--force]
+
+      Mirrors libs/libssh/VITABUILD. This is the library the sshd app links: the
+      server side of SSH, which libssh2 does not implement at all. Static only,
+      out-of-tree into a wiped dir, staged then copied into the SDK, and it
+      refuses to install without libssh.a — a cmake configure that quietly found
+      no OpenSSL still exits 0.
+
+      Three things differ from an ordinary cross-compile and all are load-bearing:
+      -DBUILD_SHARED_LIBS=OFF is spelled with the S (BUILD_SHARED_LIB is accepted
+      as an unused variable and builds the shared library anyway), and
+      POSITION_INDEPENDENT_CODE must be off because PIC emits R_ARM_GOT_BREL
+      relocations that vita-elf-create rejects with "Invalid relocation type 25".
+      cmake/Modules/DefineCMakeDefaults.cmake hard-sets it with a plain set(),
+      which outranks the cache, so passing it on the command line does nothing on
+      its own — vita.patch is what makes the flag effective.
+
+      CMake reads CFLAGS/CPPFLAGS/LDFLAGS from the environment the way configure
+      does, so they are unset here for the same Homebrew-OpenSSL reason as
+      libssh2, and OPENSSL_ROOT_DIR is pinned as a second line of defence. Skips
+      itself once the SDK has libssh; --force rebuilds.
+    preconditions:
+      - sh: test -f "{{.VITASDK}}/arm-vita-eabi/lib/libssl.a"
+        msg: "OpenSSL port not installed in the SDK yet (run: task setup:openssl)"
+    status:
+      - test -f {{.VITASDK}}/arm-vita-eabi/lib/libssh.a
+      - test -f {{.VITASDK}}/arm-vita-eabi/include/libssh/libssh.h
+    vars:
+      # The version and digest the VITABUILD pins, e.g. 0.12.2.
+      LIBSSH_VERSION:
+        sh: sed -n 's/^pkgver=//p' libs/libssh/VITABUILD | head -1
+      LIBSSH_SHA256:
+        sh: sed -n "s/^sha256sums=('\([0-9a-f]*\)')/\1/p" libs/libssh/VITABUILD | head -1
+    cmds:
+      - |
+        set -eu
+        # cmake's compiler checks probe for arm-vita-eabi-gcc on PATH; the root
+        # taskfile cannot export it (process environment outranks Taskfile env values).
+        export PATH="{{.VITASDK}}/bin:$PATH"
+        root="$PWD"
+        base="$root/{{.PORTLIBS_DIR}}"
+        ver="{{.LIBSSH_VERSION}}"
+        tarball="libssh-$ver.tar.xz"
+        src="$base/libssh-$ver"
+        build="$base/libssh-build"
+        stage="$base/stage-libssh"
+        mkdir -p "$base"
+        # ${ver%.*} is the upstream directory per minor series: 0.12.2 -> files/0.12/.
+        [ -f "$base/$tarball" ] || \
+          curl -sfL -o "$base/$tarball" "https://www.libssh.org/files/${ver%.*}/$tarball"
+        # The tarball must match the VITABUILD, and the patch must apply to the
+        # tree that tarball extracts to; a version bump that changed a patched
+        # file shows up here rather than as a .rej at build time.
+        echo "{{.LIBSSH_SHA256}}  $base/$tarball" | shasum -a 256 -c --status || \
+          { echo "sha256 mismatch for $tarball (expected {{.LIBSSH_SHA256}})" >&2; exit 1; }
+        # Extract and patch fresh every run: a half-patched tree from an aborted
+        # build would otherwise make patch fail with .rej files on the next one.
+        rm -rf "$src" "$build" "$stage"
+        # cmake -B creates this itself, but the configure.log redirect below needs it first.
+        mkdir -p "$build"
+        tar xf "$base/$tarball" -C "$base"
+        ( cd "$src" && patch -p1 -s < "$root/libs/libssh/vita.patch" )
+        env -u CPPFLAGS -u CFLAGS -u CXXFLAGS -u LDFLAGS -u LIBS \
+          -u PKG_CONFIG_PATH -u PKG_CONFIG_LIBDIR \
+          cmake -S "$src" -B "$build" \
+            -DCMAKE_TOOLCHAIN_FILE={{.VITASDK}}/share/vita.toolchain.cmake \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=OFF \
+            -DWITH_EXAMPLES=OFF \
+            -DWITH_NACL=OFF \
+            -DOPENSSL_ROOT_DIR={{.VITASDK}}/arm-vita-eabi \
+            -DOPENSSL_USE_STATIC_LIBS=TRUE \
+            -DTHREADS_HAVE_PTHREAD_ARG=NO > "$build/configure.log" 2>&1 \
+            || { tail -20 "$build/configure.log" >&2; exit 1; }
+        # FindOpenSSL will happily return /opt/homebrew/opt/openssl@3, and a
+        # stale cache repeats it, so assert the resolved path instead of grepping
+        # configure's prose.
+        grep -q '^OPENSSL_CRYPTO_LIBRARY:FILEPATH={{.VITASDK}}/arm-vita-eabi/lib/libcrypto.a$' \
+          "$build/CMakeCache.txt" \
+          || { grep -E 'OPENSSL_(CRYPTO|SSL)_LIBRARY|OPENSSL_INCLUDE_DIR' "$build/CMakeCache.txt" >&2; exit 1; }
+        cmake --build "$build" -j"{{.JOBS}}" > "$build/build.log" 2>&1 || { tail -30 "$build/build.log" >&2; exit 1; }
+        cmake --install "$build" --prefix="$stage{{.VITASDK}}/arm-vita-eabi" > "$build/install.log" 2>&1 \
+          || { tail -30 "$build/install.log" >&2; exit 1; }
+        rm -f "$stage{{.VITASDK}}/arm-vita-eabi/lib/libssh.la"
+        cp -Rf "$stage{{.VITASDK}}/arm-vita-eabi/." "{{.VITASDK}}/arm-vita-eabi/"
+        # An archive-less build is the failure that matters: every step above can
+        # exit 0 and leave the app link later unable to find ssh_bind_new.
+        test -f "{{.VITASDK}}/arm-vita-eabi/lib/libssh.a" || \
+          { echo "libssh.a missing after install" >&2; exit 1; }
+        # The VITABUILD ships no man pages; neither does the SDK need them.
+        rm -rf "{{.VITASDK}}/arm-vita-eabi/share/man"

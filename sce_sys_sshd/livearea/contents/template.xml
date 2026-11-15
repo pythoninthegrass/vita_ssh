@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<livearea style="psmobile" format-ver="01.00" content-rev="1">
+    <livearea-background>
+        <image>bg0.png</image>
+    </livearea-background>
+
+    <frame id="frame2">
+        <liveitem default="on">
+            <text valign="bottom" align="left" text-align="left" text-valign="bottom" line-space="3" ellipsis="off">
+                <str color="#ffffff" size="50" bold="on" shadow="on">
+                    VitaSSHd
+                </str>
+            </text>
+        </liveitem>
+    </frame>
+
+    <frame id="frame3">
+        <liveitem default="on">
+            <text valign="top" align="left" text-align="left" text-valign="top" line-space="2" ellipsis="off">
+                <str size="22" shadow="on">
+                    based on VitaSSH by rompelhd
+                </str>
+            </text>
+        </liveitem>
+    </frame>
+
+    <frame id="frame4">
+        <liveitem default="on">
+            <text align="left" text-align="left" word-wrap="off" ellipsis="off">
+                <str size="18" color="#ffffff" shadow="on">
+                    v1.0.0
+                </str>
+            </text>
+        </liveitem>
+    </frame>
+
+</livearea>

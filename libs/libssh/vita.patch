@@ -1,0 +1,180 @@
+diff --git a/ConfigureChecks.cmake b/ConfigureChecks.cmake
+index 4e32ea5..2550e40 100644
+--- a/ConfigureChecks.cmake
++++ b/ConfigureChecks.cmake
+@@ -65,6 +65,12 @@ check_include_file(byteswap.h HAVE_BYTESWAP_H)
+ check_include_file(glob.h HAVE_GLOB_H)
+ check_include_file(valgrind/valgrind.h HAVE_VALGRIND_VALGRIND_H)
+ check_include_file(ifaddrs.h HAVE_IFADDRS_H)
++# Not upstream probes. The Vita toolchain's newlib ships neither header, and
++# libssh includes both unguarded on non-Windows (net/if.h in config.c and
++# misc.c, sys/un.h in socket.c), so without these the build dies before any of
++# the #ifdef guards below can help.
++check_include_file(net/if.h HAVE_NET_IF_H)
++check_include_file(sys/un.h HAVE_SYS_UN_H)
+ 
+ if (WIN32)
+   check_include_file(io.h HAVE_IO_H)
+diff --git a/cmake/Modules/DefineCMakeDefaults.cmake b/cmake/Modules/DefineCMakeDefaults.cmake
+index 6f369fa..087e83e 100644
+--- a/cmake/Modules/DefineCMakeDefaults.cmake
++++ b/cmake/Modules/DefineCMakeDefaults.cmake
+@@ -18,4 +18,7 @@ set(CMAKE_COLOR_MAKEFILE ON)
+ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+ 
+ # Always build with -fPIC
+-set(CMAKE_POSITION_INDEPENDENT_CODE ON)
++# Vita: vita-elf-create rejects GOT relocations (R_ARM_GOT_BREL). Honour the caller.
++if(NOT DEFINED CMAKE_POSITION_INDEPENDENT_CODE)
++  set(CMAKE_POSITION_INDEPENDENT_CODE ON)
++endif()
+diff --git a/config.h.cmake b/config.h.cmake
+index 14e1031..c7a7d8e 100644
+--- a/config.h.cmake
++++ b/config.h.cmake
+@@ -66,6 +66,8 @@
+ 
+ /* Define to 1 if you have the <ifaddrs.h> header file. */
+ #cmakedefine HAVE_IFADDRS_H 1
++#cmakedefine HAVE_NET_IF_H 1
++#cmakedefine HAVE_SYS_UN_H 1
+ 
+ /* Define to 1 if you have the <openssl/aes.h> header file. */
+ #cmakedefine HAVE_OPENSSL_AES_H 1
+diff --git a/src/config.c b/src/config.c
+index 84fb123..26b3618 100644
+--- a/src/config.c
++++ b/src/config.c
+@@ -39,7 +39,9 @@
+ # include <errno.h>
+ # include <signal.h>
+ # include <sys/wait.h>
+-# include <net/if.h>
++# ifdef HAVE_NET_IF_H
++#  include <net/if.h>
++# endif
+ # include <netinet/in.h>
+ #endif
+ #ifdef HAVE_IFADDRS_H
+diff --git a/src/getpass.c b/src/getpass.c
+index 2edab7d..9fa8538 100644
+--- a/src/getpass.c
++++ b/src/getpass.c
+@@ -217,8 +217,10 @@ int ssh_getpass(const char *prompt,
+                 int echo,
+                 int verify)
+ {
++#ifdef HAVE_TERMIOS_H
+     struct termios attr;
+     struct termios old_attr;
++#endif
+     int ok = 0;
+     int fd = -1;
+ 
+@@ -227,6 +229,7 @@ int ssh_getpass(const char *prompt,
+         return -1;
+     }
+ 
++#ifdef HAVE_TERMIOS_H
+     if (isatty(STDIN_FILENO)) {
+         ZERO_STRUCT(attr);
+         ZERO_STRUCT(old_attr);
+@@ -255,6 +258,14 @@ int ssh_getpass(const char *prompt,
+             return -1;
+         }
+     }
++#else
++    if (isatty(STDIN_FILENO)) {
++        fd = fcntl(0, F_GETFL, 0);
++        if (fd < 0) {
++            return -1;
++        }
++    }
++#endif
+ 
+     /* disable nonblocking I/O */
+     if (fd & O_NONBLOCK) {
+@@ -267,10 +278,12 @@ int ssh_getpass(const char *prompt,
+ 
+     ok = ssh_gets(prompt, buf, len, verify);
+ 
++#ifdef HAVE_TERMIOS_H
+     if (isatty(STDIN_FILENO)) {
+         /* reset terminal */
+         tcsetattr(STDIN_FILENO, TCSANOW, &old_attr);
+     }
++#endif
+ 
+     /* close fd */
+     if (fd & O_NONBLOCK) {
+diff --git a/src/misc.c b/src/misc.c
+index f6f7410..e1e29c4 100644
+--- a/src/misc.c
++++ b/src/misc.c
+@@ -28,7 +28,9 @@
+ /* This is needed for a standard getpwuid_r on opensolaris */
+ #define _POSIX_PTHREAD_SEMANTICS
+ #include <arpa/inet.h>
++#ifdef HAVE_NET_IF_H
+ #include <net/if.h>
++#endif
+ #include <netinet/in.h>
+ #include <pwd.h>
+ #include <sys/socket.h>
+@@ -36,6 +38,20 @@
+ 
+ #endif /* _WIN32 */
+ 
++#ifndef _WIN32
++#ifndef HAVE_NET_IF_H
++/* The Vita toolchain's newlib has no net/if.h. Link-local IPv6 scope ids in
++ * "addr%ifname" therefore cannot be resolved: return 0, which is the same
++ * "interface not found" result the callers below already handle by rejecting
++ * the address. */
++static unsigned int if_nametoindex(const char *ifname)
++{
++    (void)ifname;
++    return 0;
++}
++#endif
++#endif
++
+ #include <errno.h>
+ #include <fcntl.h>
+ #include <limits.h>
+diff --git a/src/socket.c b/src/socket.c
+index 8065e5d..2bf41ee 100644
+--- a/src/socket.c
++++ b/src/socket.c
+@@ -42,13 +42,31 @@ struct sockaddr_un {
+ #include <sys/types.h>
+ #include <sys/wait.h>
+ #include <sys/socket.h>
++#ifdef HAVE_SYS_UN_H
+ #include <sys/un.h>
++#endif
+ #include <signal.h>
+ #ifdef HAVE_PTHREAD
+ #include <pthread.h>
+ #endif
+ #endif /* _WIN32 */
+ 
++#ifndef HAVE_SYS_UN_H
++/* The Vita toolchain's newlib has no sys/un.h. The only users of AF_UNIX in
++ * this file are client-side helpers (ssh_socket_unix for the agent, and the
++ * socketpair() in the proxycommand/proxyjump paths) that a server never calls,
++ * so provide just enough for them to compile and fail at runtime. */
++#define AF_UNIX 1
++#define PF_UNIX AF_UNIX
++#ifndef UNIX_PATH_MAX
++#define UNIX_PATH_MAX 108
++#endif
++struct sockaddr_un {
++    sa_family_t sun_family;
++    char sun_path[UNIX_PATH_MAX];
++};
++#endif /* HAVE_SYS_UN_H */
++
+ #include "libssh/priv.h"
+ #include "libssh/callbacks.h"
+ #include "libssh/socket.h"

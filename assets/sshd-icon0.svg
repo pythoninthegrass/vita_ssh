@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  VitaSSHd tile source. Render:
+    rsvg-convert -w 128 -h 128 assets/sshd-icon0.svg -o sce_sys_sshd/icon0.png
+    magick sce_sys_sshd/icon0.png -type TrueColor -alpha off -depth 8 -colors 32 PNG24:sce_sys_sshd/icon0.png
+  The console geometry (pill, screen, dot clusters, wordmark baseline) is measured off the
+  client's sce_sys/icon0.png so the two tiles read as one family; the field hue and the
+  screen glyph are what tell them apart.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="field" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#11666b"/>
+      <stop offset="1" stop-color="#083f45"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="128" height="128" fill="url(#field)"/>
+
+  <!-- console body -->
+  <rect x="20" y="24" width="88" height="45" rx="22.5" fill="#ffffff"/>
+
+  <!-- screen: the field colour, like the client's -->
+  <rect x="36" y="28" width="56" height="35" rx="2" fill="#0d5057"/>
+
+  <!-- controls: dot diamond per side, analog stick below each -->
+  <g fill="#0d5057">
+    <circle cx="28.5" cy="35.0" r="2.2"/>
+    <circle cx="24.0" cy="39.5" r="2.2"/>
+    <circle cx="33.0" cy="39.5" r="2.2"/>
+    <circle cx="28.5" cy="44.0" r="2.2"/>
+    <circle cx="29.0" cy="51.5" r="3.2"/>
+
+    <circle cx="98.5" cy="35.0" r="2.2"/>
+    <circle cx="94.0" cy="39.5" r="2.2"/>
+    <circle cx="103.0" cy="39.5" r="2.2"/>
+    <circle cx="98.5" cy="44.0" r="2.2"/>
+    <circle cx="97.5" cy="51.5" r="3.2"/>
+  </g>
+
+  <!-- screen glyph: a shell prompt, where the client carries its padlock -->
+  <g stroke="#5fe3a1" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round" fill="none">
+    <path d="M 49 37 L 57 45.5 L 49 54"/>
+  </g>
+  <rect x="63" y="47" width="16" height="5" rx="1.75" fill="#5fe3a1"/>
+
+  <text x="64" y="98" fill="#ffffff" font-family="Avenir Next" font-weight="bold"
+        font-size="24" text-anchor="middle" letter-spacing="-1.3">VitaSSHd</text>
+</svg>

@@ -1,0 +1,38 @@
+pkgname=libssh
+pkgver=0.12.2
+pkgrel=1
+url="https://www.libssh.org"
+source=("https://www.libssh.org/files/0.12/libssh-0.12.2.tar.xz")
+
+sha256sums=('49560f677d96e3706a904ac2de1116e25f3680937d51e5c92198fcba4a1c1e9f')
+
+# vita.patch: upstream includes <net/if.h> and <sys/un.h> unguarded on every
+# non-Windows platform, and compiles getpass.c's termios path unconditionally.
+# None of those exist in the Vita newlib. Also stops cmake/Modules/
+# DefineCMakeDefaults.cmake forcing -fPIC, whose GOT relocations vita-elf-create
+# rejects with "Invalid relocation type 25". See libs/libssh/vita.patch.
+build() {
+  cd libssh-$pkgver
+  patch -p1 < ../vita.patch
+
+  # BUILD_SHARED_LIBS is the real option name; BUILD_SHARED_LIB is accepted by
+  # cmake as an unused variable and quietly builds the shared lib anyway.
+  # POSITION_INDEPENDENT_CODE must be off for the same reason as the patch above.
+  cmake -S . -B build \
+    -DCMAKE_TOOLCHAIN_FILE=$VITASDK/share/vita.toolchain.cmake \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DBUILD_SHARED_LIBS=OFF \
+    -DCMAKE_POSITION_INDEPENDENT_CODE=OFF \
+    -DWITH_EXAMPLES=OFF \
+    -DWITH_NACL=OFF \
+    -DOPENSSL_ROOT_DIR=$VITASDK/arm-vita-eabi \
+    -DOPENSSL_USE_STATIC_LIBS=TRUE \
+    -DTHREADS_HAVE_PTHREAD_ARG=NO
+  make -C build -j$(nproc)
+}
+
+package() {
+  cd libssh-$pkgver
+  make -C build DESTDIR=$pkgdir install
+  rm -rf $pkgdir/$prefix/share
+}

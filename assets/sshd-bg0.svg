@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  VitaSSHd livearea background source. Render:
+    rsvg-convert -w 960 -h 544 assets/sshd-bg0.svg -o sce_sys_sshd/livearea/contents/bg0.png
+    magick sce_sys_sshd/livearea/contents/bg0.png -type TrueColor -alpha off -depth 8 PNG24:sce_sys_sshd/livearea/contents/bg0.png
+  The client's bg0.png is a flat fill of its brand blue; this keeps that flat-field
+  convention and adds only a low-contrast console outline, kept to the right because the
+  livearea text (template.xml) sits bottom-left.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="544" viewBox="0 0 960 544">
+  <defs>
+    <linearGradient id="field" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#11666b"/>
+      <stop offset="1" stop-color="#083f45"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="960" height="544" fill="url(#field)"/>
+
+  <g transform="translate(470,40) scale(4.3)" fill="none" stroke="#1c5c64"
+     stroke-width="0.9" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="20" y="24" width="88" height="45" rx="22.5"/>
+    <rect x="36" y="28" width="56" height="35" rx="2"/>
+    <g fill="#1c5c64" stroke="none">
+      <circle cx="28.5" cy="35.0" r="2.2"/>
+      <circle cx="24.0" cy="39.5" r="2.2"/>
+      <circle cx="33.0" cy="39.5" r="2.2"/>
+      <circle cx="28.5" cy="44.0" r="2.2"/>
+      <circle cx="29.0" cy="51.5" r="3.2"/>
+      <circle cx="98.5" cy="35.0" r="2.2"/>
+      <circle cx="94.0" cy="39.5" r="2.2"/>
+      <circle cx="103.0" cy="39.5" r="2.2"/>
+      <circle cx="98.5" cy="44.0" r="2.2"/>
+      <circle cx="97.5" cy="51.5" r="3.2"/>
+    </g>
+    <path d="M 45 38 L 52 45.5 L 45 53" stroke="#22766c" stroke-width="3.5"/>
+    <rect x="58" y="48" width="15" height="4.5" rx="1.5" fill="#22766c" stroke="none"/>
+  </g>
+</svg>

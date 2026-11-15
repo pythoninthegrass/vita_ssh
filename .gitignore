@@ -1,0 +1,13 @@
+# Build tree: cmake's output. Only the .gitkeep the repo tracks stays visible.
+build/*
+
+# task's fingerprints and the staged portlib sources (task clean, task setup).
+.task/
+
+# Machine-local task config loaded by dotenv; .env.example is the tracked template.
+.env
+
+# INCLUDE
+!build/.gitkeep
+!.gitkeep
+

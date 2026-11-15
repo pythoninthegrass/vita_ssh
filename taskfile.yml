@@ -1,0 +1,85 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+
+version: "3.0"
+
+set: ["e", "u", "pipefail"]
+
+# Copy .env.example to .env for machine-local config (gitignored). A .env value is
+# a default, not an override: `task build VITASDK=<path>` still wins.
+dotenv:
+  - .env
+
+vars:
+  VITASDK: '{{.VITASDK | default (printf "%s/.local/opt/vitasdk" .HOME)}}'
+  BUILD_DIR: build
+
+# Deliberately no `env:` block: an env entry that shares a name with a vars key stops
+# the dotenv value from ever reaching {{.VITASDK}}, and `PATH:` would never take either
+# — a variable already in the process environment outranks Taskfile env values. The
+# portlib recipes export PATH themselves; `build` hands VITASDK to cmake explicitly.
+
+includes:
+  setup: taskfiles/setup.yml
+
+tasks:
+  default:
+    desc: "List available tasks"
+    cmds:
+      - task --list
+
+  build:
+    desc: "Configure and build both apps' SELF and VPK into build/; skips when nothing changed"
+    summary: |
+      Usage: task build
+
+      Drives CMake directly (cmake -S . -B build && cmake --build build), so
+      make stays an implementation detail behind CMake. The step fingerprints
+      sources, headers and CMakeLists.txt and skips itself when the last
+      build is current; the portlibs it links against are checked by
+      setup:portlibs first. Force a rebuild with: task --force build
+
+      Builds both apps: build/ssh_client_vita.vpk (the libssh2 client) and
+      build/ssh_server_vita.vpk (the libssh sshd). One cmake invocation builds both,
+      so the task exits non-zero if either app fails to compile. To compile and link
+      just one app, build its executable target (not the .vpk, which is a stamped
+      file that make will not refresh):
+        cmake --build build --target ssh_server_vita
+
+      VITASDK resolves from the CLI, then .env, then ~/.local/opt/vitasdk, and is
+      passed to cmake explicitly because CMakeLists.txt reads it from the environment.
+      Changing it means a fresh build/ — CMakeCache.txt pins absolute toolchain paths.
+    sources:
+      # Covers the client's and the server's .c files alike (src/sshd*.c, sh_path.c,
+      # vita_shims.c) — the same glob, so a new server source is fingerprinted too.
+      - src/**/*
+      - include/**/*
+      - CMakeLists.txt
+      - .env
+      # Relink when a portlib or the toolchain file changes underneath us. libssh.a
+      # is the one the server target alone links; it was missing here.
+      - '{{.VITASDK}}/arm-vita-eabi/lib/libssh2.a'
+      - '{{.VITASDK}}/arm-vita-eabi/lib/libssh.a'
+      - '{{.VITASDK}}/arm-vita-eabi/lib/libssl.a'
+      - '{{.VITASDK}}/arm-vita-eabi/lib/libcrypto.a'
+      - '{{.VITASDK}}/share/vita.toolchain.cmake'
+    generates:
+      - build/ssh_client_vita.vpk
+      - build/ssh_server_vita.vpk
+    deps: [setup:portlibs]
+    cmds:
+      - VITASDK={{.VITASDK}} cmake -S . -B {{.BUILD_DIR}}
+      - VITASDK={{.VITASDK}} cmake --build {{.BUILD_DIR}}
+
+  clean:
+    desc: "Remove build/, task's fingerprint cache, and the staged portlib sources (~160 MB)"
+    summary: |
+      Usage: task clean
+
+      Wipes the whole .task directory, so the next task setup re-downloads and
+      re-extracts the OpenSSL, libssh2 and libssh sources under .task/portlibs.
+      The libraries already installed in $VITASDK are left alone; remove those by
+      hand if you want them rebuilt.
+    cmds:
+      - rm -rf {{.BUILD_DIR}} .task
+      - mkdir -p {{.BUILD_DIR}}
+      - touch {{.BUILD_DIR}}/.gitkeep
