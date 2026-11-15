@@ -119,7 +119,10 @@ static int record_fingerprint(ssh_key key, char *dst, size_t dstlen)
         return -1;
     }
     base64(hash, hlen, b64, sizeof(b64));
-    ssh_string_free_char(hash);
+    /* ssh_get_publickey_hash hands back an unsigned char *, and the free that
+     * matches it takes unsigned char ** — which also NULLs it. The obvious
+     * ssh_string_free_char() wants a char * and would need a cast. */
+    ssh_clean_pubkey_hash(&hash);
     {
         char *pad = strchr(b64, '=');
 
@@ -145,8 +148,20 @@ static int load_or_create_host_key(void)
     }
     host_key = NULL;
     ensure_data_dir();
-    if (ssh_pki_generate(SSH_KEYTYPE_ED25519, 0, &host_key) != SSH_OK ||
-        host_key == NULL) {
+    /* ssh_pki_generate() is deprecated in this libssh. Its replacement takes a
+     * pki context, which carries the FIDO2/security-key enrolment options an
+     * ed25519 host key has no use for — but it is still a required argument, so
+     * one is created, used and dropped right here. */
+    {
+        ssh_pki_ctx ctx = ssh_pki_ctx_new();
+
+        if (ctx == NULL) {
+            return -1;
+        }
+        rc = ssh_pki_generate_key(SSH_KEYTYPE_ED25519, ctx, &host_key);
+        ssh_pki_ctx_free(ctx);
+    }
+    if (rc != SSH_OK || host_key == NULL) {
         host_key = NULL;
         return -1;
     }

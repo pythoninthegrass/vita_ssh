@@ -29,6 +29,10 @@
 #include <string.h>
 #include <sys/stat.h>
 
+/* callbacks.h declares ssh_server_callbacks_struct, ssh_channel_callbacks_struct,
+ * ssh_callbacks_init() and the two setters below. server.h does not pull it in,
+ * and without it both callback structs come back incomplete. */
+#include <libssh/callbacks.h>
 #include <libssh/server.h>
 
 #define MAX_OUTPUT 2048
@@ -816,8 +820,12 @@ static int on_subsystem_request(ssh_session session, ssh_channel channel,
     return 1;
 }
 
-static int on_channel_close(ssh_session session, ssh_channel channel,
-                            void *userdata)
+/* Both are void-returning: ssh_channel_close_callback and
+ * ssh_channel_eof_callback have no status for libssh to act on, the channel
+ * being already gone. Each flags the session so the poll loop tears it down on
+ * its next pass rather than doing the teardown from inside the callback. */
+static void on_channel_close(ssh_session session, ssh_channel channel,
+                             void *userdata)
 {
     sh_session_t *s = userdata;
 
@@ -826,11 +834,10 @@ static int on_channel_close(ssh_session session, ssh_channel channel,
     if (s != NULL) {
         s->finished = 1;
     }
-    return 0;
 }
 
-static int on_channel_eof(ssh_session session, ssh_channel channel,
-                          void *userdata)
+static void on_channel_eof(ssh_session session, ssh_channel channel,
+                           void *userdata)
 {
     sh_session_t *s = userdata;
 
@@ -839,7 +846,6 @@ static int on_channel_eof(ssh_session session, ssh_channel channel,
     if (s != NULL) {
         s->finished = 1;
     }
-    return 0;
 }
 
 static ssh_channel on_open_session(ssh_session session, void *userdata)
@@ -860,8 +866,11 @@ static ssh_channel on_open_session(ssh_session session, void *userdata)
         return NULL;
     }
     s->channel = channel;
+    /* This libssh has no ssh_channel_set_callbacks_userdata(): the userdata the
+     * callbacks receive is whatever channel_cbs.userdata already holds, and
+     * sh_session_new() set that when it filled in the callback struct. So the
+     * order is what matters — the struct is complete before it is registered. */
     ssh_set_channel_callbacks(channel, &s->channel_cbs);
-    ssh_channel_set_callbacks_userdata(channel, s);
     return channel;
 }
 

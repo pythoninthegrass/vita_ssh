@@ -121,7 +121,8 @@ int sh_auth_check_password(const sh_auth_t *auth, const char *user,
 /* --- the Vita's own screen (console code in sshd.c) --- */
 
 void sh_console_log(const char *fmt, ...);
-void sh_console_draw(struct ssh_bind_s *bind, const sh_auth_t *auth,
-                     int sessions, const char *ip, int port);
+/* Drawing the console is internal to sshd.c: it needs the vita2d font, the slot
+ * table and the listening port, none of which belong in a shared header. The
+ * console code therefore exposes only the log call above. */
 
 #endif /* SSHD_H */

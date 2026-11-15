@@ -33,6 +33,7 @@
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <sys/poll.h>
 #include <sys/socket.h>
 
 #include <libssh/server.h>
@@ -40,7 +41,7 @@
 
 #include <psp2/ctrl.h>
 #include <psp2/kernel/processmgr.h>
-#include <psp2/kernel/thread.h>
+#include <psp2/kernel/threadmgr.h>
 #include <psp2/net/netctl.h>
 #include <psp2/sysmodule.h>
 
@@ -66,6 +67,20 @@ static char log_ring[CONSOLE_LINES][CONSOLE_WIDTH];
 static int log_head;
 static int log_count;
 
+/* The one answer to "how many sessions are open", asked by the console's status
+ * line and by the accept log. Nothing else walks the slot table. */
+static int count_sessions(void)
+{
+    int i, n = 0;
+
+    for (i = 0; i < SSHD_MAX_SESSIONS; i++) {
+        if (slots[i].used) {
+            n++;
+        }
+    }
+    return n;
+}
+
 /* ------------------------------------------------------------------ */
 /* the Vita's own screen                                              */
 /* ------------------------------------------------------------------ */
@@ -79,7 +94,9 @@ static int log_count;
 void sh_console_log(const char *fmt, ...)
 {
     va_list ap;
-    char body[CONSOLE_WIDTH];
+    /* Room for the "[mmm.nnn] " prefix, so a long line loses characters from the
+     * body and never loses the timestamp that makes the log readable. */
+    char body[CONSOLE_WIDTH - 16];
     unsigned long long now = sceKernelGetProcessTimeWide() / 1000000ULL;
 
     va_start(ap, fmt);
@@ -94,6 +111,23 @@ void sh_console_log(const char *fmt, ...)
     }
 }
 
+/* network.c is shared with the client app, so it cannot print: this app never
+ * calls sceDebugScreenInit, so printf() there would write to a screen nobody can
+ * read while a real console is on. Forward each bring-up message into the ring
+ * instead. The message is passed through "%s" so a stray % in it cannot be read
+ * as a format. */
+void net_log(const char *fmt, ...)
+{
+    va_list ap;
+    char line[CONSOLE_WIDTH];
+
+    va_start(ap, fmt);
+    vsnprintf(line, sizeof(line), fmt, ap);
+    va_end(ap);
+
+    sh_console_log("%s", line);
+}
+
 static void draw_console(vita2d_pgf *font, const sh_auth_t *auth,
                          const char *ip)
 {
@@ -103,14 +137,8 @@ static void draw_console(vita2d_pgf *font, const sh_auth_t *auth,
     static const unsigned int GREEN = RGBA8(120, 220, 120, 255);
     static const unsigned int AMBER = RGBA8(240, 190, 90, 255);
     int y = 18;
-    int sessions = 0;
+    int sessions = count_sessions();
     int i;
-
-    for (i = 0; i < SSHD_MAX_SESSIONS; i++) {
-        if (slots[i].used) {
-            sessions++;
-        }
-    }
 
     vita2d_start_drawing();
     vita2d_clear_screen();
@@ -174,7 +202,7 @@ static void local_ip(char *dst, size_t dstlen)
 
     snprintf(dst, dstlen, "0.0.0.0");
     memset(&info, 0, sizeof(info));
-    if (sceNetCtlInetGetInfo(SCE_NETCTL_INFO_GET_IPADDR, &info) == 0 &&
+    if (sceNetCtlInetGetInfo(SCE_NETCTL_INFO_GET_IP_ADDRESS, &info) == 0 &&
         info.ip_address[0] != '\0') {
         snprintf(dst, dstlen, "%s", info.ip_address);
     }
@@ -308,18 +336,6 @@ static int on_incoming(socket_t fd, int revents, void *userdata)
     return SSH_OK;
 }
 
-int count_sessions(void)
-{
-    int i, n = 0;
-
-    for (i = 0; i < SSHD_MAX_SESSIONS; i++) {
-        if (slots[i].used) {
-            n++;
-        }
-    }
-    return n;
-}
-
 /* ------------------------------------------------------------------ */
 /* bind                                                              */
 /* ------------------------------------------------------------------ */
@@ -377,7 +393,7 @@ static int start_pressed(void)
     return 0;
 }
 
-static void server_loop(ssh_bind bind, const sh_auth_t *auth)
+static void server_loop(ssh_bind bind, const sh_auth_t *auth, vita2d_pgf *font)
 {
     unsigned long long next_draw = 0;
     char ip[64];
@@ -419,7 +435,7 @@ static void server_loop(ssh_bind bind, const sh_auth_t *auth)
             unsigned long long now = sceKernelGetProcessTimeWide();
 
             if (now >= next_draw) {
-                draw_console(vita2d_get_current_params() ? NULL : NULL, auth, ip);
+                draw_console(font, auth, ip);
                 next_draw = now + DRAW_INTERVAL_US;
             }
         }
@@ -480,7 +496,7 @@ static int server_thread(SceSize args, void *argp)
                                    on_incoming, bind) != SSH_OK) {
             sh_console_log("error: could not watch the listening socket");
         } else {
-            server_loop(bind, &auth);
+            server_loop(bind, &auth, font);
         }
     }
 
@@ -507,8 +523,9 @@ static int server_thread(SceSize args, void *argp)
 
 int main(void)
 {
+    /* Arg 6 is an int cpuAffinityMask, not a pointer: 0 lets the kernel pick. */
     SceUID thread = sceKernelCreateThread("sshd", server_thread, 0x10000100,
-                                         SERVER_STACK, 0, NULL, NULL);
+                                          SERVER_STACK, 0, 0, NULL);
 
     if (thread < 0) {
         return 1;

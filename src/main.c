@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdarg.h>
 #include <string.h>
 #include <psp2/ctrl.h>
 #include <psp2/kernel/processmgr.h>
@@ -102,6 +103,21 @@ void get_ssh_credentials_from_profile(SshProfile *profile) {
             }
         }
     }
+}
+
+/* network.c is shared with the sshd app, which has no stdout, so it logs through
+ * this hook. The client keeps upstream's behaviour: one line per message on
+ * stdout, which a debug plugin can still pick up. The newline the call sites no
+ * longer carry is added back here, and flushed, so the stream looks exactly as it
+ * did when network.c called printf() directly. */
+void net_log(const char *fmt, ...) {
+    va_list ap;
+
+    va_start(ap, fmt);
+    vprintf(fmt, ap);
+    va_end(ap);
+    fputc('\n', stdout);
+    fflush(stdout);
 }
 
 void connect_ssh() {
