@@ -24,6 +24,7 @@
 #include <sys/stat.h>
 #include <sys/statvfs.h>
 #include <sys/time.h>
+#include <time.h>
 #include <unistd.h>
 
 #include <libssh/sftp.h>
@@ -104,11 +105,27 @@ static int writable_target(const char *path, sh_target_t *t)
     return 0;
 }
 
+/* libssh formats the "ls -l" name with ctime_r() and hands the result to
+ * asctime_r() unchecked. newlib's localtime_r returns NULL for a time sceRtc
+ * rejects, which crashes the server, so a time it refuses (a synthetic stat's 0,
+ * a FAT entry with no date) is replaced with the current time. */
+static void usable_time(time_t *t)
+{
+    struct tm tm;
+
+    if (localtime_r(t, &tm) == NULL) {
+        *t = time(NULL);
+    }
+}
+
 static void synth_dir_stat(struct stat *st, int writable)
 {
     memset(st, 0, sizeof(*st));
     st->st_mode = S_IFDIR | (writable ? 0755 : 0555);
     st->st_nlink = 1;
+    usable_time(&st->st_atime);
+    usable_time(&st->st_mtime);
+    usable_time(&st->st_ctime);
 }
 
 /* The Vita has no owners, permission bits or links, so every entry reports one
@@ -124,6 +141,9 @@ static void normalise_stat(struct stat *st, int writable)
     st->st_uid = 0;
     st->st_gid = 0;
     st->st_nlink = 1;
+    usable_time(&st->st_atime);
+    usable_time(&st->st_mtime);
+    usable_time(&st->st_ctime);
 }
 
 static int stat_common(const char *path, struct stat *st, int follow)
@@ -679,17 +699,25 @@ static int handle_rename(sh_sftp_t *s, const sh_fsctx_t *fs,
 static int feed_packet(sh_sftp_t *s, const sh_fsctx_t *fs, void *packet,
                        uint32_t len)
 {
+    uint8_t type = ((const uint8_t *)packet)[4];
+    int rc;
+
+    /* READ and WRITE are per-chunk, so logging them would drown a transfer. */
+    if (type != SSH_FXP_READ && type != SSH_FXP_WRITE) {
+        sh_console_log("sftp: request type %u, %u bytes", type, (unsigned)len);
+    }
     if (handle_rename(s, fs, packet, len)) {
         return 0;
     }
-    int rc;
-
     active = s;
     active_fs = fs;
     rc = sftp_channel_default_data_callback(NULL, NULL, packet, len, 0,
                                             &s->sftp);
     active = NULL;
     active_fs = NULL;
+    if (rc < 0) {
+        sh_console_log("sftp: request type %u failed (%d)", type, rc);
+    }
     return rc < 0 ? -1 : 0;
 }
 
