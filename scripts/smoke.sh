@@ -390,6 +390,17 @@ mkdir $REMOTE/d2" >/dev/null
     sftp_run "rename $REMOTE/victim.bin /os0/smoke.bin" >/dev/null; RC=$?
     check "rename onto read-only device refused (-> nonzero)" 1 "$(failed "$RC")"
 
+    # What the stock clients cannot reach: a refused subsystem followed by a good one on
+    # the same channel (TASK-002.01 AC5) and SETSTAT with times (TASK-002.02 AC1).
+    if command -v uv >/dev/null 2>&1; then
+      OUT=$(uv run --quiet "$(dirname "$0")/sftp_probe.py" "$HOST" "$PORT" 2>&1)
+      printf '%s\n' "$OUT"
+      PASS=$((PASS + $(printf '%s\n' "$OUT" | grep -c '^PASS')))
+      FAIL=$((FAIL + $(printf '%s\n' "$OUT" | grep -c '^FAIL')))
+    else
+      skip "scripts/sftp_probe.py" "uv is not installed"
+    fi
+
     # --- cleanup, then 002.01 AC4: the server is still healthy ----------------
     sftp_run "rm $REMOTE/victim.bin
 rm $REMOTE/big.bin
