@@ -14,4 +14,18 @@ void add_profile(SshProfile profiles[], int *count, const char *name, const char
 void delete_profile(SshProfile profiles[], int *count, int index);
 void select_profile(SshProfile *selected, SshProfile profiles[], int index);
 
+#define MAX_HISTORY 32
+#define MAX_COMMAND_LENGTH 256
+
+typedef struct {
+    char entries[MAX_HISTORY][MAX_COMMAND_LENGTH];
+    int count;
+    int selection;
+} CommandHistory;
+
+void history_load(CommandHistory *history);
+void history_save(const CommandHistory *history);
+void history_add(CommandHistory *history, const char *command);
+const char *history_select(CommandHistory *history, int up);
+
 #endif

@@ -32,6 +32,9 @@ WiFi, and run commands on the remote host from the Vita.
   keys on the shoulders, and a resize that tells the server.
 - **Profiles**: up to 10, edited through the on-screen keyboard, kept in
   `ux0:data/vitassh/profiles.dat`.
+- **Command history**: the last 32 single commands, kept in `ux0:data/vitassh/history.dat`.
+  With the terminal showing, <kbd>↑</kbd> <kbd>↓</kbd> walk the list newest-first and
+  <kbd>○</kbd> or <kbd>✕</kbd> opens the keyboard prefilled with the selected command.
 - **Network**: sceNet and sceNetCtl bring-up with the state reported to the terminal, so a
   radio that never came up is not mistaken for a server that is down.
 
@@ -45,7 +48,8 @@ WiFi, and run commands on the remote host from the Vita.
 | Profiles | <kbd>□</kbd> | Edit the selected profile |
 | Profiles | <kbd>START</kbd> | Delete the selected profile (press twice) |
 | Terminal | <kbd>△</kbd> | Interactive shell |
-| Terminal | <kbd>○</kbd> | One command |
+| Terminal | <kbd>○</kbd> or <kbd>✕</kbd> | One command; the keyboard opens prefilled with the selected history entry |
+| Terminal | <kbd>↑</kbd> / <kbd>↓</kbd> | Older / newer command in history |
 | Terminal | touch drag | Scroll the output |
 | Terminal | back touch | Jump to the bottom |
 | Terminal | <kbd>START</kbd> | Leave the shell, or leave to the menu and disconnect |
@@ -73,7 +77,6 @@ Honest list, because the useful part of a README is telling you what will disapp
 - **Password authentication only.** No public key auth, and no verification of the
   server's host key either: the client authenticates to whatever completed the handshake.
   Do not log in over a network you do not trust. Tracked in `TASK-005`.
-- **No command history** of its own; every single-command prompt starts blank. `TASK-006`.
 - **No full-screen programs.** `vim`, `top` and pagers redraw over themselves because the
   alternate screen and scroll regions are not implemented. `TASK-007`.
 - **Fonts, not Unicode.** Output is drawn from the PGF font, so the ASCII range is
@@ -437,7 +440,6 @@ Unclaimed, self-contained, and reasonable to start on:
 | --- | --- |
 | `TASK-005.01` | private key authentication in the client |
 | `TASK-005.02` | host key verification in the client |
-| `TASK-006` | command history in the client |
 | `TASK-007` | alternate screen and scroll regions, so `top` and `vim` work |
 | `TASK-008` | touch selection in the menus and profile list |
 | `TASK-009` | SVG sources for the client's tile |

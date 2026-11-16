@@ -311,3 +311,111 @@ void select_profile(SshProfile *selected, SshProfile profiles[], int index) {
         *selected = profiles[index];
     }
 }
+
+static int command_is_blank(const char *command) {
+    for (; *command != '\0'; command++) {
+        if (*command != ' ' && *command != '\t' && *command != '\r' && *command != '\n') {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+void history_load(CommandHistory *history) {
+    memset(history, 0, sizeof(*history));
+
+    SceUID fd = sceIoOpen("ux0:data/vitassh/history.dat", SCE_O_RDONLY, 0);
+    if (fd < 0) return;
+
+    /* The newest entry is written last, so the last complete record read wins. */
+    for (int i = 0; i < MAX_HISTORY; i++) {
+        memset(history->entries[i], 0, MAX_COMMAND_LENGTH);
+        int bytes = sceIoRead(fd, history->entries[i], MAX_COMMAND_LENGTH);
+        if (bytes != MAX_COMMAND_LENGTH) break;
+        history->entries[i][MAX_COMMAND_LENGTH - 1] = '\0';
+        if (command_is_blank(history->entries[i])) break;
+        history->count++;
+    }
+
+    sceIoClose(fd);
+    history->selection = history->count;
+}
+
+void history_save(const CommandHistory *history) {
+    /* A record is MAX_COMMAND_LENGTH bytes with no terminator, so a short entry
+     * would bleed into the previous one on the next load; the load side reads
+     * that trailing junk as a poisoned entry and truncates the file there. */
+    CommandHistory clean;
+    int n = history->count;
+
+    if (n < 0) n = 0;
+    if (n > MAX_HISTORY) n = MAX_HISTORY;
+
+    memset(&clean, 0, sizeof(clean));
+    for (int i = 0; i < n; i++) {
+        if (command_is_blank(history->entries[i])) continue;
+        strncpy(clean.entries[clean.count], history->entries[i], MAX_COMMAND_LENGTH - 1);
+        clean.count++;
+    }
+
+    SceUID fd = sceIoOpen("ux0:data/vitassh/history.dat",
+                          SCE_O_WRONLY | SCE_O_CREAT | SCE_O_TRUNC, 0777);
+    if (fd < 0) return;
+
+    for (int i = 0; i < clean.count; i++) {
+        sceIoWrite(fd, clean.entries[i], MAX_COMMAND_LENGTH);
+    }
+
+    sceIoClose(fd);
+}
+
+void history_add(CommandHistory *history, const char *command) {
+    if (command == NULL || command_is_blank(command)) return;
+
+    int dup = -1;
+    for (int i = 0; i < history->count; i++) {
+        if (strcmp(history->entries[i], command) == 0) {
+            dup = i;
+            break;
+        }
+    }
+
+    if (dup >= 0) {
+        /* Recall already runs newest-first, so an older copy only has to move. */
+        for (int i = dup; i < history->count - 1; i++) {
+            memcpy(history->entries[i], history->entries[i + 1], MAX_COMMAND_LENGTH);
+        }
+    } else if (history->count < MAX_HISTORY) {
+        history->count++;
+    } else {
+        for (int i = 0; i < MAX_HISTORY - 1; i++) {
+            memcpy(history->entries[i], history->entries[i + 1], MAX_COMMAND_LENGTH);
+        }
+    }
+
+    memset(history->entries[history->count - 1], 0, MAX_COMMAND_LENGTH);
+    strncpy(history->entries[history->count - 1], command, MAX_COMMAND_LENGTH - 1);
+    history->selection = history->count;
+    history_save(history);
+}
+
+const char *history_select(CommandHistory *history, int up) {
+    if (history->count == 0) return NULL;
+
+    int next;
+    if (history->selection > history->count - 1) {
+        if (!up) return NULL;
+        next = history->count - 1;
+    } else {
+        next = up ? history->selection - 1 : history->selection + 1;
+    }
+
+    if (next < 0) return NULL;
+    if (next > history->count - 1) {
+        history->selection = history->count;
+        return "";
+    }
+
+    history->selection = next;
+    return history->entries[next];
+}

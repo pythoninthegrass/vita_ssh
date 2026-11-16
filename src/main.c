@@ -24,6 +24,7 @@ static int profile_selection = 0;
 static SshProfile profiles[MAX_PROFILES];
 static int profile_count = 0;
 static SshProfile selected_profile;
+static CommandHistory cmd_history;
 
 int credentials_entered = 0;
 int ssh_connected = 0;
@@ -258,6 +259,7 @@ int main() {
     unsigned int old_buttons = 0;
 
     load_profiles(profiles, &profile_count);
+    history_load(&cmd_history);
 
     loading_start_time = sceKernelGetProcessTimeWide();
 
@@ -502,27 +504,52 @@ int main() {
                         }
                     }
 
-                    if (new_buttons & SCE_CTRL_CIRCLE) {
+                    if (new_buttons & SCE_CTRL_UP) {
+                        /* Only ever reached with the shell closed: the pty path keeps the
+                         * d-pad for the remote shell and never gets here. */
+                        const char *recalled = history_select(&cmd_history, 1);
+                        if (recalled != NULL) {
+                            terminal_print_history(recalled, cmd_history.selection + 1,
+                                                   cmd_history.count);
+                        }
+                    }
+
+                    if (new_buttons & SCE_CTRL_DOWN) {
+                        const char *recalled = history_select(&cmd_history, 0);
+                        if (recalled != NULL) {
+                            terminal_print_history(recalled, cmd_history.selection + 1,
+                                                   cmd_history.count);
+                        }
+                    }
+
+                    if (new_buttons & (SCE_CTRL_CROSS | SCE_CTRL_CIRCLE)) {
                         if (ssh_connected) {
+                            static uint16_t cmd_initial[MAX_TEXT_LENGTH + 1] = {0};
                             static uint16_t cmd_input[MAX_TEXT_LENGTH + 1] = {0};
-                            int result = kb(u"SSH Command:", u"ls", cmd_input, 0);
+                            const char *recall = NULL;
+
+                            if (cmd_history.count > 0 &&
+                                cmd_history.selection <= cmd_history.count - 1) {
+                                recall = cmd_history.entries[cmd_history.selection];
+                            }
+                            utf8_to_utf16(recall == NULL ? "" : recall, cmd_initial);
+
+                            int result = kb(u"SSH Command:", cmd_initial, cmd_input, 0);
                             if (result) {
-                                char command[256];
+                                char command[MAX_COMMAND_LENGTH];
                                 utf16_to_utf8(cmd_input, command, sizeof(command));
                                 if (strlen(command) > 0) {
                                     char buffer[300];
                                     snprintf(buffer, sizeof(buffer), ">>> %s", command);
                                     terminal_print(buffer);
                                     execute_ssh_command(command);
+                                    history_add(&cmd_history, command);
                                 }
                             }
-                        } else {
-                            //display_credentials();
-                        }
-                    }
 
-                    if (new_buttons & SCE_CTRL_CROSS) {
-                        if (!ssh_connected) {
+                            /* The next prompt starts from the newest entry again. */
+                            cmd_history.selection = cmd_history.count;
+                        } else if (new_buttons & SCE_CTRL_CROSS) {
                             connect_ssh();
                         }
                     }

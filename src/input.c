@@ -11,6 +11,14 @@ void utf16_to_utf8(const uint16_t* src, char* dst, size_t dst_size) {
     dst[i] = '\0';
 }
 
+void utf8_to_utf16(const char* src, uint16_t* dst) {
+    size_t i;
+    for (i = 0; i < MAX_TEXT_LENGTH && src[i] != 0; i++) {
+        dst[i] = (uint16_t)(unsigned char)src[i];
+    }
+    dst[i] = 0;
+}
+
 int kb(const uint16_t* title, uint16_t* initial_text, uint16_t* output_buffer, int password_mode) {
     SceCommonDialogConfigParam config;
     sceCommonDialogConfigParamInit(&config);
