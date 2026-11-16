@@ -1,30 +1,33 @@
 #!/usr/bin/env bash
-# TASK-001.04 smoke tests for the Vita sshd, both halves in one file.
+# TASK-001.04 and TASK-002 smoke tests for the Vita sshd, all three halves in one file.
 #
 # Usage:
-#   scripts/smoke.sh                everything: exec checks, then pty checks
+#   scripts/smoke.sh                everything: exec, pty, then sftp checks
 #   scripts/smoke.sh exec           exec-mode checks only   (ACs 2, 3, 4, 5, 6)
 #   scripts/smoke.sh pty            interactive checks only (ACs 3, 7, 8)
+#   scripts/smoke.sh sftp           sftp and scp checks only (TASK-002.01, TASK-002.02)
 #   scripts/smoke.sh MODE [user@host] [port]     (defaults: all any@192.168.8.57 2222)
 #
 # The exec half drives one-shot `ssh host "cmd"` calls and grades the exit
 # statuses the Vita sends back, so `$?` is proven usable from a script. The
 # pty half drives two concurrent interactive sessions through FIFOs, so tab
 # completion, `!n`/`!!` and the Ctrl keys arrive as if typed; it then grades
-# the transcripts. Scratch on the Vita: /ux0/data/smoke-$$, removed at the
-# end. Scratch locally: a mktemp dir, printed with the pty transcripts.
+# the transcripts. The sftp half drives the stock sftp and scp clients in batch
+# mode and grades exit statuses and file contents. Scratch on the Vita:
+# /ux0/data/smoke-$$ and /ux0/data/smoke-sftp-$$, removed at the end. Scratch
+# locally: a mktemp dir, printed with the pty transcripts.
 #
 # Run it from a real terminal on the LAN: the authoring agent's sandbox
 # allowlists binaries and its ssh cannot leave the machine at all.
 set -u
 
 usage() {
-  sed -n '2,10p' "$0"
+  sed -n '2,13p' "$0"
 }
 
 MODE=all
 case "${1:-}" in
-  exec|pty|all)   MODE=$1; shift ;;
+  exec|pty|sftp|all)   MODE=$1; shift ;;
   -h|--help|help) usage; exit 0 ;;
 esac
 # A typo'd mode would otherwise be taken for a hostname and run "all" against
@@ -219,14 +222,156 @@ run_pty() {
   )
 }
 
+# SFTP half: the stock OpenSSH sftp and scp clients in batch mode, graded on
+# exit statuses and file contents. sftp -b aborts on the first failing command,
+# so each graded operation gets its own call.
+run_sftp() {
+  # A subshell on purpose: its own counters and its own mktemp dir, removed on exit.
+  (
+    # ServerAlive* is what ends a session whose server died mid-call; ConnectTimeout
+    # only covers the TCP connect.
+    local SSHO="-o BatchMode=yes -o ConnectTimeout=5 -o ServerAliveInterval=5 -o ServerAliveCountMax=3"
+    local REMOTE=/ux0/data/smoke-sftp-$$ LOCAL OUT RC BAD LNK OTHER d
+    PASS=0; FAIL=0; SKIP=0
+    LOCAL=$(mktemp -d)
+    trap 'rm -rf "$LOCAL"' EXIT
+
+    skip() { printf 'SKIP  %s (%s)\n' "$1" "$2"; SKIP=$((SKIP+1)); }
+    # Prints sftp's stdout, returns its status.
+    sftp_run() { printf '%s\n' "$1" | sftp -q $SSHO -P "$PORT" -b - "$HOST" 2>/dev/null; }
+    # ok when two local files are byte-identical.
+    same() { cmp -s "$1" "$2" && echo ok || echo differ; }
+    # 1 when the previous command failed, else 0, for checks that want a refusal.
+    failed() { [ "$1" -ne 0 ] && echo 1 || echo 0; }
+
+    head -c 6291456 /dev/urandom > "$LOCAL/big.bin"      # larger than any transfer buffer
+    printf 'hello vita\n' > "$LOCAL/small.txt"
+    : > "$LOCAL/empty.txt"
+
+    # --- 002.01: the basics ---------------------------------------------------
+    printf 'sftp: opening a session on %s:%s (gives up after ~15s if the server hangs)\n' "$HOST" "$PORT"
+    OUT=$(sftp_run "ls /"); RC=$?
+    check "sftp connects, ls / (-> 0)" 0 "$RC"
+    # Every "refused" check below passes when nothing answers, so stop here.
+    if [ "$RC" -ne 0 ]; then
+      printf '\nsftp: cannot open an sftp session on %s:%s, aborting\n' "$HOST" "$PORT"
+      return 1
+    fi
+    case "$OUT" in *ux0*) check "ls / lists ux0" ok ok ;; *) check "ls / lists ux0" ok fail ;; esac
+
+    OUT=$(sftp_run "pwd"); RC=$?
+    check "pwd (-> 0)" 0 "$RC"
+    echo "      cwd: $OUT"
+
+    sftp_run "mkdir $REMOTE" >/dev/null; check "mkdir scratch (-> 0)" 0 $?
+
+    sftp_run "put $LOCAL/big.bin $REMOTE/big.bin" >/dev/null; check "put 6 MB (-> 0)" 0 $?
+    sftp_run "get $REMOTE/big.bin $LOCAL/big.back" >/dev/null; check "get 6 MB (-> 0)" 0 $?
+    check "6 MB round trip identical" ok "$(same "$LOCAL/big.bin" "$LOCAL/big.back")"
+
+    sftp_run "put $LOCAL/empty.txt $REMOTE/empty.txt" >/dev/null; check "put empty file (-> 0)" 0 $?
+    sftp_run "get $REMOTE/empty.txt $LOCAL/empty.back" >/dev/null
+    check "empty file round trip identical" ok "$(same "$LOCAL/empty.txt" "$LOCAL/empty.back")"
+
+    OUT=$(sftp_run "ls -1 $REMOTE")
+    case "$OUT" in *.part*) check "no .part file left after put" ok fail ;; *) check "no .part file left after put" ok ok ;; esac
+
+    OUT=$(sftp_run "ls -1 /ux0/data/does-not-exist"); RC=$?
+    check "ls missing dir (-> nonzero)" 1 "$(failed "$RC")"
+
+    # --- 002.02: attributes ---------------------------------------------------
+    OUT=$(sftp_run "ls -ln $REMOTE")
+    BAD=$(printf '%s\n' "$OUT" | awk 'NF >= 9 && ($3 != 0 || $4 != 0)' | wc -l | tr -d ' ')
+    check "ls -ln: every uid and gid is 0" 0 "$BAD"
+    LNK=$(printf '%s\n' "$OUT" | awk 'substr($1,1,1) == "l"' | wc -l | tr -d ' ')
+    check "ls -ln: no symlink entries" 0 "$LNK"
+    OUT=$(sftp_run "ls -ln /ux0/data" | awk 'NF >= 9 && substr($1,1,1) == "l"' | wc -l | tr -d ' ')
+    check "ls -ln /ux0/data: no symlink entries" 0 "$OUT"
+
+    sftp_run "put $LOCAL/small.txt $REMOTE/small.txt" >/dev/null
+    sftp_run "chmod 600 $REMOTE/small.txt" >/dev/null; RC=$?
+    check "chmod refused, not faked (-> nonzero)" 1 "$(failed "$RC")"
+    sftp_run "chown 1000 $REMOTE/small.txt" >/dev/null; RC=$?
+    check "chown refused, not faked (-> nonzero)" 1 "$(failed "$RC")"
+    sftp_run "-chmod 600 $REMOTE/small.txt
+ls $REMOTE" >/dev/null
+    check "'-' prefixed failure does not abort the batch" 0 $?
+
+    # --- 002.02 AC4: clients that send attributes along with the data ---------
+    sftp_run "put -p $LOCAL/small.txt $REMOTE/p.txt" >/dev/null; check "sftp put -p completes (-> 0)" 0 $?
+    scp -s -q $SSHO -P "$PORT" "$LOCAL/small.txt" "$HOST:$REMOTE/scp1.txt" 2>/dev/null
+    check "scp -s upload completes (-> 0)" 0 $?
+    scp -s -q $SSHO -P "$PORT" "$HOST:$REMOTE/scp1.txt" "$LOCAL/scp1.back" 2>/dev/null
+    check "scp -s download completes (-> 0)" 0 $?
+    check "scp round trip identical" ok "$(same "$LOCAL/small.txt" "$LOCAL/scp1.back")"
+    scp -s -p -q $SSHO -P "$PORT" "$LOCAL/small.txt" "$HOST:$REMOTE/scp2.txt" 2>/dev/null
+    check "scp -s -p upload completes (-> 0)" 0 $?
+
+    # --- 002.02 AC5: rename ---------------------------------------------------
+    sftp_run "rename $REMOTE/small.txt $REMOTE/renamed.txt" >/dev/null; check "rename within a device (-> 0)" 0 $?
+    sftp_run "get $REMOTE/renamed.txt $LOCAL/renamed.back" >/dev/null
+    check "renamed file has the content" ok "$(same "$LOCAL/small.txt" "$LOCAL/renamed.back")"
+    sftp_run "ls $REMOTE/small.txt" >/dev/null; RC=$?
+    check "old name is gone (-> nonzero)" 1 "$(failed "$RC")"
+
+    sftp_run "put $LOCAL/big.bin $REMOTE/victim.bin" >/dev/null
+    sftp_run "rename $REMOTE/renamed.txt $REMOTE/victim.bin" >/dev/null; check "rename onto existing file replaces it (posix-rename)" 0 $?
+    sftp_run "get $REMOTE/victim.bin $LOCAL/victim.back" >/dev/null
+    check "replaced file has the new content" ok "$(same "$LOCAL/small.txt" "$LOCAL/victim.back")"
+
+    sftp_run "mkdir $REMOTE/d1
+mkdir $REMOTE/d2" >/dev/null
+    sftp_run "rename $REMOTE/d1 $REMOTE/d2" >/dev/null; RC=$?
+    check "rename onto a directory refused (-> nonzero)" 1 "$(failed "$RC")"
+
+    OTHER=
+    for d in uma0 imc0 xmc0; do
+      case "$(sftp_run "ls /")" in *"$d"*) OTHER=$d; break ;; esac
+    done
+    if [ -n "$OTHER" ]; then
+      sftp_run "rename $REMOTE/victim.bin /$OTHER/smoke-xdev.bin" >/dev/null; RC=$?
+      check "cross-device rename refused (-> nonzero)" 1 "$(failed "$RC")"
+      sftp_run "ls $REMOTE/victim.bin" >/dev/null
+      check "source still present after refusal" 0 $?
+      sftp_run "ls /$OTHER/smoke-xdev.bin" >/dev/null; RC=$?
+      check "no copy left on the other device" 1 "$(failed "$RC")"
+    else
+      skip "cross-device rename refused" "no second writable device in ls /"
+    fi
+    sftp_run "rename $REMOTE/victim.bin /os0/smoke.bin" >/dev/null; RC=$?
+    check "rename onto read-only device refused (-> nonzero)" 1 "$(failed "$RC")"
+
+    # --- cleanup, then 002.01 AC4: the server is still healthy ----------------
+    sftp_run "rm $REMOTE/victim.bin
+rm $REMOTE/big.bin
+rm $REMOTE/empty.txt
+-rm $REMOTE/p.txt
+-rm $REMOTE/scp1.txt
+-rm $REMOTE/scp2.txt
+-rm $REMOTE/renamed.txt
+rmdir $REMOTE/d1
+rmdir $REMOTE/d2
+rmdir $REMOTE" >/dev/null
+    check "rm and rmdir clean up (-> 0)" 0 $?
+
+    ssh -p "$PORT" $SSHO "$HOST" "pwd" >/dev/null 2>&1; check "shell session still works afterwards (-> 0)" 0 $?
+    sftp_run "pwd" >/dev/null; check "a second sftp session still opens (-> 0)" 0 $?
+
+    printf '\nsftp: %d pass, %d fail, %d skip\n' "$PASS" "$FAIL" "$SKIP"
+    [ "$FAIL" -eq 0 ]
+  )
+}
+
 case "$MODE" in
   exec) run_exec ;;
   pty)  run_pty ;;
+  sftp) run_sftp ;;
   all)
     run_exec; RC=$?
     run_pty;  RC=$((RC + $?))
+    run_sftp; RC=$((RC + $?))
     if [ "$RC" = 0 ]; then
-      printf '\nall: both halves passed\n'
+      printf '\nall: every half passed\n'
       exit 0
     fi
     printf '\nall: failures above\n'
