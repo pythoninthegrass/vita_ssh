@@ -90,10 +90,7 @@ Honest list, because the useful part of a README is telling you what will disapp
 A libssh-based server: `ssh` at the Vita from a devbox and you get a shell whose filesystem
 is the Vita's own devices.
 
-> **Status.** The server is new. It has not had its first on-device smoke test
-> (`TASK-001.04`), and **it does not serve SFTP yet** — an `sftp` or `scp` request is
-> refused with `subsystem not supported` (`TASK-002`). Everything below describes the code
-> as written, not a list of things verified on hardware.
+> **Status.** The shell, exec mode and SFTP have been smoke-tested on a device with `scripts/smoke.sh` (`TASK-001.04`, `TASK-002`), run from a macOS devbox over OpenSSH. A few edge cases are still unproven; see Known issues.
 
 ### On the Vita's screen
 
@@ -199,6 +196,28 @@ ssh -p 2222 -i ~/.ssh/id_ed25519 vita@192.168.1.50
 `ssh-copy-id` will not work yet: the shell has no redirection, so install
 `authorized_keys` yourself — VitaShell, a USB copy, or any route that writes a file to
 `ux0:data/vitasshd/` — and restart the server so it re-reads it.
+
+### Copying files with sftp and scp
+
+The server speaks SFTP, so `sftp` works as usual and `scp` works through its SFTP mode.
+
+```sh
+sftp -P 2222 -i ~/.ssh/id_ed25519 vita@192.168.1.50
+
+scp -s -P 2222 -i ~/.ssh/id_ed25519 game.vpk vita@192.168.1.50:/ux0/data/
+scp -s -P 2222 -i ~/.ssh/id_ed25519 vita@192.168.1.50:/ux0/data/sshd.log .
+```
+
+Paths are the same POSIX paths the shell uses: `/` lists the devices, `/ux0` is the memory card, and a session starts in `ux0:data/vitasshd`. `-s` selects scp's SFTP mode, which is the default from OpenSSH 9.0; the legacy scp protocol (`scp -O`) is not supported, because the shell has no `scp` command to run.
+
+What to expect, because the Vita is not a Unix filesystem:
+
+- An upload is written to `NAME.part` and renamed over `NAME` when the transfer finishes, so a transfer that is cut off leaves nothing under the real name, and the `.part` file is removed when the session ends.
+- Every file reports owner 0:0 and mode 0644 (directories 0755, read-only devices 0444 and 0555), and nothing is ever reported as a symlink.
+- `chmod` and `chown` fail with "Operation unsupported" instead of pretending to work. A request for the mode a file already shows succeeds, which is what `scp` sends after an upload, so `scp` of a 0644 file completes. A file with another mode (0755, 0600) arrives intact and then `scp` reports an error.
+- File times cannot be set, so `scp -p` and `sftp put -p` copy the data and leave the times alone.
+- `rename` works within a device. Across devices it is refused rather than copied, and renaming onto a directory is refused. `sftp`'s `rename` replaces an existing file.
+- At most four sessions run at once; a fifth connection is refused.
 
 ### When your client says the host key has changed
 
@@ -392,10 +411,8 @@ Client:
 
 Server:
 
-- `sftp` and `scp` are refused: no SFTP subsystem yet (`TASK-002`).
-- Not yet smoke-tested on a device (`TASK-001.04`), so the shell's edge cases — odd paths,
-  device roots, concurrent sessions, a Ctrl-C in the middle of a recursive `rm` — are
-  unproven.
+- SFTP cannot set permissions, owners or file times, and the legacy scp protocol (`scp -O`) is not supported; see "Copying files with sftp and scp" for what that means in practice. There is no statvfs over SFTP.
+- Smoke-tested from macOS only. A Linux devbox has not been compared (`TASK-001.04`), and the recursive tools and a cross-device `mv` on awkward input are not yet covered by the smoke tests, nor is a Ctrl-C in the middle of a recursive `rm`.
 - The bootstrap password is compared in non-constant time, and it exists to be replaced.
   Use `authorized_keys` for anything you care about.
 - If no data directory is writable, the host key lives in memory and every boot introduces
@@ -430,8 +447,7 @@ Ground rules, all of them inherited from how this repo is built:
 
 - Read [`AGENTS.md`](AGENTS.md) first. It is the build contract, and several lines in it
   exist because the obvious thing does not work.
-- `task` is the entry point; never run `cmake` directly. A successful `task build`
-  producing both VPKs is the only automated check that exists.
+- `task` is the entry point; never run `cmake` directly. A successful `task build` producing both VPKs is the only check that runs without a device. [`scripts/smoke.sh`](scripts/smoke.sh) checks a running server over the LAN, and [`docs/development.md`](docs/development.md) covers installing a build on the Vita and debugging it from the log and crash dumps.
 - The two apps keep separate link lists. The client stays a libssh2 client and the server
   stays a libssh server.
 - Tile PNGs are generated. Edit the SVG in `assets/` and run `assets/render_tiles.sh`; it verifies
