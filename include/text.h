@@ -63,8 +63,7 @@ int is_interactive_mode();
 
 void set_terminal_font(vita2d_pgf *font);
 void terminal_print(const char *text);
-/* Echo one recalled entry with its position, so the d-pad walk through history has
- * a visible selection before the IME opens. position is 1-based. */
+/* Shows the selected history entry before the IME opens; position is 1-based. */
 void terminal_print_history(const char *entry, int position, int total);
 void terminal_print_color(const char *text, unsigned int color);
 void terminal_print_ansi(const char *text);

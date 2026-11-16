@@ -454,8 +454,7 @@ void terminal_print_history(const char *entry, int position, int total) {
     char buffer[MAX_LINE_LENGTH];
     unsigned int old_color = current_color;
 
-    /* The selection is redrawn in place, so every line starts with the same
-     * prefix and the newest print is the only one the user has to read. */
+    /* An empty entry is the "new command" slot past the newest one. */
     if (entry[0] == '\0') {
         current_color = RGBA8(150, 150, 150, 255);
         snprintf(buffer, sizeof(buffer), "history: [new] (%d/%d)", position, total);

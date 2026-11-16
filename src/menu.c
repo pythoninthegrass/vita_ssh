@@ -342,9 +342,7 @@ void history_load(CommandHistory *history) {
 }
 
 void history_save(const CommandHistory *history) {
-    /* A record is MAX_COMMAND_LENGTH bytes with no terminator, so a short entry
-     * would bleed into the previous one on the next load; the load side reads
-     * that trailing junk as a poisoned entry and truncates the file there. */
+    /* Records are fixed-width and zero-padded so a short entry cannot bleed into the next on load. */
     CommandHistory clean;
     int n = history->count;
 

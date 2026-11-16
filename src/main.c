@@ -505,8 +505,7 @@ int main() {
                     }
 
                     if (new_buttons & SCE_CTRL_UP) {
-                        /* Only ever reached with the shell closed: the pty path keeps the
-                         * d-pad for the remote shell and never gets here. */
+                        /* Only reached with the shell closed; the pty path keeps the d-pad. */
                         const char *recalled = history_select(&cmd_history, 1);
                         if (recalled != NULL) {
                             terminal_print_history(recalled, cmd_history.selection + 1,
