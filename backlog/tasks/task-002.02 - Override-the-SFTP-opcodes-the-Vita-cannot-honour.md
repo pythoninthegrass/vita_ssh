@@ -1,11 +1,11 @@
 ---
 id: TASK-002.02
 title: Override the SFTP opcodes the Vita cannot honour
-status: In Progress
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-11-15T22:57:00Z'
-updated_date: '2026-11-16T07:51:00Z'
+updated_date: '2026-11-16T08:15:00Z'
 labels: []
 dependencies:
   - TASK-002.01
@@ -30,7 +30,7 @@ Stock handlers answer opcodes the Vita cannot back, and the wrong answer here is
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 chmod, chown and utimes answer with an honest status instead of a false success, and the choice for each is recorded with its reason
+- [x] #1 chmod, chown and utimes answer with an honest status instead of a false success, and the choice for each is recorded with its reason
 - [x] #2 uid and gid are reported consistently for every file so clients stop trying to resolve names that do not exist
 - [x] #3 no handler reports a symlink for any path
 - [x] #4 clients that probe before acting (scp, sftp batch mode) complete their transfers rather than aborting on the unsupported calls
@@ -55,6 +55,10 @@ Plan:
 5. Verification: no test harness exists and nothing runs on the host. task build of both VPKs is the check; AC4 and device behaviour belong to TASK-002.03. Will say so plainly.
 
 Open questions for Lance before implementing: (a) chmod/chown => OP_UNSUPPORTED vs a quiet success; (b) interception in sh_sftp_data() instead of a libssh callback; (c) AC5 'removing ... across devices' read as rename only, since unlink has no cross-device case.
+
+Final design, where it departed from the plan above: permission-only SETSTAT and FSETSTAT are answered OK when they ask for the mode already reported (decided with Lance as option 1), because scp sends one after every upload; anything else, including times, stays unsupported. The overrides sit in two seams only, --wrap of the libc calls the stock handlers make and handle_rename()/handle_perm_setstat() answering packets in sh_sftp_data() before the stock callback, since libssh 0.12.2 exposes no handler callbacks.
+
+AC1 was verified with scripts/sftp_probe.py: chmod and chown are refused (smoke.sh), and a SETSTAT with times either fails or reads back the time that was sent; on the device it succeeded and read back within 2 s, so utime is honoured, not faked.
 <!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
@@ -90,3 +94,13 @@ Support added along the way: permission-only SETSTAT/FSETSTAT is answered OK whe
 
 Transport lessons recorded in AGENTS.md: no blocking libssh calls from a callback (reply queue + non-blocking session), --wrap also catches calls made inside libc (opendir), wait for the channel close before dropping the transport, and every stat handed to libssh needs a time localtime_r accepts.
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+The SFTP opcodes the Vita cannot honour now answer honestly instead of falling through to the stock handlers: stat and lstat report owner 0:0, mode 0644/0755 (0444/0555 on read-only devices) and never a symlink; chmod, chown and statvfs answer operation-unsupported; truncate is translated and verified by reading the size back; utimes is honoured and verified on the device; rename and posix-rename@openssh.com are implemented (cross-device and read-only targets refused with a failure status, never a copy, plain rename onto an existing path fails, posix-rename replaces a file). A permission-only SETSTAT/FSETSTAT for the mode already reported succeeds, which is what scp sends after an upload. Each override and its reason is documented in AGENTS.md and src/sftp_server.c.
+
+Verification on a Vita (scripts/smoke.sh sftp: 46 pass, 0 fail, 1 informational): uid and gid are 0 for every listed entry and no entry is a symlink; chmod and chown are refused; scp -s upload and download, sftp put -p and a batch with a failing '-' command all complete; cross-device rename, rename onto a directory and onto /os0 are refused with the source kept and no copy left; scripts/sftp_probe.py sent a SETSTAT with times and read the same time back.
+
+Risks and follow-ups: scp of a file whose mode is not 0644 transfers the data and then reports an error, by design; scp -p and sftp put -p cannot set times through FSETSTAT, so the data arrives and the times do not (informational line in the smoke test); verified from macOS only.
+<!-- SECTION:FINAL_SUMMARY:END -->

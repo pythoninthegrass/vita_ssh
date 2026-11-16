@@ -1,11 +1,11 @@
 ---
 id: TASK-002.01
 title: Wire libssh's stock SFTP handlers over the path layer
-status: In Progress
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-11-15T22:57:00Z'
-updated_date: '2026-11-16T08:01:00Z'
+updated_date: '2026-11-16T08:15:00Z'
 labels: []
 dependencies: []
 documentation:
@@ -35,7 +35,7 @@ The channel subsystem callback currently prints 'subsystem not supported' and re
 - [x] #2 ls, cd, pwd, get, put, mkdir, rmdir, rm, rename and realpath work against a real device
 - [x] #3 large downloads and uploads complete without truncation, including files larger than the transfer buffer
 - [x] #4 closing the sftp session leaves the server responsive and the shell session still usable
-- [ ] #5 a rejected subsystem request still leaves the session able to accept a later one
+- [x] #5 a rejected subsystem request still leaves the session able to accept a later one
 - [x] #6 directory iteration handles a device root and an empty directory without an infinite loop
 - [x] #7 a failed or interrupted upload leaves no partial file under the target name (temp name then rename, or equivalent)
 <!-- AC:END -->
@@ -60,6 +60,10 @@ Approach: adapt at the boundary with link-time symbol wrapping, no libssh fork.
 Open decision for Lance: confirm --wrap approach, and whether AC7 .part naming is acceptable (alternatives: hidden dotfile name; or leave AC7 to TASK-002.02).
 
 Plan addition (found while reading sftp_decode_channel_data_to_packet): the stock data callback requires each channel chunk to hold whole SFTP packets and returns SSH_ERROR otherwise, so a 32 KB write split across SSH packets fails. sh_sftp_data() reassembles by the 4-byte length prefix (cap 256 KB) and feeds the stock callback one packet at a time.
+
+Final design, where it departed from the plan above (all found on a device): replies are queued, not written, so libssh never blocks inside the poll callback: the sftp session is set non-blocking, --wrap=ssh_channel_write appends to a per-session queue, drain_out() sends only what ssh_channel_window_size() allows, new requests wait while more than 128 KB is queued, and sh_sftp_pump() runs each poll-loop pass. __wrap_opendir clears the active context around the real opendir because newlib's opendir calls open, which --wrap also catches. A finished sftp session sends exit-status, EOF and close and waits up to 3 s for the channel to close before the transport is dropped. Every stat given to libssh goes through usable_time() because localtime_r can return NULL. A refused subsystem's explanation is sent as stderr so it cannot be read as SFTP data.
+
+AC5 was verified with scripts/sftp_probe.py (paramiko): an unknown subsystem is refused, the channel stays open, sftp is accepted on that same channel and lists /.
 <!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
@@ -87,3 +91,15 @@ Device verification, scripts/smoke.sh sftp (41 pass, 0 fail, 1 informational):
 - AC7: a 64 MB upload is confirmed in flight (a second session sees interrupted.bin.part), the client is killed with SIGKILL, and after the server tears the session down neither interrupted.bin nor interrupted.bin.part exists.
 Remaining unverified: AC5 (a rejected subsystem request leaves the session able to accept a later one), which needs a client that sends two subsystem requests on one channel; stock ssh/sftp cannot.
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+SFTP is served from the Vita sshd app using libssh's stock server handlers, adapted at the libc boundary rather than forked: --wrap routes the handlers' calls through sh_path.c (src/sftp_server.c), incoming data is reassembled into whole packets, uploads go to NAME.part and are renamed on close, and sessions are driven from the existing poll loop (src/sshd_session.c).
+
+Verification, on a Vita over WiFi from a macOS devbox with scripts/smoke.sh sftp: 46 pass, 0 fail, 1 informational. That covers login and cwd, ls/get/put/mkdir/rm/rmdir/rename, a 6 MB round trip and an empty file, device-root and empty-directory listing, an upload killed mid-transfer (a second session sees the .part file in flight; neither it nor the target remains), shell and second sftp session still working afterwards, and a refused subsystem followed by sftp on the same channel (scripts/sftp_probe.py).
+
+The first device runs found and fixed four defects in this task's code that no host build could show: a localtime_r NULL crash on ls /, no channel close on client EOF, blocking ssh_channel_write inside the poll callback (downloads stalled and leaked sessions), and double path translation inside opendir. Their rules are in AGENTS.md. A fifth, the subsystem refusal text landing in the data stream, was found by the probe.
+
+Risks and follow-ups: tested from macOS only (Linux client comparison is TASK-002.03); no automated tests exist, the checks need a device on the LAN; the per-request log lines are chatty by design while the feature is new.
+<!-- SECTION:FINAL_SUMMARY:END -->
