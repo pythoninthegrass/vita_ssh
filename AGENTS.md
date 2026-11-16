@@ -64,7 +64,7 @@
   `src/network.c` is the one source in both.
 - Headers live in `include/`, sources in `src/`.
 - Script filenames are snake_case — `render_tiles.sh`, `convert_png.py`, `gen_wordlist.py`,
-  `smoke_exec.sh`. No hyphenated filenames under `scripts/` or `assets/`: a new tool with a
+  `smoke.sh`. No hyphenated filenames under `scripts/` or `assets/`: a new tool with a
   multi-word name takes underscores, like every other identifier in the tree.
 - Each app packages its own tile: the client's `vita_create_vpk` reads `sce_sys/`, the
   server's reads `sce_sys_sshd/`; both pack to `sce_sys/` inside their own VPK, so only the
