@@ -66,7 +66,7 @@ struct sh_sftp {
     size_t cap;
     uint8_t *cur;     /* the packet being handled, copied out of buf */
     size_t cur_cap;
-    int busy;         /* set while a packet is inside the stock callback */
+    int busy;         /* set while a packet is inside the stock callback or drain_out() is writing */
     int queued_logged;
     unsigned bulk;    /* READ and WRITE requests seen */
     sftp_file_t files[SFTP_MAX_FILES];
@@ -857,6 +857,11 @@ static int feed_packet(sh_sftp_t *s, const sh_fsctx_t *fs, void *packet,
  * queued and goes out on a later pass. */
 static int drain_out(sh_sftp_t *s)
 {
+    /* ssh_channel_write runs libssh's packet loop, which can deliver the client's next
+     * request to sh_sftp_data() mid-write; busy makes that only queue it. */
+    int was_busy = s->busy;
+
+    s->busy = 1;
     while (s->out_off < s->out_len) {
         size_t pending = s->out_len - s->out_off;
         uint32_t window = ssh_channel_window_size(s->channel);
@@ -870,6 +875,7 @@ static int drain_out(sh_sftp_t *s)
         if (wrote < 0) {
             sh_console_log("sftp: reply write failed (%d), %u bytes queued", wrote,
                            (unsigned)(s->out_len - s->out_off));
+            s->busy = was_busy;
             return -1;
         }
         if (wrote == 0) {
@@ -885,6 +891,7 @@ static int drain_out(sh_sftp_t *s)
         s->out_len -= s->out_off;
         s->out_off = 0;
     }
+    s->busy = was_busy;
     return 0;
 }
 
