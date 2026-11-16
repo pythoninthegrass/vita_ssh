@@ -30,14 +30,18 @@
 #define SSHD_HISTORY 12
 #define SSHD_COPY_BUFSIZE (64 * 1024)
 
-/* Where the server keeps its own state. ux0:data is the one place a homebrew
- * app may write that the user can also see from a file manager. */
-#define SSHD_DATA_SCE "ux0:data/vitasshd"
-#define SSHD_DATA_POSIX "/ux0/data/vitasshd"
-#define SSHD_HOSTKEY_SCE SSHD_DATA_SCE "/ssh_host_ed25519_key"
-#define SSHD_HOSTKEY_PUB_SCE SSHD_HOSTKEY_SCE ".pub"
-#define SSHD_KEYS_SCE SSHD_DATA_SCE "/authorized_keys"
-#define SSHD_KEYS_POSIX SSHD_DATA_POSIX "/authorized_keys"
+/* Where the server keeps its own files -- host key, authorized_keys -- and the
+ * directory a session lands in. That is a searched list rather than one path,
+ * because which partition a homebrew app can write is not known until the device
+ * says so; the table and the three search rules live in sshd_hostkey.c, and the
+ * outcome of the search is reported through sh_auth_t below rather than
+ * assumed.
+ *
+ * Those two files are opened by their syscall-spelled path directly rather than
+ * through sh_path.c, which is the exception to the rule at the top of this file:
+ * the path layer resolves against a session's cwd and home, and at auth time
+ * there is no session yet. The chosen directory is handed back out through
+ * sh_server_home_posix() so the shell and the server agree on one place. */
 
 /* Opaque: the session struct lives in sshd_session.c. Commands talk to it
  * through the calls below and never see libssh types. */
@@ -97,19 +101,34 @@ const sh_builtin_t *sh_builtin_lookup(const char *name);
 
 typedef struct {
     char fingerprint[160]; /* SHA256:... as OpenSSH prints it */
-    char key_path[SH_SCE_PATH_MAX];
-    int keys_loaded;       /* authorized_keys entries accepted */
-    int password_used;     /* no authorized_keys: a generated password is live */
-    char password[24];     /* shown once, on the Vita's own screen */
+    /* The two paths are in the syscall spelling ("ux0:/data/vitasshd/...") because
+     * they are the paths the server actually opened, and a file manager takes the
+     * same string with or without its slash. `home` is POSIX, because that is a
+     * path a session types. */
+    char key_path[SH_SCE_PATH_MAX];  /* host key on storage; "" if it is only in memory */
+    char keys_path[SH_SCE_PATH_MAX]; /* the authorized_keys that was read; "" if none */
+    char home[SH_POSIX_PATH_MAX];    /* where a session lands: the server's data dir */
+    int keys_loaded;    /* authorized_keys entries accepted */
+    int keys_rejected;  /* lines in that file that were not usable */
+    int key_persisted;  /* the host key is on storage: same fingerprint next boot */
+    int password_used;  /* no authorized_keys: a generated password is live */
+    char password[24];  /* shown once, on the Vita's own screen */
 } sh_auth_t;
 
-/* Loads the host key, generating and saving an Ed25519 one if absent, then
- * reads authorized_keys. Fills auth for the console. Returns 0 or -1. */
+/* Loads the host key -- read from wherever it is, else generate and save it
+ * wherever will have it, else keep it in memory and say so -- then reads
+ * authorized_keys from the first candidate directory holding one. Fills auth for
+ * the console. Returns 0, or -1 only when no host key could be obtained at all,
+ * which is the one condition that stops the server. */
 int sh_auth_prepare(sh_auth_t *auth);
 
 /* The single prepared state, for the session callbacks. */
 const sh_auth_t *sh_server_auth(void);
 ssh_key sh_server_host_key(void);
+/* The directory a session starts in, in POSIX spelling: the one the server could
+ * write, or the first that exists, or ux0's root. Valid once sh_auth_prepare()
+ * has returned 0. */
+const char *sh_server_home_posix(void);
 /* The SSH_AUTH_METHOD_* mask to offer: public key when authorized_keys has
  * keys, password only when it does not and a generated password is live. */
 int sh_server_auth_methods(void);

@@ -159,15 +159,33 @@ static void draw_console(vita2d_pgf *font, const sh_auth_t *auth,
 
     y += 12;
     vita2d_pgf_draw_text(font, 16, y += 20, DIM, 1.0f, "host key");
-    vita2d_pgf_draw_text(font, 120, y, WHITE, 1.0f,
-                         auth->fingerprint[0] ? auth->fingerprint : "-");
+    {
+        const char *fp = auth->fingerprint[0] ? auth->fingerprint : "-";
+        int tail = 120 + (int)strlen(fp) * 8 + 16;
+
+        vita2d_pgf_draw_text(font, 120, y, WHITE, 1.0f, fp);
+        /*
+         * Whether that key is on storage is the difference between a fingerprint
+         * a client can trust forever and one that moves under its known_hosts
+         * file every boot. It goes in the status area rather than only the log,
+         * because the log scrolls and this is the line somebody needs a day later
+         * when their client starts complaining about exactly that.
+         */
+        if (auth->key_persisted && auth->key_path[0] != '\0') {
+            vita2d_pgf_draw_textf(font, tail, y, DIM, 1.0f, "saved in %s",
+                                  auth->key_path);
+        } else {
+            vita2d_pgf_draw_text(font, tail, y, AMBER, 1.0f,
+                                 "not saved: new fingerprint each boot");
+        }
+    }
 
     y += 4;
     vita2d_pgf_draw_text(font, 16, y += 20, DIM, 1.0f, "sign-in");
     if (auth->keys_loaded > 0) {
         vita2d_pgf_draw_textf(font, 120, y, GREEN, 1.0f,
                               "%d key(s) in %s", auth->keys_loaded,
-                              SSHD_KEYS_POSIX);
+                              auth->keys_path);
     } else if (auth->password_used) {
         vita2d_pgf_draw_textf(font, 120, y, AMBER, 1.0f,
                               "password \"%s\" (any username)",
@@ -175,6 +193,16 @@ static void draw_console(vita2d_pgf *font, const sh_auth_t *auth,
     } else {
         vita2d_pgf_draw_text(font, 120, y, AMBER, 1.0f,
                              "LOCKED: no host entropy and no authorized_keys");
+    }
+
+    /* A file that produced no keys looks exactly like no file from the line
+     * above, and the person who just typed their key into it by hand needs to
+     * know which of the two they are looking at. */
+    if (auth->keys_rejected > 0 && auth->keys_path[0] != '\0') {
+        y += 18;
+        vita2d_pgf_draw_textf(font, 16, y, AMBER, 1.0f,
+                              "%d line(s) in %s were not usable",
+                              auth->keys_rejected, auth->keys_path);
     }
 
     y += 14;
@@ -354,9 +382,9 @@ static ssh_bind make_bind(const sh_auth_t *auth, int port)
         return NULL;
     }
     /* IMPORT_KEY hands libssh the key we already hold. SSH_BIND_OPTIONS_HOSTKEY
-     * would make libssh re-read it from ux0:data, which fails exactly on the
-     * device where the save did not work -- and that is a server with no
-     * identity rather than a server with a warning. */
+     * would make libssh re-read it off storage, which fails on exactly the device
+     * where the save did not work -- and that is a server with no identity rather
+     * than a server with a warning. */
     if (ssh_bind_options_set(bind, SSH_BIND_OPTIONS_IMPORT_KEY, key) != 0) {
         sh_console_log("host key rejected by libssh");
         ssh_bind_free(bind);

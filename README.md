@@ -98,33 +98,81 @@ is the Vita's own devices.
 ### On the Vita's screen
 
 The server app is a console, not a terminal: it shows listening state, the Vita's IP, the
-port, the session count, the host key fingerprint, how you are allowed to sign in, and a
-rolling log of connections, logins and commands. <kbd>START</kbd> stops the server.
+port, the session count, the host key fingerprint and whether that key is on storage, how
+you are allowed to sign in and which `authorized_keys` said so, and a rolling log of
+connections, logins and commands. <kbd>START</kbd> stops the server.
 
 - Listens on **port 22**, falling back to **2222** if something already holds it. The port
   in use is printed.
 - Up to **4 concurrent sessions**, each with its own working directory, driven from one
   poll loop, so a slow `du` in one session cannot starve the others.
 
+### Where its files live
+
+Four directories, tried in the order below, each one the same relative path under the
+device's own `data` directory. The first the server can create and write is the one it
+uses.
+
+| Device | Path in a file manager | Path in the shell | Survives a reboot |
+| --- | --- | --- | --- |
+| `ux0:` internal storage or memory card | `ux0:data/vitasshd` | `/ux0/data/vitasshd` | yes — **use this one** |
+| `uma0:` microSD / SD2Vita adapter | `uma0:data/vitasshd` | `/uma0/data/vitasshd` | yes, while mounted |
+| `xmc0:` the Vita TV's own card | `xmc0:data/vitasshd` | `/xmc0/data/vitasshd` | yes, while mounted |
+| `ur0:` RAM disk | `ur0:data/vitasshd` | `/ur0/data/vitasshd` | no — it is RAM |
+
+Why a list rather than one path: which partition a homebrew app can actually write is
+something only the device knows. `ux0:` is the one every file manager reaches, but it is
+not guaranteed to be present (a PCH-2000 with no card), writable, or roomy. So:
+
+- **The host key is read from the first directory that has one.** Nothing is generated while
+  a key exists anywhere on the device — a second identity is worse than a slow boot.
+- **A new host key is saved in the first directory that accepts it.** If none does, the key
+  lives in memory, the server still runs, and the status line reads
+  `not saved: new fingerprint each boot` so you hear it from the Vita rather than from your
+  client.
+- **`authorized_keys` is read from the first directory that has the file** — never a merge of
+  all four. Two files both claiming to authorise you is how a card you forgot about starts
+  letting people in.
+- **`~` is the directory the server could write**, or the first that exists at all, or
+  `/ux0`.
+
+Nothing about that search is silent: the screen and its log say where the key came from or
+went to, which `authorized_keys` was read, how many of its lines were keys, and how many
+were not. Read the screen once and you know which directory your device is using.
+
+The screen prints a path the way the server hands it to the device — `ux0:/data/vitasshd`,
+the first column's directory with the slash moved one character. Both spell the same place;
+a file manager takes either.
+
+One letter apart and worth saying: the **client** keeps its profiles in `ux0:data/vitassh`,
+the **server**'s directory is `ux0:data/vitasshd`.
+
 ### Signing in
 
-The host key is Ed25519, generated on first run and kept in
-`ux0:data/vitasshd/ssh_host_ed25519_key` alongside its `.pub`. The fingerprint is on the
-screen, in the `SHA256:…` form OpenSSH prints, so the first connection prompt is something
-you can actually compare.
+The host key is Ed25519, generated on first run and saved as `ssh_host_ed25519_key` with
+its `.pub` beside it, in the first directory that will have it. The fingerprint is on the
+screen in the `SHA256:…` form OpenSSH prints, and the `.pub` exists so you can check that
+the two agree: copy it off the card and `ssh-keygen -lf ssh_host_ed25519_key.pub` prints
+the same string.
 
 There are two sign-in states, and the console tells you which one you are in:
 
-1. **`ux0:data/vitasshd/authorized_keys` present** — public key authentication. One key per
-   line in the usual `ssh-ed25519 AAAA… comment` form, `#` comments allowed, up to 32 keys;
-   a malformed line is skipped and named on the console rather than losing you the file.
-   **Any username is accepted; the key is the credential.** The console reads
-   `N key(s) in /ux0/data/vitasshd/authorized_keys`.
+1. **`authorized_keys` present** — public key authentication. One key per line in the usual
+   `ssh-ed25519 AAAA… comment` form, `#` comments allowed, up to 32 keys; a malformed line
+   is skipped, named on the console with its line number, and counted on the screen rather
+   than losing you the file. **Any username is accepted; the key is the credential.** The
+   console reads `N key(s) in ux0:/data/vitasshd/authorized_keys`. Option prefixes
+   (`from="…"`, `no-pty`) are accepted and ignored — this server has no use for them.
+   Trailing `\r` from a Windows editor is tolerated; a line over 4 KB is not.
 2. **No `authorized_keys`** — the server generates a 12-character password and prints it on
    the Vita's screen, again for any username. The alphabet drops the letters and digits that
    are hard to tell apart on a small screen at arm's length. This is a bootstrap for getting
    your key onto a device that has no keyboard, not a way to live: it stops working the
    moment `authorized_keys` has a key in it.
+
+A file that is there but yields no keys falls back to the password rather than refusing
+everything — and says so, because "my key is installed and it will not let me in" is not
+something a person should have to debug over a 12-line screen.
 
 The host key, the password and every key exchange are seeded from the Vita's hardware RNG.
 If that seed is not available the server refuses to start rather than mint a predictable
@@ -151,6 +199,38 @@ ssh -p 2222 -i ~/.ssh/id_ed25519 vita@192.168.1.50
 `ssh-copy-id` will not work yet: the shell has no redirection, so install
 `authorized_keys` yourself — VitaShell, a USB copy, or any route that writes a file to
 `ux0:data/vitasshd/` — and restart the server so it re-reads it.
+
+### When your client says the host key has changed
+
+```
+@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @
+```
+
+OpenSSH is comparing the key the Vita just offered against the one it recorded for that
+address, and it is right to stop: on a normal host that message is what a man in the middle
+looks like. Here there are two ordinary causes, and the Vita's own `host key` line tells you
+which one you are looking at.
+
+| The screen says | What happened | Do this |
+| --- | --- | --- |
+| `not saved: new fingerprint each boot` | No data directory would accept the key, so a new one is minted every time you start the server | Fix the write, not the client: see the [data directories](#where-its-files-live) above. Until then expect the warning every boot. |
+| `saved in <path>` | That file changed underneath the client — corrupted by a save that did not finish, deleted, or replaced | Copy the `.pub` off the card and run `ssh-keygen -lf ssh_host_ed25519_key.pub`; its `SHA256:…` should match the screen. |
+
+Then drop the stale entry, and note the bracketed form — OpenSSH records a non-standard port
+as `[address]:port`, so the plain form will not match:
+
+```sh
+ssh-keygen -R 192.168.1.50          # port 22
+ssh-keygen -R "[192.168.1.50]:2222" # port 2222
+```
+
+Reconnect and compare the fingerprint in the prompt against the Vita's screen before
+accepting it. If you verify nothing else about this device, verify that one line: it is the
+only thing between you and typing a password to whoever happens to be answering on port 22.
+
+A key change is only a nuisance once, and only if the same fingerprint comes back. Check it
+across a reboot: same `SHA256:…` on the screen before and after means the key is genuinely
+persisted, and the warning should never come back for this address again.
 
 ### The shell
 
@@ -264,7 +344,7 @@ A few of the interesting decisions, while we're here:
   `WITH_SERVER` is defined, which only its own private config does — hence the define on
   the server target.
 - The host key is imported into the bind (`SSH_BIND_OPTIONS_IMPORT_KEY`) rather than handed
-  over as a path, because libssh re-reading it from `ux0:data` fails on exactly the devices
+  over as a path, because libssh re-reading it off storage fails on exactly the devices
   where you need it to work.
 
 ---
@@ -288,6 +368,10 @@ Server:
   unproven.
 - The bootstrap password is compared in non-constant time, and it exists to be replaced.
   Use `authorized_keys` for anything you care about.
+- If no data directory is writable, the host key lives in memory and every boot introduces
+  itself with a new fingerprint. The server works; your `known_hosts` file does not. The
+  `host key` line on the Vita's screen says which case you are in — see
+  [when your client says the host key has changed](#when-your-client-says-the-host-key-has-changed).
 
 ---
 

@@ -971,8 +971,11 @@ sh_session_t *sh_session_new(ssh_session ssh, const char *peer)
     s->cols = 80;
     s->rows = 24;
     snprintf(s->peer, sizeof(s->peer), "%s", peer ? peer : "unknown");
-    snprintf(s->home, sizeof(s->home), "%s", SSHD_DATA_POSIX);
-    snprintf(s->cwd, sizeof(s->cwd), "%s", SSHD_DATA_POSIX);
+    /* The server's data directory, whichever one of the candidates it turned out
+     * to be: ~ is where the user's authorized_keys lives, so it has to be the
+     * place the server itself could write. */
+    snprintf(s->home, sizeof(s->home), "%s", sh_server_home_posix());
+    snprintf(s->cwd, sizeof(s->cwd), "%s", sh_server_home_posix());
 
     ssh_callbacks_init(&s->server_cbs);
     s->server_cbs.userdata = s;
