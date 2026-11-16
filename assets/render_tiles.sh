@@ -8,9 +8,9 @@
 # verifies every committed tile. Neither step can leave a TrueColor PNG in the tree.
 #
 # Usage:
-#   assets/render-tiles.sh           render from assets/*.svg, then verify every tile
-#   assets/render-tiles.sh --check   verify every tile PNG only (run it after touching any)
-#   QUANTIZER=pngquant assets/render-tiles.sh   use pngquant instead of Pillow
+#   assets/render_tiles.sh           render from assets/*.svg, then verify every tile
+#   assets/render_tiles.sh --check   verify every tile PNG only (run it after touching any)
+#   QUANTIZER=pngquant assets/render_tiles.sh   use pngquant instead of Pillow
 #
 # Needs rsvg-convert (brew install librsvg) and uv. The client's
 # sce_sys/livearea/contents/bg0.png has no SVG behind it yet (TASK-009): it is committed art,

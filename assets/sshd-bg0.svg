@@ -2,7 +2,7 @@
 <!--
   VitaSSHd livearea background source. Render with:
 
-      assets/render-tiles.sh
+      assets/render_tiles.sh
 
   Must land as an 8-bit palette PNG (colour type 3, bit depth 8): the installer rejects other
   PNG formats with 0x8010113D, and it also balks at the ancillary chunks renderers add by

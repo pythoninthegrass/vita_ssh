@@ -2,7 +2,7 @@
 <!--
   VitaSSHd tile source. Render with:
 
-      assets/render-tiles.sh
+      assets/render_tiles.sh
 
   Do not render this by hand. rsvg-convert writes 24-bit RGB and the Vita's package
   installer refuses tiles that are not 8-bit palette PNGs (install fails with

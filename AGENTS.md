@@ -63,10 +63,13 @@
   New `.c` files must be added to the right list by hand; nothing globs.
   `src/network.c` is the one source in both.
 - Headers live in `include/`, sources in `src/`.
+- Script filenames are snake_case — `render_tiles.sh`, `convert_png.py`, `gen_wordlist.py`,
+  `smoke_exec.sh`. No hyphenated filenames under `scripts/` or `assets/`: a new tool with a
+  multi-word name takes underscores, like every other identifier in the tree.
 - Each app packages its own tile: the client's `vita_create_vpk` reads `sce_sys/`, the
   server's reads `sce_sys_sshd/`; both pack to `sce_sys/` inside their own VPK, so only the
   source directory differs. The PNGs are generated — edit the SVG sources in `assets/` and
-  re-render with `assets/render-tiles.sh`, never touch the PNGs by hand. That script is the only
+  re-render with `assets/render_tiles.sh`, never touch the PNGs by hand. That script is the only
   sanctioned way to make a tile: it renders with `rsvg-convert`, hands the 24-bit result to
   `scripts/convert_png.py` (a uv PEP 723 script — `uv run scripts/convert_png.py --check <png>`
   verifies without writing), which quantizes, strips ancillary chunks, and reads the file back

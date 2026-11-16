@@ -308,11 +308,11 @@ the verification.
 
 Each app ships its own tile. The server's is rendered from the SVG sources in `assets/`
 (`assets/sshd-icon0.svg`, `assets/sshd-bg0.svg`) by one command — edit the SVG and run
-`assets/render-tiles.sh`, never touch the PNGs:
+`assets/render_tiles.sh`, never touch the PNGs:
 
 ```
-assets/render-tiles.sh          # render from assets/*.svg, then verify every tile
-assets/render-tiles.sh --check  # verify only; exits 1 if any tile would be rejected
+assets/render_tiles.sh          # render from assets/*.svg, then verify every tile
+assets/render_tiles.sh --check  # verify only; exits 1 if any tile would be rejected
 ```
 
 The client's tile PNGs (`sce_sys/`) arrived without their sources; giving them SVG originals is
@@ -336,7 +336,7 @@ trap in a render command: `-depth 8` means 8 bits *per channel*, so `PNG24:` out
 and is not. This is the first thing to look at when a VPK will not install.
 
 The converter is `scripts/convert_png.py`, a self-contained uv script (`uv run
-scripts/convert_png.py <in.png> --out <out.png>`); `assets/render-tiles.sh` calls it. It quantizes
+scripts/convert_png.py <in.png> --out <out.png>`); `assets/render_tiles.sh` calls it. It quantizes
 with Pillow by default and `--quantizer pngquant` opts into that instead — measured against the
 24-bit renders, Pillow was 50 to 1000 times closer on the livearea gradient and effectively tied
 on the icon, and it needs nothing but uv.
@@ -434,7 +434,7 @@ Ground rules, all of them inherited from how this repo is built:
   producing both VPKs is the only automated check that exists.
 - The two apps keep separate link lists. The client stays a libssh2 client and the server
   stays a libssh server.
-- Tile PNGs are generated. Edit the SVG in `assets/` and run `assets/render-tiles.sh`; it verifies
+- Tile PNGs are generated. Edit the SVG in `assets/` and run `assets/render_tiles.sh`; it verifies
   every committed tile on the way out. The installer rejects anything that is not an 8-bit palette
   PNG (`0x8010113D`), so never write a tile PNG with an image tool directly.
 - Want something that is not in the backlog? Open a task for it rather than opening a PR
