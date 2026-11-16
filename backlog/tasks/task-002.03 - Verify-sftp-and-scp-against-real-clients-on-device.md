@@ -33,4 +33,7 @@ The SFTP path has one implementation and one set of assumptions behind it, and t
 - [ ] #4 transfer throughput is recorded so a later regression is visible
 - [ ] #5 the README documents a working copy-to-Vita and copy-from-Vita command line a user can paste
 - [ ] #6 divergences between the macOS and Linux clients are recorded in the task notes
+- [ ] #7 a multi-megabyte VPK put from OpenSSH lands byte-identical (cmp against the source) over WiFi in one command
+- [ ] #8 legacy scp (-O) fails with a clear message instead of hanging
+- [ ] #9 two concurrent sessions transfer at once without corrupting each other
 <!-- AC:END -->

@@ -33,4 +33,5 @@ The channel subsystem callback currently prints 'subsystem not supported' and re
 - [ ] #4 closing the sftp session leaves the server responsive and the shell session still usable
 - [ ] #5 a rejected subsystem request still leaves the session able to accept a later one
 - [ ] #6 directory iteration handles a device root and an empty directory without an infinite loop
+- [ ] #7 a failed or interrupted upload leaves no partial file under the target name (temp name then rename, or equivalent)
 <!-- AC:END -->

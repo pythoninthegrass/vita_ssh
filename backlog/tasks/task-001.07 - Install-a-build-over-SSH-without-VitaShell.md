@@ -1,18 +1,18 @@
 ---
-id: TASK-001.08
+id: TASK-001.07
 title: Give the shell a `vpk` command that installs builds over SSH
 status: To Do
 assignee: []
 created_date: '2026-11-16T04:30:00Z'
-updated_date: '2026-11-16T04:33:00Z'
+updated_date: '2026-11-16T06:24:48Z'
 labels:
   - deploy
   - server
   - shell
 dependencies:
-  - TASK-001.07
+  - TASK-002
 references:
-  - TASK-001.07
+  - TASK-002
 documentation:
   - 'https://docs.alpinelinux.org/user-handbook/0.1a/Working/apk.html'
 modified_files:
@@ -27,7 +27,7 @@ ordinal: 20000
 ## Description
 
 <!-- SECTION:DESCRIPTION:BEGIN -->
-The deploy loop today is: task build, USB mass storage, VitaShell drag, unmount, relaunch. The SSH server can already receive files once TASK-001.07 lands; what is missing is turning a VPK on disk into the running app's next launch.
+The deploy loop today is: task build, USB mass storage, VitaShell drag, unmount, relaunch. The SSH server can already receive files once TASK-002 lands; what is missing is turning a VPK on disk into the running app's next launch.
 
 The command is named `vpk` — apk-shaped (`vpk install FILE`, `vpk list FILE`) — rather than squatting on `install`, which coreutils owns with different semantics (copy plus mode bits) and which a future builtin should still be able to use. Nothing in this shell reserves command names: dispatch is a lookup of argv[0] in the builtin table and nothing else — there are not even POSIX reserved words here, since the shell has no grammar, only words.
 
