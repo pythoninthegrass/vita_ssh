@@ -59,6 +59,7 @@
 #include <libssh/server.h>
 
 #include <psp2/kernel/rng.h>
+#include <openssl/rand.h> /* the DRBG the port never feeds: see seed_entropy() */
 
 #define MAX_AUTHORIZED_KEYS 32
 #define PASSWORD_LEN 12
@@ -762,6 +763,51 @@ static void choose_home(const sh_datadir_t *key_dir)
 }
 
 /* ------------------------------------------------------------------ */
+/* entropy                                                            */
+/* ------------------------------------------------------------------ */
+
+/*
+ * The Vita OpenSSL port has exactly one patch that reads the device's hardware
+ * RNG -- crypto/rand/rand_unix.c calls sceKernelGetRandomNumber where a desktop
+ * build would call getentropy -- and that patch sits inside
+ *
+ *     #if defined(OPENSSL_RAND_SEED_GETRANDOM)
+ *
+ * which nothing ever turns on: the vita-cross target in libs/openssl/VITABUILD
+ * passes no --with-rand-seed, and the installed configuration.h defines no
+ * OPENSSL_RAND_SEED_* at all. The patched code is therefore not in the binary,
+ * the DRBG is never fed, RAND_bytes returns 0, and everything above it fails
+ * with it -- ssh_get_random, ssh_pki_generate_key, and so the host key. That is
+ * what "error: no entropy from the platform RNG" meant on the device.
+ *
+ * Feeding the DRBG here is the smallest repair that can be proved. It is said
+ * out loud rather than hoped for because a host key generated from a DRBG nobody
+ * checked was seeded is a fingerprint no client can trust: the kernel RNG's own
+ * return code and the DRBG's verdict before and after both go to the log, in the
+ * order the layers sit, so the next failure of this kind names its own layer
+ * without another build. If the kernel RNG itself fails there is nothing to fall
+ * back to, and sh_auth_prepare() refuses to make a key.
+ */
+static void seed_entropy(void)
+{
+    unsigned char seed[64];
+    unsigned char probe[16];
+    int rng = sceKernelGetRandomNumber(seed, (int)sizeof(seed));
+    int was = RAND_status();
+
+    if (rng == 0) {
+        RAND_seed(seed, sizeof(seed));
+    }
+    sh_console_log("entropy: kernel RNG 0x%08X, DRBG seeded %d -> %d",
+                   (unsigned int)rng, was, RAND_status());
+    /* The two calls the server actually depends on, reported side by side: if
+     * these ever disagree, the bug is in libssh's path rather than OpenSSL's. */
+    sh_console_log("entropy: RAND_bytes -> %d, ssh_get_random -> %d",
+                   RAND_bytes(probe, (int)sizeof(probe)),
+                   ssh_get_random(probe, (int)sizeof(probe), 1));
+}
+
+/* ------------------------------------------------------------------ */
 /* public interface                                                   */
 /* ------------------------------------------------------------------ */
 
@@ -771,10 +817,19 @@ int sh_auth_prepare(sh_auth_t *auth)
     unsigned char probe[8];
 
     memset(&auth_state, 0, sizeof(auth_state));
+    /* Zero the caller's struct too, not just the internal one: the console is
+     * drawn whether this succeeds or fails, and on the failure path the copy
+     * below never runs -- so a caller that printed auth.fingerprint, auth.home or
+     * auth.password after an error would be printing uninitialised stack. A
+     * screen showing a password nobody generated is worse than a screen refusing
+     * to show one. */
+    memset(auth, 0, sizeof(*auth));
     n_authorized = 0;
 
+    seed_entropy();
     if (ssh_get_random(probe, (int)sizeof(probe), 1) != SSH_OK) {
-        sh_console_log("error: no entropy from the platform RNG");
+        sh_console_log("error: no entropy from the platform RNG, "
+                       "cannot make a host key");
         return -1;
     }
     if (load_or_create_host_key(&key_dir) != 0) {

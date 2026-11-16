@@ -99,14 +99,25 @@ void sh_console_log(const char *fmt, ...)
     /* Room for the "[mmm.nnn] " prefix, so a long line loses characters from the
      * body and never loses the timestamp that makes the log readable. */
     char body[CONSOLE_WIDTH - 16];
-    unsigned long long now = sceKernelGetProcessTimeWide() / 1000000ULL;
+    /* The system timer, not sceKernelGetProcessTimeWide: that one read zero on
+     * every line of the first device log, which is precisely when elapsed time
+     * is the thing worth knowing -- process time only counts CPU the process
+     * actually ran, and a boot spent waiting inside syscalls accumulates none.
+     * Microseconds since the device booted, so the prefix is uptime-relative;
+     * differences between lines are what the log is read for. */
+    unsigned long long now =
+        (unsigned long long)sceKernelGetSystemTimeWide() / 1000ULL;
 
     va_start(ap, fmt);
     vsnprintf(body, sizeof(body), fmt, ap);
     va_end(ap);
 
+    /* now is milliseconds: minutes are /60000, and the right-hand field is the
+     * millisecond remainder. The first version divided the microsecond count by
+     * 1e6 -- seconds -- and then printed the remainder of that under a field
+     * labelled milliseconds, so [0.037] meant thirty-seven seconds. */
     snprintf(log_ring[log_head], CONSOLE_WIDTH, "[%3llu.%03llu] %s",
-             (now / 60) % 1000, now % 1000, body);
+             (now / 60000) % 1000, now % 1000, body);
     sh_log_line(log_ring[log_head]); /* same entry, before the head moves on */
     log_head = (log_head + 1) % CONSOLE_LINES;
     if (log_count < CONSOLE_LINES) {
