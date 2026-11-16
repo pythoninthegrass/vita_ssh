@@ -111,6 +111,28 @@ static int count_sessions(void)
  * nobody will ever read. That is also why every failure path below calls
  * sh_console_log rather than fprintf.
  */
+/* The log file gets the local wall-clock time in front of the uptime stamp, so a
+ * line can be matched to the moment a test ran. The screen keeps the short form:
+ * its width is spoken for. The uptime stamp has no seconds field, which makes
+ * lines within one minute look out of order; the wall clock carries them. If
+ * localtime_r refuses the time (sceRtc can), the line goes out unchanged. */
+static void mirror_to_file(const char *ring_line)
+{
+    char stamp[24];
+    char line[CONSOLE_WIDTH + 32];
+    time_t now = time(NULL);
+    struct tm tm;
+
+    if (localtime_r(&now, &tm) == NULL ||
+        strftime(stamp, sizeof(stamp), "%Y-%m-%d %H:%M:%S", &tm) == 0) {
+        sh_log_line(ring_line);
+        return;
+    }
+    /* ring_line is "[uptime] text": drop its bracket and put it after the stamp. */
+    snprintf(line, sizeof(line), "[%s %s", stamp, ring_line + 1);
+    sh_log_line(line);
+}
+
 void sh_console_log(const char *fmt, ...)
 {
     va_list ap;
@@ -136,7 +158,7 @@ void sh_console_log(const char *fmt, ...)
      * labelled milliseconds, so [0.037] meant thirty-seven seconds. */
     snprintf(log_ring[log_head], CONSOLE_WIDTH, "[%3llu.%03llu] %s",
              (now / 60000) % 1000, now % 1000, body);
-    sh_log_line(log_ring[log_head]); /* same entry, before the head moves on */
+    mirror_to_file(log_ring[log_head]); /* same entry, before the head moves on */
     log_head = (log_head + 1) % CONSOLE_LINES;
     if (log_count < CONSOLE_LINES) {
         log_count++;
