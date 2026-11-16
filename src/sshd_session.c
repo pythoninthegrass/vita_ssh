@@ -508,6 +508,7 @@ static void insert_completion(sh_session_t *s, const char *name, int is_dir)
     if (s->linelen + extra + 1 > sizeof(s->line)) {
         return; /* would not fit: leave the line exactly as it was */
     }
+    memcpy(s->line + s->linelen, name, strlen(name));
     s->linelen += strlen(name);
     sh_write(s, name, strlen(name));
     if (is_dir) {
