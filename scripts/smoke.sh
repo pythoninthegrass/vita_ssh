@@ -139,8 +139,7 @@ run_pty() {
     sleep 2
 
     # AC8: tab completion fills a word (single match adds the slash)
-    printf 'cd vi\tsshd/\r' >&3; sleep 1
-    printf 'pwd\r' >&3; sleep 1
+    printf 'cat sshd.\t\r' >&3; sleep 1
 
     # AC3: per-session cwd isolation -- A moves; B must not
     printf 'cd /ux0\r' >&3; sleep 1
@@ -151,12 +150,12 @@ run_pty() {
     printf '!!\r' >&3; sleep 1
 
     # AC8: editing keys -- Ctrl-U wipes the line, Ctrl-W wipes a word
-    printf 'echo GARBAGE\r' >&3; printf '\x15' >&3; printf 'echo after-cu\r' >&3; sleep 1
-    printf 'echo one two\r' >&3; printf '\x17' >&3; printf 'three\r' >&3; sleep 1
+    printf 'echo GARBAGE\x15echo after-cu\r' >&3; sleep 1
+    printf 'echo one two\x17three\r' >&3; sleep 1
 
     # AC8: Ctrl-L repaints (clear-screen escape), Ctrl-C abandons the line
     printf '\x0c' >&3; sleep 1
-    printf 'echo BAD\r' >&3; printf '\x03' >&3; printf 'pwd\r' >&3; sleep 1
+    printf 'echo BAD\x03' >&3; printf 'pwd\r' >&3; sleep 1
 
     # AC3: B confirms it never moved
     printf 'pwd\r' >&4; sleep 1
@@ -179,10 +178,10 @@ run_pty() {
     grep -q "cat sshd.log" "$D/a.out" && check "tab completion filled sshd.log" ok ok || check "tab completion filled sshd.log" ok fail
     grep -q "^/ux0" "$D/b.out" && check "session B kept its own cwd (isolation)" ok ok || check "session B kept its own cwd (isolation)" ok fail
     [ "$(grep -c 'smoke-hist-42' "$D/a.out")" -ge 2 ] && check "!! re-ran the command" ok ok || check "!! re-ran the command" ok fail
-    grep -q "after-cu" "$D/a.out" && ! grep -q "GARBAGE" "$D/a.out" && check "Ctrl-U wiped the line" ok ok || check "Ctrl-U wiped the line" ok fail
+    grep -q "after-cu" "$D/a.out" && ! grep -q "^GARBAGE" "$D/a.out" && check "Ctrl-U wiped the line" ok ok || check "Ctrl-U wiped the line" ok fail
     grep -q "one three" "$D/a.out" && check "Ctrl-W wiped one word" ok ok || check "Ctrl-W wiped one word" ok fail
     grep -q $'\033\[2J' "$D/a.out" && check "Ctrl-L repainted the screen" ok ok || check "Ctrl-L repainted the screen" ok fail
-    grep -q '\^C' "$D/a.out" && ! grep -q "BAD" "$D/a.out" && check "Ctrl-C abandoned the line" ok ok || check "Ctrl-C abandoned the line" ok fail
+    grep -q '\^C' "$D/a.out" && ! grep -q "^BAD" "$D/a.out" && check "Ctrl-C abandoned the line" ok ok || check "Ctrl-C abandoned the line" ok fail
     grep -q "before-kill" "$D/b.out" && check "session B ran before the kill" ok ok || check "session B ran before the kill" ok fail
 
     printf '\npty: %d pass, %d fail\n' "$PASS" "$FAIL"

@@ -1839,18 +1839,24 @@ static int extract_redirect(sh_session_t *s, int *argc, char **argv,
             return -1;
         }
         *append = (argv[i][1] == '>');
-        free(argv[i]); /* the operator itself is consumed */
+        /* The caller gets the filename and frees it: the two shifts below
+         * close BOTH slots (operator and name). Shifting once instead left
+         * the filename alive as a plain argument, and `echo hello > f.txt`
+         * printed "hello f.txt" into f.txt. */
         *path = argv[i + 1];
+        free(argv[i]);
         {
-            int j;
+            int j, k;
 
-            for (j = i; j < *argc - 1; j++) {
-                argv[j] = argv[j + 1];
-                quoted[j] = quoted[j + 1];
+            for (k = 0; k < 2; k++) {
+                for (j = i; j < *argc - 1; j++) {
+                    argv[j] = argv[j + 1];
+                    quoted[j] = quoted[j + 1];
+                }
+                (*argc)--;
             }
         }
-        (*argc)--;
-        i--; /* the shifted-down name may be followed by another redirect */
+        i--; /* the shifted-down tail may hold another redirect */
     }
     return 0;
 }
@@ -1861,16 +1867,19 @@ int sh_execute_line(sh_session_t *s, const char *line)
     int quoted[MAX_WORDS];
     int argc, i, status = 0;
     const sh_builtin_t *cmd;
-    const char *redir_path = NULL;
+    char *redir_path = NULL; /* owns the filename word extract_redirect took
+                              * out of argv; freed on every path below */
     int redir_append = 0;
 
     argc = split_line(line, argv, quoted, MAX_WORDS);
     if (argc == 0) {
         return 0;
     }
+    /* Redirection words leave the list FIRST, so the glob loop never sees
+     * them: a redirect target is a file to create, not a pattern to expand. */
     if (extract_redirect(s, &argc, argv, quoted, &redir_path,
                          &redir_append) != 0) {
-        free_args(argv, MAX_WORDS); /* hmm, argc bookkeeping */
+        free_args(argv, argc);
         return 1;
     }
 
@@ -1913,12 +1922,6 @@ int sh_execute_line(sh_session_t *s, const char *line)
         }
     }
 
-    if (extract_redirect(s, &argc, argv, quoted, &redir_path,
-                         &redir_append) != 0) {
-        free_args(argv, argc);
-        return 1;
-    }
-
     /* `command > file` / `>>`: the target is resolved like any path argument,
      * opened before the builtin runs, closed after, on every path below. sh
      * semantics kept where they cost nothing: the file is created even when
@@ -1930,21 +1933,26 @@ int sh_execute_line(sh_session_t *s, const char *line)
         sh_target_t t;
 
         if (resolve_arg(s, "sh", redir_path, &t) != 0) {
+            /* resolve_arg already reported it in the command's own voice */
+            free(redir_path);
             free_args(argv, argc);
             return 1;
         }
         if (t.kind == SH_TARGET_ROOT || t.kind == SH_TARGET_DEVICE) {
             sh_eprintf(s, "sh: %s: Is a directory\n", redir_path);
+            free(redir_path);
             free_args(argv, argc);
             return 1;
         }
         if (t.dev != NULL && !t.dev->writable) {
             sh_eprintf(s, "sh: %s: read-only file system\n", redir_path);
+            free(redir_path);
             free_args(argv, argc);
             return 1;
         }
         if (sh_session_redirect_start(s, t.sce, redir_append) != 0) {
             sh_eprintf(s, "sh: %s: %s\n", redir_path, strerror(errno));
+            free(redir_path);
             free_args(argv, argc);
             return 1;
         }
@@ -1960,6 +1968,7 @@ int sh_execute_line(sh_session_t *s, const char *line)
     if (redir_path != NULL) {
         sh_session_redirect_end(s);
     }
+    free(redir_path);
     free_args(argv, argc);
     return status;
 }
