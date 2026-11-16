@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - Claude
 created_date: '2026-11-15T22:57:00Z'
-updated_date: '2026-11-16T18:39:00Z'
+updated_date: '2026-11-16T19:03:00Z'
 labels: []
 dependencies:
   - TASK-002.01
@@ -28,15 +28,15 @@ The SFTP path has one implementation and one set of assumptions behind it, and t
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 scp of a file up and down matches sha256 in both directions, including a file over 10 MB
-- [ ] #2 sftp recursive put and get reproduce a directory tree with the same file contents and sizes
+- [x] #1 scp of a file up and down matches sha256 in both directions, including a file over 10 MB
+- [x] #2 sftp recursive put and get reproduce a directory tree with the same file contents and sizes
 - [ ] #3 operations on a read-only device and on a nonexistent path report a clear error to the client rather than an unhelpful status code
 - [ ] #4 transfer throughput is recorded so a later regression is visible
-- [ ] #5 the README documents a working copy-to-Vita and copy-from-Vita command line a user can paste
-- [ ] #6 divergences between the macOS and Linux clients are recorded in the task notes
-- [ ] #7 a multi-megabyte VPK put from OpenSSH lands byte-identical (cmp against the source) over WiFi in one command
-- [ ] #8 legacy scp (-O) fails with a clear message instead of hanging
-- [ ] #9 two concurrent sessions transfer at once without corrupting each other
+- [x] #5 the README documents a working copy-to-Vita and copy-from-Vita command line a user can paste
+- [x] #6 divergences between the macOS and Linux clients are recorded in the task notes
+- [x] #7 a multi-megabyte VPK put from OpenSSH lands byte-identical (cmp against the source) over WiFi in one command
+- [x] #8 legacy scp (-O) fails with a clear message instead of hanging
+- [x] #9 two concurrent sessions transfer at once without corrupting each other
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -108,4 +108,8 @@ Separate server bug found: an ssh exec command whose output exceeds 65,586 bytes
 2026-11-16 AC5, README commands pasted against the device (vita@10.5.121.57, OpenSSH 10.6 macOS, only host and user changed, no -i): `sftp -P 2222 vita@HOST` connects, pwd is /ux0/data/vitasshd, ls / lists the devices. `scp -s game.vpk vita@HOST:/ux0/data/` uploads byte-identical (re-downloaded and cmp'd). Fixed in README.md: the sshd.log download path was /ux0/data/sshd.log (no such file); it is /ux0/data/vitasshd/sshd.log (a relative `HOST:sshd.log` also works). The fsetstat sentence was wrong: every scp -s upload, including a 0644 file, prints 'scp: remote fsetstat: Operation unsupported' and exits 0 with the data intact, same for 0755; README now says so. The server logged no 'permission request refused' line for the 0644 uploads (only for the smoke test's chmod 600), so handle_perm_setstat() does not appear to be matching the FSETSTAT OpenSSH 10.6 sends (29-byte packet, type 10); not investigated. Also left on the Vita by an earlier test of mine and removed: /ux0/data/cutoff2.txt; (name includes the semicolon, from an unsupported `;` in an exec line).
 
 2026-11-16 final-build device run (build 12:13, instrumentation removed; server started 12:36:20, macOS OpenSSH_10.6p1): 77 pass, 3 fail, 1 skip. The 3 failures are the /os0 message checks (TASK-002.03.01). Exec cat of the VPK complete; 12 MB scp/sftp round trips and both concurrent downloads identical. Throughput this run: scp-up 0.69, scp-down 0.93, sftp-put 0.64, sftp-get 1.01 MB/s (baseline procedure is TASK-002.03.03). This is the build to commit.
+
+2026-11-16 AC6, Linux client run in Docker (OrbStack, ubuntu:24.04 aarch64, OpenSSH_9.6p1, key files copied from ~/.ssh into the container, scripts/smoke.sh sftp against the final 12:13 build): 72 pass, 3 fail, 2 skip. Same three failures as macOS (the /os0 message checks, TASK-002.03.01); the extra skip is sftp_probe.py (uv not installed in the container), which accounts for 72 vs 77 passes. Exec cat, 12 MB scp/sftp round trips, recursive tree, VPK cmp, scp -O (exit 1, 'scp: command not found'), concurrent transfers all pass. scp -s uploads print the same 'scp: remote fsetstat: Operation unsupported' with exit 0 for 0644 and 0755 files; scp -s -p prints it twice, exit 0. Divergences from macOS OpenSSH 10.6: none in behaviour or message text. Container throughput (scp-up 0.93, scp-down 0.86, sftp-put 0.89, sftp-get 0.99 MB/s) went through OrbStack NAT and is not comparable with the macOS numbers; not for the AC4 baseline.
+
+AC6, old client (ubuntu:20.04, OpenSSH_8.2p1): scp has no -s option ('unknown option -- s', exit 1; -s arrived in OpenSSH 8.7, SFTP became the default in 9.0), and plain scp uses the legacy protocol and fails in under a second with 'scp: command not found', exit 1. sftp works. README said only that -s is the default from 9.0; corrected to say it needs OpenSSH 8.7 or later and that older clients should use sftp. Windows clients not tried.
 <!-- SECTION:NOTES:END -->
