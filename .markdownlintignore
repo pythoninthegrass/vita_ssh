@@ -1,0 +1,22 @@
+.claude/**
+backlog/**
+
+# Machine-local notes, excluded by a global gitignore; linting them makes
+# task lint depend on what happens to be on the developer's machine
+**/CLAUDE.local.md
+# Symlink to AGENTS.md; scanning both reports every issue twice
+CLAUDE.md
+
+# Rewritten by release-please on every release, so hand formatting is lost
+CHANGELOG.md
+
+# Website dependencies and generated files
+site/node_modules/**
+site/.astro/**
+site/dist/**
+
+# Embedded page fragments use h2/h3 and sentence headings; validate the built page
+site/src/content/**
+
+# Third-party submodule; its files cannot be changed from this repository
+tools/thps2-tools/**
