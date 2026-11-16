@@ -40,6 +40,12 @@ The server writes `ux0:/data/vitasshd/sshd.log`. Read it from a shell session on
 ssh -p 2222 any@<ip> "cat sshd.log"
 ```
 
+To paste the log into a bug report or a chat, copy it to the macOS clipboard instead:
+
+```bash
+ssh -p 2222 any@192.168.8.57 cat sshd.log | pbcopy
+```
+
 The shell has no `tail`, so the whole file comes back and the newest lines are at the bottom. A `=== VitaSSHd starting` line in the middle of the log means the app restarted, which after a `subsystem "sftp"` line usually means it crashed. The file is also reachable over the USB mount at `data/vitasshd/sshd.log`.
 
 SFTP requests are logged one line each, except READ and WRITE, which would flood the log during a transfer: `sftp: request type N, M bytes`. The types are the SSH_FXP numbers from libssh's `sftp.h`: 1 INIT, 3 OPEN, 4 CLOSE, 7 LSTAT, 8 FSTAT, 9 SETSTAT, 11 OPENDIR, 12 READDIR, 13 REMOVE, 14 MKDIR, 15 RMDIR, 16 REALPATH, 17 STAT, 18 RENAME, 200 EXTENDED. `sftp: request type N failed (rc)` means the stock callback rejected a request.
