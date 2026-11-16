@@ -118,8 +118,8 @@ def program_headers(elf: bytes) -> list[tuple[int, int, int, int, int]]:
     phentsize, phnum = struct.unpack_from("<HH", elf, 0x2A)
     headers = []
     for i in range(phnum):
-        p_type, p_offset, p_vaddr, _paddr, p_filesz, _memsz, p_flags, _align = (
-            struct.unpack_from("<8I", elf, phoff + i * phentsize)
+        p_type, p_offset, p_vaddr, _paddr, p_filesz, _memsz, p_flags, _align = struct.unpack_from(
+            "<8I", elf, phoff + i * phentsize
         )
         headers.append((p_type, p_offset, p_vaddr, p_filesz, p_flags))
     return headers
@@ -208,9 +208,7 @@ class Symbolizer:
     @staticmethod
     def exec_vaddr(elf_path: Path) -> int:
         """Link address of the ELF's executable segment, which addr2line is keyed on."""
-        for p_type, _off, p_vaddr, _filesz, flags in program_headers(
-            elf_path.read_bytes()
-        ):
+        for p_type, _off, p_vaddr, _filesz, flags in program_headers(elf_path.read_bytes()):
             if p_type == PT_LOAD and flags & PF_X:
                 return p_vaddr
         sys.exit(f"{elf_path}: no executable PT_LOAD segment")
@@ -268,14 +266,9 @@ class Symbolizer:
         )
         marker = f"{link:x}:"
         body = [
-            line
-            for line in out.stdout.splitlines()
-            if line.strip() and not line.startswith(("Disassembly", str(self.elf_path)))
+            line for line in out.stdout.splitlines() if line.strip() and not line.startswith(("Disassembly", str(self.elf_path)))
         ]
-        return "\n".join(
-            f"!!! {line}" if line.strip().startswith(marker) else f"    {line}"
-            for line in body
-        )
+        return "\n".join(f"!!! {line}" if line.strip().startswith(marker) else f"    {line}" for line in body)
 
     def read(self, vaddr: int, size: int) -> bytes | None:
         for start, data in self.core.memory:
@@ -298,10 +291,7 @@ def report(core: Core, sym: Symbolizer, stack_words: int, disas: bool) -> int:
         print("\nno thread has a stop reason; nothing crashed in this dump")
         return 1
     for t in crashed:
-        print(
-            f'\n=== THREAD "{t.name}" <0x{t.uid:x}> CRASHED '
-            f"({STOP_REASONS.get(t.stop_reason, hex(t.stop_reason))}) ==="
-        )
+        print(f'\n=== THREAD "{t.name}" <0x{t.uid:x}> CRASHED ({STOP_REASONS.get(t.stop_reason, hex(t.stop_reason))}) ===')
         if not t.gpr:
             print("no register record for this thread")
             continue
@@ -333,9 +323,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="Symbolise a Vita crash dump.")
     ap.add_argument("dump", type=Path)
     ap.add_argument("elf", type=Path)
-    ap.add_argument(
-        "--module", help="module name to match against the ELF (default: its file name)"
-    )
+    ap.add_argument("--module", help="module name to match against the ELF (default: its file name)")
     ap.add_argument("--stack", type=int, default=32, metavar="WORDS")
     ap.add_argument("--no-disas", action="store_true")
     args = ap.parse_args()
@@ -345,8 +333,7 @@ def main() -> int:
     if not any(m.name == sym.module_name for m in core.modules):
         names = ", ".join(m.name for m in core.modules)
         print(
-            f"warning: no module named {sym.module_name!r} in the dump ({names}); "
-            "nothing will be symbolised, pass --module",
+            f"warning: no module named {sym.module_name!r} in the dump ({names}); nothing will be symbolised, pass --module",
             file=sys.stderr,
         )
     return report(core, sym, args.stack, not args.no_disas)
