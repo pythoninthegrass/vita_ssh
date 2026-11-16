@@ -706,6 +706,48 @@ static void load_authorized_keys(char *used_path, size_t usedlen)
 }
 
 /* ------------------------------------------------------------------ */
+/* randomness                                                         */
+/* ------------------------------------------------------------------ */
+
+/*
+ * libssh's ssh_get_random does NOT follow the SSH_OK convention of its
+ * neighbours. getrandom_crypto.c documents "@return 1 on success, 0 on error",
+ * and every caller inside libssh itself writes `if (!ok)` or `if (rc != 1)`
+ * (server.c:112, kex.c:815, pki_sk.c:320). Testing it against SSH_OK inverts the
+ * check: it fails on a working RNG and passes on a dead one. That inversion is
+ * what stopped this server from booting -- the device log read `ssh_get_random ->
+ * 1`, a success, and called it a failure -- and it is worth pausing on what the
+ * inverted version permits: with a genuinely dead RNG the call returns 0, which
+ * is SSH_OK, so the gate would have opened and made a host key from nothing. The
+ * one outcome this file exists to prevent was the one it let through.
+ *
+ * So the convention is stated once, here, and nothing calls ssh_get_random
+ * directly any more -- and in fact nothing calls it at all, because two further
+ * problems sit behind that convention.
+ *
+ * The return contract, from OpenSSL's own STYLE.md: 1 = success, 0 = failure, and
+ * -1 = a serious internal error. ssh_get_random computes !!RAND_bytes(), so -1
+ * becomes !!(-1) == 1: a failed generate reports success. RAND_bytes can return -1
+ * for real, when the global DRBG cannot be allocated. Only == 1 on the underlying
+ * call treats both 0 -- OpenSSL's "PRNG not seeded", the error this gate exists for
+ * -- and -1 as failure.
+ *
+ * And 'strong' is not strong here. libssh takes its private-DRBG branch only under
+ * HAVE_OPENSSL_RAND_PRIV_BYTES, which this build's config.h never defines:
+ * getrandom_crypto.c.obj references RAND_bytes and nothing else. Asking libssh for
+ * strong randomness for a host key therefore quietly gets the PUBLIC DRBG, whose
+ * output is not intended to be secret -- which is exactly why 1.1.1 split the
+ * generator into public and private instances and added RAND_priv_bytes for key
+ * material.
+ *
+ * So ask OpenSSL directly and insist on exactly 1.
+ */
+static int get_strong_random(void *buf, size_t len)
+{
+    return RAND_priv_bytes((unsigned char *)buf, (int)len) == 1;
+}
+
+/* ------------------------------------------------------------------ */
 /* password fallback                                                  */
 /* ------------------------------------------------------------------ */
 
@@ -716,10 +758,11 @@ static void generate_password(char *dst, size_t dstlen)
     size_t len = (PASSWORD_LEN < room) ? PASSWORD_LEN : room;
     size_t alphabet = sizeof(password_alphabet) - 1; /* the NUL is not a letter */
 
-    if (ssh_get_random(raw, (int)sizeof(raw), 1) != SSH_OK) {
+    if (!get_strong_random(raw, sizeof(raw))) {
         /* Fall back to the kernel RNG rather than shipping a fixed password: if
          * this ever fires, the answer is to not accept password auth at all,
-         * which is what the caller will see as an unusable password. */
+         * which is what the caller will see as an unusable password. 32 bytes
+         * stays inside the 64 the kernel will answer in one call. */
         if (sceKernelGetRandomNumber(raw, sizeof(raw)) < 0) {
             dst[0] = '\0';
             return;
@@ -767,26 +810,21 @@ static void choose_home(const sh_datadir_t *key_dir)
 /* ------------------------------------------------------------------ */
 
 /*
- * The Vita OpenSSL port has exactly one patch that reads the device's hardware
- * RNG -- crypto/rand/rand_unix.c calls sceKernelGetRandomNumber where a desktop
- * build would call getentropy -- and that patch sits inside
+ * The DRBG is fed by the port -- crypto/rand/rand_unix.c's syscall_random() calls
+ * sceKernelGetRandomNumber where a desktop build calls getentropy, and
+ * OPENSSL_RAND_SEED_OS turns that into OPENSSL_RAND_SEED_GETRANDOM so the patch
+ * is compiled. It used to ask for the whole reseed in one call, past the 64 bytes
+ * psp2/kernel/rng.h allows, and return buflen whatever the kernel answered; see
+ * libs/openssl/patches/, which is what fixed that.
  *
- *     #if defined(OPENSSL_RAND_SEED_GETRANDOM)
- *
- * which nothing ever turns on: the vita-cross target in libs/openssl/VITABUILD
- * passes no --with-rand-seed, and the installed configuration.h defines no
- * OPENSSL_RAND_SEED_* at all. The patched code is therefore not in the binary,
- * the DRBG is never fed, RAND_bytes returns 0, and everything above it fails
- * with it -- ssh_get_random, ssh_pki_generate_key, and so the host key. That is
- * what "error: no entropy from the platform RNG" meant on the device.
- *
- * Feeding the DRBG here is the smallest repair that can be proved. It is said
- * out loud rather than hoped for because a host key generated from a DRBG nobody
- * checked was seeded is a fingerprint no client can trust: the kernel RNG's own
- * return code and the DRBG's verdict before and after both go to the log, in the
- * order the layers sit, so the next failure of this kind names its own layer
- * without another build. If the kernel RNG itself fails there is nothing to fall
- * back to, and sh_auth_prepare() refuses to make a key.
+ * Seeding again here costs nothing and buys the one thing a silent gather cannot
+ * give: a number to look at. A host key made from a DRBG nobody checked was fed is
+ * a fingerprint no client can trust, so the kernel RNG's own return code and the
+ * DRBG's verdict either side of the seed both go to the log, in the order the
+ * layers sit, and so does what the two calls the server actually depends on
+ * returned. The next failure of this kind names its own layer instead of costing
+ * another build. If the kernel RNG itself fails there is nothing to fall back to,
+ * and sh_auth_prepare() refuses to make a key.
  */
 static void seed_entropy(void)
 {
@@ -800,9 +838,14 @@ static void seed_entropy(void)
     }
     sh_console_log("entropy: kernel RNG 0x%08X, DRBG seeded %d -> %d",
                    (unsigned int)rng, was, RAND_status());
-    /* The two calls the server actually depends on, reported side by side: if
-     * these ever disagree, the bug is in libssh's path rather than OpenSSL's. */
-    sh_console_log("entropy: RAND_bytes -> %d, ssh_get_random -> %d",
+    /* The three calls that matter, in the order they sit. All follow OpenSSL's
+     * convention -- 1 is success, 0 is "not seeded", -1 is a serious error -- and
+     * printing "(1=ok)" is not padding: reading a 1 as a failure is the mistake
+     * that kept this server from starting. ssh_get_random is libssh's own answer to
+     * the same question, and on this build it means the PUBLIC drbg, so if it ever
+     * disagrees with RAND_priv_bytes that disagreement is the bug. */
+    sh_console_log("entropy: RAND_priv_bytes %d, RAND_bytes %d, ssh_get_random %d (1=ok)",
+                   RAND_priv_bytes(probe, (int)sizeof(probe)),
                    RAND_bytes(probe, (int)sizeof(probe)),
                    ssh_get_random(probe, (int)sizeof(probe), 1));
 }
@@ -827,7 +870,7 @@ int sh_auth_prepare(sh_auth_t *auth)
     n_authorized = 0;
 
     seed_entropy();
-    if (ssh_get_random(probe, (int)sizeof(probe), 1) != SSH_OK) {
+    if (!get_strong_random(probe, sizeof(probe))) {
         sh_console_log("error: no entropy from the platform RNG, "
                        "cannot make a host key");
         return -1;
