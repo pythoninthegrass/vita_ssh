@@ -307,15 +307,23 @@ the verification.
    screen.
 
 Each app ships its own tile. The server's is rendered from the SVG sources in `assets/`
-(`assets/sshd-icon0.svg`, `assets/sshd-bg0.svg`), and each file's header carries the exact
-render command — edit the SVG and re-render, never the PNG. The client's tile PNGs
-(`sce_sys/`) arrived without their sources; giving them SVG originals is `TASK-009`.
+(`assets/sshd-icon0.svg`, `assets/sshd-bg0.svg`) by one command — edit the SVG and run
+`assets/render-tiles.sh`, never touch the PNGs:
 
-Every tile PNG has to be an **8-bit palette PNG** — color type 3, `IHDR,PLTE,IDAT,IEND` and
-nothing else — or the Vita's package installer refuses the whole VPK and the install dies with
-`0x8010113D`. A 24-bit TrueColor PNG fails even at 8 bits per channel, so the render commands
-finish with `PNG8:`, and the ancillary chunks ImageMagick adds by default (`tEXt` dates,
-`bKGD`) are stripped for the same reason. To check a suspect tile:
+```
+assets/render-tiles.sh          # render from assets/*.svg, then verify every tile
+assets/render-tiles.sh --check  # verify only; exits 1 if any tile would be rejected
+```
+
+The client's tile PNGs (`sce_sys/`) arrived without their sources; giving them SVG originals is
+`TASK-009`.
+
+Every tile PNG has to be an **8-bit palette PNG** — color type 3, bit depth 8, `IHDR,PLTE,IDAT,IEND`
+and nothing else — or the Vita's package installer refuses the whole VPK and the install dies with
+`0x8010113D`. That is why the render goes through a converter instead of straight out of the
+renderer, and why the script reads back what it wrote: a 24-bit TrueColor PNG looks fine to most
+tools, and the ancillary chunks (`tEXt` dates, `bKGD`) that image libraries add by default are
+rejected too. To check a suspect tile by hand:
 
 ```
 file sce_sys_sshd/icon0.png    # must say: 8-bit colormap, non-interlaced
@@ -323,10 +331,15 @@ file sce_sys_sshd/icon0.png    # must say: 8-bit colormap, non-interlaced
 
 `8-bit/color RGB` or `8-bit/color RGBA` means the installer will reject it. `magick identify`
 cannot tell you this — it quotes 8-bit depth per channel for a 24-bit image and calls both
-files `Palette`, which is how a TrueColor tile got shipped in the first place. This is the
-first thing to look at when a VPK will not install. The client's `bg0.png` was TrueColor too;
-with no SVG to re-render from, it was quantized in place by the same `magick … PNG8:` pass,
-which is lossless for what is a flat fill.
+files `Palette`, which is how a TrueColor tile got shipped in the first place. Beware the same
+trap in a render command: `-depth 8` means 8 bits *per channel*, so `PNG24:` output looks correct
+and is not. This is the first thing to look at when a VPK will not install.
+
+The converter is `scripts/convert_png.py`, a self-contained uv script (`uv run
+scripts/convert_png.py <in.png> --out <out.png>`); `assets/render-tiles.sh` calls it. It quantizes
+with Pillow by default and `--quantizer pngquant` opts into that instead — measured against the
+24-bit renders, Pillow was 50 to 1000 times closer on the livearea gradient and effectively tied
+on the icon, and it needs nothing but uv.
 
 ---
 
@@ -421,8 +434,9 @@ Ground rules, all of them inherited from how this repo is built:
   producing both VPKs is the only automated check that exists.
 - The two apps keep separate link lists. The client stays a libssh2 client and the server
   stays a libssh server.
-- Tile PNGs are generated. Edit the SVG and re-render with the command in its header, and
-  keep the output an 8-bit palette PNG — the installer rejects other formats (`0x8010113D`).
+- Tile PNGs are generated. Edit the SVG in `assets/` and run `assets/render-tiles.sh`; it verifies
+  every committed tile on the way out. The installer rejects anything that is not an 8-bit palette
+  PNG (`0x8010113D`), so never write a tile PNG with an image tool directly.
 - Want something that is not in the backlog? Open a task for it rather than opening a PR
   that assumes it.
 

@@ -1,11 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  VitaSSHd livearea background source. Render:
-    rsvg-convert -w 960 -h 544 assets/sshd-bg0.svg -o sce_sys_sshd/livearea/contents/bg0.png
-    magick sce_sys_sshd/livearea/contents/bg0.png -strip -define png:exclude-chunks=date,bKGD,tIME,tEXt,sRGB,gAMA,cHRM,pHYs -colors 256 -depth 8 PNG8:sce_sys_sshd/livearea/contents/bg0.png
-  Must land as an 8-bit palette PNG (PNG8:). The installer rejects other PNG formats with
-  0x8010113D, and it also balks at the ancillary chunks ImageMagick adds by default, hence
-  the -strip/-define pair. -colors 256 is plenty here: the field is a low-contrast gradient.
+  VitaSSHd livearea background source. Render with:
+
+      assets/render-tiles.sh
+
+  Must land as an 8-bit palette PNG (colour type 3, bit depth 8): the installer rejects other
+  PNG formats with 0x8010113D, and it also balks at the ancillary chunks renderers add by
+  default, which is why the render goes through scripts/convert_png.py rather than straight
+  out of rsvg-convert. 256 palette entries is plenty here: the field is a low-contrast gradient.
   The client's bg0.png is a flat fill of its brand blue; this keeps that flat-field
   convention and adds only a low-contrast console outline, kept to the right because the
   livearea text (template.xml) sits bottom-left.

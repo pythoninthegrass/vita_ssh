@@ -66,11 +66,16 @@
 - Each app packages its own tile: the client's `vita_create_vpk` reads `sce_sys/`, the
   server's reads `sce_sys_sshd/`; both pack to `sce_sys/` inside their own VPK, so only the
   source directory differs. The PNGs are generated — edit the SVG sources in `assets/` and
-  re-render (command in each file's header), never the PNGs. Every tile PNG must come out an
-  **8-bit palette PNG** or the installer rejects the whole VPK with `0x8010113D`: the render has
-  to end in `PNG8:`, not `PNG24:`/`-type TrueColor` (that is 8 bits *per channel*, which looks
-  correct and is not), and ImageMagick's default `tEXt`/`bKGD` chunks get stripped. Check with
-  `file tile.png` → must say `8-bit colormap`; `magick identify` cannot tell you this.
+  re-render with `assets/render-tiles.sh`, never touch the PNGs by hand. That script is the only
+  sanctioned way to make a tile: it renders with `rsvg-convert`, hands the 24-bit result to
+  `scripts/convert_png.py` (a uv PEP 723 script — `uv run scripts/convert_png.py --check <png>`
+  verifies without writing), which quantizes, strips ancillary chunks, and reads the file back
+  before renaming it into place. Every tile PNG must come out an **8-bit palette PNG** or the
+  installer rejects the whole VPK with `0x8010113D`: colour type 3, bit depth 8, non-interlaced,
+  and only `IHDR,PLTE,IDAT,IEND` — ImageMagick's default `tEXt`/`bKGD` chunks are rejected too.
+  Check with `file tile.png` → must say `8-bit colormap`; `magick identify` cannot tell you this
+  (it reports 8-bit depth per channel and calls a TrueColor render a `Palette` image). Note that
+  "-depth 8" alone means 8 bits *per channel*, which looks correct and is not.
 - In `taskfiles/setup.yml`, the `env -u CPPFLAGS -u LDFLAGS -u PKG_CONFIG_*` around
   libssh2's configure is load-bearing: a host Homebrew OpenSSL leaking into the probe
   passes the "Crypto library: OpenSSL" check, then fails to link against the 1.1.1 Vita
