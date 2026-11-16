@@ -48,8 +48,10 @@
 #endif
 
 /* Keys the editor claims. Anything else is inserted. */
+#define KEY_CTRL_A 0x01
 #define KEY_CTRL_C 0x03
 #define KEY_CTRL_D 0x04
+#define KEY_CTRL_E 0x05
 #define KEY_CTRL_L 0x0c
 #define KEY_CTRL_W 0x17
 #define KEY_CTRL_U 0x15
@@ -77,6 +79,7 @@ struct sh_session {
 
     char line[SSHD_LINE_MAX];
     size_t linelen;
+    size_t cursor; /* insertion point within line, 0..linelen */
 
     char *history[SSHD_HISTORY];
     int hist_len;
@@ -402,6 +405,44 @@ void sh_prompt(sh_session_t *s)
     write_prompt(s);
 }
 
+static void clear_line(sh_session_t *s)
+{
+    s->linelen = 0;
+    s->cursor = 0;
+    s->line[0] = '\0';
+}
+
+/* Moves the terminal cursor left n columns with backspaces, which every terminal honours. */
+static void cursor_back(sh_session_t *s, size_t n)
+{
+    char bs[32];
+
+    if (!s->pty) {
+        return;
+    }
+    memset(bs, '\b', sizeof(bs));
+    while (n > 0) {
+        size_t chunk = n < sizeof(bs) ? n : sizeof(bs);
+
+        sh_write(s, bs, chunk);
+        n -= chunk;
+    }
+}
+
+/* Moves the insertion point, repainting the characters it passes when it goes right. */
+static void cursor_to(sh_session_t *s, size_t pos)
+{
+    if (pos > s->linelen) {
+        pos = s->linelen;
+    }
+    if (pos < s->cursor) {
+        cursor_back(s, s->cursor - pos);
+    } else if (s->pty && pos > s->cursor) {
+        sh_write(s, s->line + s->cursor, pos - s->cursor);
+    }
+    s->cursor = pos;
+}
+
 static void redraw_line(sh_session_t *s)
 {
     if (!s->pty) {
@@ -414,6 +455,7 @@ static void redraw_line(sh_session_t *s)
     write_prompt(s);
     sh_write(s, s->line, s->linelen);
     sh_printf(s, "\033[K");
+    cursor_back(s, s->linelen - s->cursor);
 }
 
 static void history_push(sh_session_t *s, const char *line)
@@ -458,14 +500,14 @@ static void recall_history(sh_session_t *s, int up)
     }
     if (next >= s->hist_len) {
         s->hist_pos = SSHD_HISTORY;
-        s->linelen = 0;
-        s->line[0] = '\0';
+        clear_line(s);
         redraw_line(s);
         return;
     }
     s->hist_pos = next;
     snprintf(s->line, sizeof(s->line), "%s", s->history[next]);
     s->linelen = strlen(s->line);
+    s->cursor = s->linelen;
     redraw_line(s);
 }
 
@@ -518,7 +560,7 @@ static void insert_completion(sh_session_t *s, const char *name, int is_dir)
     s->line[s->linelen] = '\0';
 }
 
-static void complete_word(sh_session_t *s)
+static void complete_word_at_end(sh_session_t *s)
 {
     const char *dir_text, *prefix;
     size_t plen;
@@ -697,6 +739,14 @@ static void complete_word(sh_session_t *s)
     }
 }
 
+/* Completion reads the whole line and appends to it, so it runs from the end. */
+static void complete_word(sh_session_t *s)
+{
+    cursor_to(s, s->linelen);
+    complete_word_at_end(s);
+    s->cursor = s->linelen;
+}
+
 /* ------------------------------------------------------------------ */
 /* line editor                                                        */
 /* ------------------------------------------------------------------ */
@@ -794,8 +844,7 @@ static void finish_line(sh_session_t *s)
                            expanded, sizeof(expanded)) != 0) {
         /* Event not found: nothing runs, nothing is remembered. */
         sh_eprintf(s, "sh: %s: event not found\n", s->line);
-        s->linelen = 0;
-        s->line[0] = '\0';
+        clear_line(s);
         s->hist_pos = SSHD_HISTORY;
         write_prompt(s);
         return;
@@ -811,29 +860,42 @@ static void finish_line(sh_session_t *s)
         history_push(s, s->line);
     }
     s->pending_ready = 1;
-    s->linelen = 0;
-    s->line[0] = '\0';
+    clear_line(s);
     s->hist_pos = SSHD_HISTORY;
 }
 
+/* Deletes the character before the cursor, closing the gap. */
 static void erase_char(sh_session_t *s)
 {
-    if (s->linelen == 0) {
+    size_t tail;
+
+    if (s->cursor == 0) {
         return;
     }
+    tail = s->linelen - s->cursor;
+    memmove(s->line + s->cursor - 1, s->line + s->cursor, tail + 1);
     s->linelen--;
-    s->line[s->linelen] = '\0';
-    if (s->pty) {
-        sh_write(s, "\b \b", 3);
+    s->cursor--;
+    if (!s->pty) {
+        return;
     }
+    if (tail == 0) {
+        sh_write(s, "\b \b", 3);
+        return;
+    }
+    /* Repaint the tail one column left, blank the stale last column, come back. */
+    sh_write(s, "\b", 1);
+    sh_write(s, s->line + s->cursor, tail);
+    sh_write(s, " ", 1);
+    cursor_back(s, tail + 1);
 }
 
 static void erase_word(sh_session_t *s)
 {
-    while (s->linelen > 0 && s->line[s->linelen - 1] == ' ') {
+    while (s->cursor > 0 && s->line[s->cursor - 1] == ' ') {
         erase_char(s);
     }
-    while (s->linelen > 0 && s->line[s->linelen - 1] != ' ') {
+    while (s->cursor > 0 && s->line[s->cursor - 1] != ' ') {
         erase_char(s);
     }
 }
@@ -843,10 +905,14 @@ static void insert_char(sh_session_t *s, unsigned char c)
     if (s->linelen + 1 >= sizeof(s->line)) {
         return; /* the line is full; a beep nobody hears helps no one */
     }
-    s->line[s->linelen++] = (char)c;
-    s->line[s->linelen] = '\0';
+    memmove(s->line + s->cursor + 1, s->line + s->cursor,
+            s->linelen - s->cursor + 1);
+    s->line[s->cursor++] = (char)c;
+    s->linelen++;
     if (s->pty) {
-        sh_write(s, (const char *)&c, 1);
+        /* The new character and everything after it, then back to the cursor. */
+        sh_write(s, s->line + s->cursor - 1, s->linelen - s->cursor + 1);
+        cursor_back(s, s->linelen - s->cursor);
     }
 }
 
@@ -888,9 +954,16 @@ static int feed_escape(sh_session_t *s, unsigned char c)
             recall_history(s, 1);
         } else if (c == 'B') {
             recall_history(s, 0);
+        } else if (c == 'C') {
+            cursor_to(s, s->cursor + 1);
+        } else if (c == 'D' && s->cursor > 0) {
+            cursor_to(s, s->cursor - 1);
+        } else if (c == 'H') {
+            cursor_to(s, 0);
+        } else if (c == 'F') {
+            cursor_to(s, s->linelen);
         }
-        /* C/D (arrows), and every report we did not ask for, are dropped: the
-         * editor is append-only, so there is nothing to move. */
+        /* Every report we did not ask for is dropped. */
     }
     return 1;
 }
@@ -915,8 +988,7 @@ static void feed_byte(sh_session_t *s, unsigned char c)
         return;
     case KEY_CTRL_C:
         sh_printf(s, "^C\n");
-        s->linelen = 0;
-        s->line[0] = '\0';
+        clear_line(s);
         s->hist_pos = SSHD_HISTORY;
         write_prompt(s);
         return;
@@ -925,7 +997,14 @@ static void feed_byte(sh_session_t *s, unsigned char c)
             s->exit_requested = 1; /* EOF on an empty line, as every shell does */
         }
         return;
+    case KEY_CTRL_A:
+        cursor_to(s, 0);
+        return;
+    case KEY_CTRL_E:
+        cursor_to(s, s->linelen);
+        return;
     case KEY_CTRL_U:
+        cursor_to(s, s->linelen);
         while (s->linelen > 0) {
             erase_char(s);
         }
@@ -938,6 +1017,7 @@ static void feed_byte(sh_session_t *s, unsigned char c)
             sh_write(s, "\033[2J\033[H", 7);
             write_prompt(s);
             sh_write(s, s->line, s->linelen);
+            cursor_back(s, s->linelen - s->cursor);
         }
         return;
     case KEY_TAB:
@@ -1316,8 +1396,7 @@ int sh_session_pump(sh_session_t *s)
         snprintf(line, sizeof(line), "%s", s->pending);
         s->pending_ready = 0;
         s->pending[0] = '\0';
-        s->linelen = 0;
-        s->line[0] = '\0';
+        clear_line(s);
         {
             int status = sh_execute_line(s, line);
 
