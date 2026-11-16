@@ -1,11 +1,11 @@
 ---
 id: TASK-002.03
 title: Verify sftp and scp against real clients on device
-status: In Progress
+status: Done
 assignee:
   - Claude
 created_date: '2026-11-15T22:57:00Z'
-updated_date: '2026-11-16T19:03:00Z'
+updated_date: '2026-11-16T22:14:00Z'
 labels: []
 dependencies:
   - TASK-002.01
@@ -30,8 +30,8 @@ The SFTP path has one implementation and one set of assumptions behind it, and t
 <!-- AC:BEGIN -->
 - [x] #1 scp of a file up and down matches sha256 in both directions, including a file over 10 MB
 - [x] #2 sftp recursive put and get reproduce a directory tree with the same file contents and sizes
-- [ ] #3 operations on a read-only device and on a nonexistent path report a clear error to the client rather than an unhelpful status code
-- [ ] #4 transfer throughput is recorded so a later regression is visible
+- [x] #3 operations on a read-only device and on a nonexistent path report a clear error to the client rather than an unhelpful status code
+- [x] #4 transfer throughput is recorded so a later regression is visible
 - [x] #5 the README documents a working copy-to-Vita and copy-from-Vita command line a user can paste
 - [x] #6 divergences between the macOS and Linux clients are recorded in the task notes
 - [x] #7 a multi-megabyte VPK put from OpenSSH lands byte-identical (cmp against the source) over WiFi in one command
@@ -113,3 +113,9 @@ Separate server bug found: an ssh exec command whose output exceeds 65,586 bytes
 
 AC6, old client (ubuntu:20.04, OpenSSH_8.2p1): scp has no -s option ('unknown option -- s', exit 1; -s arrived in OpenSSH 8.7, SFTP became the default in 9.0), and plain scp uses the legacy protocol and fails in under a second with 'scp: command not found', exit 1. sftp works. README said only that -s is the default from 9.0; corrected to say it needs OpenSSH 8.7 or later and that older clients should use sftp. Windows clients not tried.
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Every criterion was verified on a Vita (any@10.5.121.57:2222) with macOS OpenSSH 10.6p1, and the Linux client run (OpenSSH 9.6p1 in Docker) matched it. The pass found and fixed three server defects: replies sent twice or skipped when drain_out() re-entered through libssh's packet loop (the 12 MB download desync, AC1), exec output cut at 64 KB because the client's EOF ended the command (fixed in on_channel_eof), and bare 'Failure' on writes to a read-only device (TASK-002.03.01, AC3, now 'Permission denied'). Exec output is now paced by the client's window and the socket (TASK-002.03.02). Throughput is recorded in docs/throughput.md with a repeatable scripts/throughput.sh (TASK-002.03.03, AC4): 2026-11-16 medians scp up 0.67, scp down 0.65, sftp put 0.66, sftp get 0.99 MB/s; crypto, not the card, is the limit. The earlier 'AC1 FAIL' notes are superseded by the later runs where the 12 MB round trips pass. Limits kept: clients see 'Permission denied' rather than 'Read-only file system'; scp -s needs OpenSSH 8.7 or later; Windows clients were not tried. Open and untracked: gets of 0.59 MB/s with no link problem, and the 0.66 MB/s upload rate below the 1.05 MB/s download ceiling.
+<!-- SECTION:FINAL_SUMMARY:END -->
