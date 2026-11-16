@@ -3,6 +3,7 @@
 #include <psp2/kernel/processmgr.h>
 #include <psp2/net/net.h>
 #include <psp2/net/netctl.h>
+#include <psp2/power.h>
 #include <psp2/sysmodule.h>
 #include <string.h>
 
@@ -81,6 +82,14 @@ int init_network() {
         ret = sceNetCtlInetGetState(&state);
         if (ret == 0 && state == SCE_NETCTL_STATE_CONNECTED) {
             net_log("Network ready and connected");
+            /* The WLAN chip has its own power-save, separate from the system
+             * idle timer: left alone it drops the association after a few
+             * seconds of silence, and a client that connects during the down
+             * half of that cycle gets "No route to host" at connect(). A
+             * server that must be reachable while nobody is typing asks the
+             * power manager to keep wireless at full availability. */
+            ret = scePowerSetUsingWireless(SCE_TRUE);
+            net_log("wireless hold: scePowerSetUsingWireless(TRUE) -> %d", ret);
             return 0;
         }
         net_log("Network state: %d, ret: 0x%08X", state, ret);

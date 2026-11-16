@@ -1645,12 +1645,13 @@ static int cmd_which(sh_session_t *s, int argc, char **argv)
 static int cmd_history(sh_session_t *s, int argc, char **argv)
 {
     const char *entries[SSHD_HISTORY];
-    int n, i, first = 0;
+    int n, i, start = 0;
 
     if (argc > 2) {
         sh_eprintf(s, "usage: history [COUNT]\n");
         return 1;
     }
+    n = sh_session_history(s, entries, SSHD_HISTORY);
     if (argc == 2) {
         char *end;
         long want = strtol(argv[1], &end, 10);
@@ -1659,13 +1660,14 @@ static int cmd_history(sh_session_t *s, int argc, char **argv)
             sh_eprintf(s, "history: %s: not a number\n", argv[1]);
             return 1;
         }
-        first = (int)want; /* clamped once n is known below */
+        /* The last WANT entries, numbered by their real position, so the
+         * numbers match what `!n` expands against. */
+        start = n - (int)want;
+        if (start < 0) {
+            start = 0;
+        }
     }
-    n = sh_session_history(s, entries, SSHD_HISTORY);
-    if (first > n) {
-        first = n;
-    }
-    for (i = n - first; i < n; i++) {
+    for (i = start; i < n; i++) {
         sh_printf(s, "%4d  %s\n", i + 1, entries[i]);
     }
     return 0;
