@@ -39,9 +39,8 @@ Note:
 """
 
 import os
-import sys
-
 import paramiko
+import sys
 from paramiko.channel import Channel
 from paramiko.common import MSG_CHANNEL_FAILURE
 from paramiko.sftp_client import SFTPClient
