@@ -19,7 +19,7 @@ Output uses the same PASS/FAIL lines as scripts/smoke.sh, which runs this script
 part of its sftp half, and the exit status is nonzero when any check fails.
 
 Usage:
-    scripts/sftp_probe.py [user@host] [port]     (defaults: any@192.168.8.57 2222)
+    scripts/sftp_probe.py user@host [port]     (port defaults to 2222)
 
 Args:
     user@host: Account and address of the Vita; key auth only, from the agent or ~/.ssh.
@@ -126,7 +126,10 @@ def probe_utime(sftp: SFTPClient) -> None:
 
 
 def main() -> int:
-    target = sys.argv[1] if len(sys.argv) > 1 else "any@192.168.8.57"
+    if len(sys.argv) < 2:
+        print(__doc__, file=sys.stderr)
+        return 2
+    target = sys.argv[1]
     port = int(sys.argv[2]) if len(sys.argv) > 2 else 2222
     user, _, host = target.rpartition("@")
 

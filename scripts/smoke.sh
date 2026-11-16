@@ -2,11 +2,12 @@
 # TASK-001.04 and TASK-002 smoke tests for the Vita sshd, all three halves in one file.
 #
 # Usage:
-#   scripts/smoke.sh                everything: exec, pty, then sftp checks
-#   scripts/smoke.sh exec           exec-mode checks only   (ACs 2, 3, 4, 5, 6)
-#   scripts/smoke.sh pty            interactive checks only (ACs 3, 7, 8)
-#   scripts/smoke.sh sftp           sftp and scp checks only (TASK-002.01 to TASK-002.03)
-#   scripts/smoke.sh MODE [user@host] [port]     (defaults: all any@192.168.8.57 2222)
+#   scripts/smoke.sh [MODE] user@host [port]     (MODE defaults to all, port to 2222)
+#
+#   MODE all   everything: exec, pty, then sftp checks
+#   MODE exec  exec-mode checks only   (ACs 2, 3, 4, 5, 6)
+#   MODE pty   interactive checks only (ACs 3, 7, 8)
+#   MODE sftp  sftp and scp checks only (TASK-002.01 to TASK-002.03)
 #
 # The exec half drives one-shot `ssh host "cmd"` calls and grades the exit
 # statuses the Vita sends back, so `$?` is proven usable from a script. The
@@ -22,7 +23,7 @@
 set -u
 
 usage() {
-  sed -n '2,13p' "$0"
+  sed -n '2,10p' "$0"
 }
 
 MODE=all
@@ -34,10 +35,9 @@ esac
 # a host literally named "exce".
 case "${1:-}" in
   *@*|*.*) ;;                 # looks like a host: fine
-  "") ;;                      # no host given: the default applies
-  *) usage; exit 2 ;;
+  *) usage; exit 2 ;;         # no host, or a typo'd mode
 esac
-HOST=${1:-any@192.168.8.57}
+HOST=$1
 PORT=${2:-2222}
 PASS=0; FAIL=0
 
