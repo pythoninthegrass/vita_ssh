@@ -8,6 +8,17 @@ sha256sums=('SKIP')
 build() {
   cd vita-openssl3
 
+  # VitaSSHd's own fix to the port's entropy source; keep it in step with the
+  # openssl: task in taskfiles/setup.yml, which is what `task setup:openssl`
+  # actually runs. sceKernelGetRandomNumber is documented to take 64 bytes
+  # maximum and to return < 0 on error; upstream asks for up to 16 KB in one
+  # call and drops the return code, so a refused request is reported to the
+  # DRBG as full entropy. Guarded by a marker: the source tree is reused
+  # between builds, so this has to be safe to run twice.
+  if ! grep -q "VitaSSHd: the Vita has no" crypto/rand/rand_unix.c; then
+    patch -p1 -i "$startdir/patches/0001-rand-honor-the-sceKernelGetRandomNumber-result.patch"
+  fi
+
   make clean || true
 
   ./Configure no-threads no-shared no-engine no-dso no-asm no-pic no-unit-test --prefix=$VITASDK/arm-vita-eabi vita-cross

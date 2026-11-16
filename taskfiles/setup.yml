@@ -76,6 +76,21 @@ tasks:
         mkdir -p "$src"
         [ -f "$src/Configure" ] || \
           git clone --depth 1 -b OpenSSL_1_1_1-vita https://github.com/SonicMastr/vita-openssl3.git "$src"
+        # Our fix to the port's only entropy source, kept in step with
+        # libs/openssl/VITABUILD. Upstream calls sceKernelGetRandomNumber once for
+        # the whole reseed — psp2/kernel/rng.h caps that at 64 bytes and says it
+        # returns < 0 on error — and then returns buflen regardless, so the DRBG
+        # is told it was fed when the buffer was never touched. Without this a
+        # host key can be drawn from an untouched buffer and still look healthy.
+        # Marker-guarded because the tree is reused, not re-cloned: a rerun must
+        # not fail, and a silently unapplied patch must not look like a build.
+        if ! grep -q "VitaSSHd: the Vita has no" "$src/crypto/rand/rand_unix.c"; then
+          ( cd "$src" \
+            && patch -p1 -i "$root/libs/openssl/patches/0001-rand-honor-the-sceKernelGetRandomNumber-result.patch" ) \
+            || { echo "the OpenSSL entropy patch did not apply: $src" >&2; exit 1; }
+        fi
+        grep -q "VitaSSHd: the Vita has no" "$src/crypto/rand/rand_unix.c" \
+          || { echo "the OpenSSL entropy patch is not in the source, refusing to build" >&2; exit 1; }
         # The port's install script is a perl module missing from macOS's perl.
         printf '#!/bin/bash\nmkdir -p $@\n' > "$src/util/mkdir-p.pl"
         # Out-of-tree and wiped first: a cached Makefile would keep whatever

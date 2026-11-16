@@ -1,0 +1,53 @@
+diff --git a/crypto/rand/rand_unix.c b/crypto/rand/rand_unix.c
+index 0db9bc61..35c5b759 100644
+--- a/crypto/rand/rand_unix.c
++++ b/crypto/rand/rand_unix.c
+@@ -367,15 +367,45 @@ static ssize_t syscall_random(void *buf, size_t buflen)
+      * - FreeBSD since 12.0 (1200061)
+      *
+      * Note: Sometimes getentropy() can be provided but not implemented
+      * internally. So we need to check errno for ENOSYS
+      */
+ #  if defined(__vita__)
+-#include <psp2/kernel/rng.h>    
+-    sceKernelGetRandomNumber((void *)buf, buflen);
+-    return (ssize_t)buflen;
++#include <psp2/kernel/rng.h>
++    /*
++     * VitaSSHd: the Vita has no getentropy() and no /dev/urandom, so this is the
++     * only hardware entropy the device has. Two things the upstream patch got
++     * wrong, both of which decide whether a host key is worth anything.
++     *
++     * psp2/kernel/rng.h documents 'size' as 64 bytes maximum and the return as
++     * 0 on success, < 0 on error. A DRBG reseed asks for up to 2^14 bytes (see
++     * the note above), so one call is refused outright: the request has to be
++     * filled in chunks the kernel will accept.
++     *
++     * And the result has to be believed only when it says it worked. Returning
++     * buflen no matter what the syscall answered tells the DRBG it was handed
++     * buflen bytes of entropy when the buffer was never touched, which does not
++     * fail so much as quietly produce keys drawn from whatever the stack
++     * happened to hold -- a host key fingerprint nobody can trust, and the one
++     * failure this file must not allow. A chunk that fails ends the gather:
++     * what was actually obtained is returned, so the caller credits exactly the
++     * entropy the kernel really gave.
++     */
++    {
++        unsigned char *out = (unsigned char *)buf;
++        size_t done = 0;
++
++        while (done < buflen) {
++            size_t want = buflen - done < 64 ? buflen - done : 64;
++
++            if (sceKernelGetRandomNumber(out + done, (SceSize)want) != 0)
++                break;
++            done += want;
++        }
++        return done == 0 ? (ssize_t)-1 : (ssize_t)done;
++    }
+ #  endif
+ #  if defined(__GNUC__) && __GNUC__>=2 && defined(__ELF__) && !defined(__hpux)
+     extern int getentropy(void *buffer, size_t length) __attribute__((weak));
+ 
+     if (getentropy != NULL) {
+         if (getentropy(buf, buflen) == 0)
