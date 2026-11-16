@@ -1,11 +1,10 @@
 ---
 id: TASK-001.04
 title: Smoke-test interactive and exec sessions on the Vita
-status: In Progress
-assignee:
-  - '@claude'
+status: To Do
+assignee: []
 created_date: '2026-11-15T22:56:00Z'
-updated_date: '2026-11-16T23:24:00Z'
+updated_date: '2026-11-16T23:26:00Z'
 labels: []
 dependencies:
   - TASK-001.01
@@ -61,4 +60,6 @@ AC8 proven by scripts/smoke.sh pty on macOS: tab completion, !!, Ctrl-A/C/D/E/U/
 2026-11-16 AC4 by hand, ux0 (not checked, cross-device mv could not be run): du of a 3-file tree (4+7+11 bytes) printed 22B for the tree and 18B for the subdirectory, matching; cp -r copied the tree and the deepest file read back; cp of a directory without -r fails 'Is a directory' rc 1; cp of a missing source fails 'No such file or directory' rc 1; rm of a directory without -r fails 'Is a directory' rc 1; rm -r removed both trees, ls then says 'No such file or directory'; rm -r on /os0 says 'Read-only file system'. Cross-device mv: no second writable device. uma0 lists as present but writes fail Permission denied ('no device info' from df); pd0, tm0 and ur0 are Permission denied; grw0 is 'No such device'; sd0, xmc0 and imc0 are not mounted. The refused mv left the source file in place. Wart seen on that refusal: mv prints 'cp: uma0:/ac4-f1.txt: Permission denied', naming cp, not mv, and the sceIo path instead of the POSIX one. Not changed (out of this task's scope). The scratch files were removed. smoke.sh's cross-device mv check only passes when some device accepts a write and otherwise SKIPs, so it has never exercised the success path.
 
 2026-11-16 fixes found by the AC4 pass, verified on the device (new build, work Vita): (1) cp/mv/rm errors named the wrong command and leaked the sceIo path ('cp: uma0:/ac4-f1.txt: Permission denied' for a mv); copy_file, copy_tree and remove_tree now take the command name and print POSIX paths, and a failed source unlink in a cross-device mv now reports instead of exiting 1 silently. Now 'mv: /uma0/ac6: Permission denied', 'cp: /uma0/ac6: Permission denied'. (2) rm -r dir/. removed dir: the dot check in remove_tree looked at the resolved path, which never ends in '.', so it never fired. cmd_rm now judges the argument as typed ('.' or '..' as last component: 'rm: ARG: Invalid argument', exit 1, nothing removed); smoke.sh exec gained three checks for it. smoke.sh exec on the new build: 24 pass, 0 fail, 1 skip (cross-device mv). Not exercised on hardware: remove_tree's per-entry error text and the mv source-unlink message (no way to make those calls fail on ux0). mv still accepts a dir/. source; left alone. AC4 stays open: no second writable device for the cross-device mv success path.
+
+2026-11-16: Back to To Do. Only AC4 is open, blocked on hardware: the cross-device mv success path needs a second writable device (SD2Vita or USB drive mounted as sd0, uma0 or xmc0).
 <!-- SECTION:NOTES:END -->
