@@ -62,4 +62,27 @@ The repo's client app is the less useful half: typing on the Vita's on-screen ke
   console warning, so the code path is plausible — but AC #1–#4 are claims about retail
   firmware and about a malformed `authorized_keys` falling back to password auth, and only a
   device can say whether they hold.
+- TASK-001.03 is code-complete and its own ACs #3-#6 are checked. What it changed: the server
+  owns an ordered list of data directories (`ux0:/data/vitasshd`, then `uma0:`, `xmc0:`,
+  `ur0:` flagged RAM) instead of one hardcoded path, with three rules over it — import a host
+  key from the first candidate that has one, save a new key to the first that can be created
+  and written, read `authorized_keys` from the first that has the file and never merge them. A
+  key that cannot be saved leaves a running server and says `not saved: new fingerprint each
+  boot` on the screen. README now carries the table, the search order, and the known_hosts
+  section.
+- Read again against that update's last paragraph, which was too generous to the code it was
+  describing: "its save is deliberately best-effort with a console warning" described
+  behaviour that did not exist. `save_host_key()` tested `if (!ensure_dir(...)) continue;` —
+  skipping precisely the directories it could write — so the host key was never saved
+  anywhere, and the console's rejected-`authorized_keys`-lines counter was read but never
+  assigned. Both compiled and linked without complaint. They surfaced only because the policy
+  code was run off-device against a real filesystem. That is the argument for 001.04 being
+  001.04: a green `task build` had already told us nothing about this file twice.
+- #1, #2 and #4 therefore stay unchecked and belong to TASK-001.04, along with the two claims
+  001.03 deliberately did not make for itself: that the in-memory fallback is what retail
+  firmware does with a read-only card, and that a saved key presents the same fingerprint
+  after a reboot. Suggested script for that run: follow README's "Where its files live" as the
+  test plan — boot with no card, with a card, with the data directories present but
+  unwritable, and compare the on-screen `SHA256:…` before and after a reboot, and against
+  `ssh-keygen -lf` on the copied-out `.pub`.
 <!-- STATUS:END -->
