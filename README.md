@@ -193,7 +193,7 @@ ssh -i ~/.ssh/id_ed25519 vita@192.168.1.50 'ls /ux0/vita'
 ssh -p 2222 -i ~/.ssh/id_ed25519 vita@192.168.1.50
 ```
 
-`ssh-copy-id` will not work yet: the shell has no redirection, so install
+`ssh-copy-id` will not work yet: it sends a compound `sh -c` command line, and this shell has no `sh` and no `;`, `&&` or `||` chaining, so install
 `authorized_keys` yourself — VitaShell, a USB copy, or any route that writes a file to
 `ux0:data/vitasshd/` — and restart the server so it re-reads it.
 
@@ -267,8 +267,7 @@ what is actually there. Quoting (`'…'`, `"…"`, `\`) works, `*` and `?` expan
 unless quoted, and the line editor keeps 12 lines of history per session. `help` and
 `help COMMAND` are the reference on the device.
 
-One command per line. There are **no pipes, no redirection, and no `;` or `&&` chaining** —
-those characters are ordinary text to the tokenizer.
+One command per line. There are **no pipes and no `;`, `&&` or `||` chaining**; those characters are ordinary text to the tokenizer. Redirection exists in one form: `>` or `>>` as a separate, unquoted word followed by a file name (`echo hi > /ux0/data/x.txt`), and it redirects stdout only. `echo hi>x` is just text.
 
 ---
 
