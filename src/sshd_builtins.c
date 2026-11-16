@@ -1824,7 +1824,7 @@ const sh_builtin_t *sh_builtin_lookup(const char *name)
  * there was none), or -1 after reporting a dangling operator.
  */
 static int extract_redirect(sh_session_t *s, int *argc, char **argv,
-                            int *quoted, const char **path, int *append)
+                            int *quoted, char **path, int *append)
 {
     int i;
 
