@@ -1,9 +1,10 @@
 ---
 id: TASK-001
 title: SSH from a devbox into the Vita (sshd app)
-status: To Do
+status: In Progress
 assignee: []
 created_date: '2026-11-15T22:56:00Z'
+updated_date: '2026-11-15T23:58:27Z'
 labels: []
 dependencies: []
 references:
@@ -42,7 +43,23 @@ The repo's client app is the less useful half: typing on the Vita's on-screen ke
 <!-- AC:BEGIN -->
 - [ ] #1 ssh <user>@<vita-ip> from a macOS devbox authenticates and lands at a shell prompt
 - [ ] #2 the shell reaches every mounted device through POSIX paths (ls /, ls /ux0:, cd between devices)
-- [ ] #3 task build produces the client VPK and the server VPK, and skips when nothing changed
+- [x] #3 task build produces the client VPK and the server VPK, and skips when nothing changed
 - [ ] #4 with no authorized_keys installed, the server generates a password and shows it on the Vita screen
 - [ ] #5 the client app is unaffected: same titleid, same behaviour as before this feature
 <!-- AC:END -->
+
+## Status Updates
+<!-- STATUS:BEGIN -->
+### Update: [2026-11-15 23:58:27 UTC]
+- TASK-001.01 and TASK-001.02 are Done, so the app exists and builds: `task build` emits both
+  VPKs and skips when nothing changed, which is all AC #3 asserts. Marked In Progress rather
+  than Done because #1, #2 and #4 can only be settled on hardware — that is TASK-001.04, and
+  it is now unblocked. #5 is separately verified, not assumed: the client's `param.sfo` inside
+  its VPK is byte-identical to the pre-server build (`ROM000069`, title `VitaSSH`).
+- Next open child is TASK-001.03 (host key and authorized_keys on writable storage). It is the
+  right next step because none of it can be judged without hardware: the host key already
+  targets `ux0:data/vitasshd` (writable) and its save is deliberately best-effort with a
+  console warning, so the code path is plausible — but AC #1–#4 are claims about retail
+  firmware and about a malformed `authorized_keys` falling back to password auth, and only a
+  device can say whether they hold.
+<!-- STATUS:END -->

@@ -1,10 +1,10 @@
 ---
 id: TASK-001.01
 title: Register the sshd app as a second build target
-status: In Progress
+status: Done
 assignee: []
 created_date: '2026-11-15T22:56:00Z'
-updated_date: '2026-11-15T23:39:28Z'
+updated_date: '2026-11-15T23:58:27Z'
 labels: []
 dependencies:
   - TASK-001.02
@@ -38,7 +38,7 @@ Nothing in the build knows the server exists: CMakeLists.txt has one add_executa
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
 - [x] #1 CMakeLists.txt builds a second app from the sshd sources with its own titleid, distinct from the client's ROM000069
-- [ ] #2 task build produces two VPKs and the client's VPK is unchanged in name and behaviour
+- [x] #2 task build produces two VPKs and the client's VPK is unchanged in name and behaviour
 - [x] #3 the server target links the static libssh from the SDK plus the libraries it needs (ssl, crypto, z, pthread) and the Vita stubs
 - [x] #4 the server target defines the macro libssh's server-side declarations are gated behind, so its headers expose the server and SFTP API
 - [x] #5 task build's fingerprint list covers the new sources and the libssh archive, so editing a server source or rebuilding libssh relinks the server VPK
@@ -63,4 +63,21 @@ Nothing in the build knows the server exists: CMakeLists.txt has one add_executa
 - Repo is no longer a fork: the upstream history was dropped for a single initial commit and
   `pythoninthegrass/vita_ssh` was created fresh, so `parent` is null. Prior art (rompelhd's
   VitaSSH, TheOfficialFloW's VitaShell) is credited in README.md and AGENTS.md.
+
+### Update: [2026-11-15 23:58:27 UTC]
+- AC #2 closed by TASK-001.02, which is Done: `task clean && task setup && task build` on a
+  wiped tree yields `ssh_client_vita.vpk` and `ssh_server_vita.vpk`, and a repeat run reports
+  "up to date". Task closed.
+- Verified from inside the shipped VPKs, not from `build/`: each carries `sce_sys/param.sfo`,
+  `eboot.bin` and its own three art files. The client's `param.sfo` hashes to
+  `3e1113e5eeba07ea…`, byte-identical to the value recorded above, and reads
+  `VitaSSH` / `ROM000069`; the server's reads `VitaSSHd` / `ROM000070`. `eboot.bin` sizes
+  match the two `.self` files, so the SELF the VPKs ship is the one that just built.
+- Worth knowing about "behaviour unchanged": AC #2 means the client's name and behaviour, and
+  both hold — but the client's `eboot.bin` hash does move in 001.02, because `src/network.c`
+  is compiled into both apps and its 14 `printf` calls became `net_log`. The client's
+  implementation forwards to `vprintf` and re-adds the newline, so stdout is what it was. Name
+  and behaviour are unchanged; the bytes are not, and no criterion claims they are.
+- VPKs are ZIP containers (`PK\x03\x04`), so `unzip -l` / `unzip -p` is how to inspect what
+  actually ships — `nm` and `strings` cannot read the SELF inside it.
 <!-- STATUS:END -->
