@@ -175,7 +175,8 @@ run_pty() {
     kill $SSHA $SSHB 2>/dev/null
 
     # --- grade the transcripts -------------------------------------------
-    grep -q "cat sshd.log" "$D/a.out" && check "tab completion filled sshd.log" ok ok || check "tab completion filled sshd.log" ok fail
+    # The echo alone proves nothing: the server must also have run the completed name, not the typed prefix.
+    grep -q "cat sshd.log" "$D/a.out" && ! grep -q "cat: sshd\.:" "$D/a.out" && check "tab completion filled sshd.log" ok ok || check "tab completion filled sshd.log" ok fail
     grep -q "^/ux0" "$D/b.out" && check "session B kept its own cwd (isolation)" ok ok || check "session B kept its own cwd (isolation)" ok fail
     [ "$(grep -c 'smoke-hist-42' "$D/a.out")" -ge 2 ] && check "!! re-ran the command" ok ok || check "!! re-ran the command" ok fail
     grep -q "after-cu" "$D/a.out" && ! grep -q "^GARBAGE" "$D/a.out" && check "Ctrl-U wiped the line" ok ok || check "Ctrl-U wiped the line" ok fail
