@@ -885,16 +885,10 @@ static int remove_tree(sh_session_t *s, const char *cmd, const sh_target_t *t,
     struct dirent *ent;
     int failed = 0;
 
-    if (top_level) {
-        if (t->kind == SH_TARGET_DEVICE) {
-            sh_eprintf(s, "%s: %s: Cannot remove a device root\n", cmd,
-                       t->posix);
-            return 1;
-        }
-        if (sh_is_dot(sh_basename(t->posix))) {
-            sh_eprintf(s, "%s: %s: Invalid argument\n", cmd, t->posix);
-            return 1;
-        }
+    if (top_level && t->kind == SH_TARGET_DEVICE) {
+        sh_eprintf(s, "%s: %s: Cannot remove a device root\n", cmd,
+                   t->posix);
+        return 1;
     }
     if (depth > MAX_DEPTH) {
         sh_eprintf(s, "%s: %s: Too many levels of directories\n", cmd,
@@ -1024,6 +1018,12 @@ static int cmd_rm(sh_session_t *s, int argc, char **argv)
         }
         if (!recursive) {
             sh_eprintf(s, "rm: %s: Is a directory\n", targets[i]);
+            status = 1;
+            continue;
+        }
+        /* Judged on the argument as typed: resolving "dir/." already yields "dir". */
+        if (sh_is_dot(sh_basename(targets[i]))) {
+            sh_eprintf(s, "rm: %s: Invalid argument\n", targets[i]);
             status = 1;
             continue;
         }

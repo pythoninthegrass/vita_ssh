@@ -103,6 +103,10 @@ run_exec() {
     $V "rm /$MVOK/smoke-$$.txt" >/dev/null 2>&1
     $V "echo hello > /ux0/data/$T/sub/f.txt" >/dev/null 2>&1
   fi
+  # rm -r refuses "." and ".." as typed; resolving "dir/." gives "dir", so only the argument shows it
+  $V "rm -r /ux0/data/$T/sub/." >/dev/null 2>&1; RC=$?; check "rm -r dir/. refused" 1 "$RC"
+  $V "rm -r /ux0/data/$T/sub/.." >/dev/null 2>&1; RC=$?; check "rm -r dir/.. refused" 1 "$RC"
+  $V "ls /ux0/data/$T/sub" >/dev/null 2>&1; RC=$?; check "tree survives rm -r dir/." 0 "$RC"
   $V "rm -r /ux0/data/$T /ux0/data/$T-copy" >/dev/null 2>&1
   $V "ls /ux0/data/$T"  >/dev/null 2>&1; RC=$?; check "rm -r removes the tree"      1 "$RC"
   $V "rm /nosuchfile"   >/dev/null 2>&1; RC=$?; check "rm missing errs honestly"    1 "$RC"
