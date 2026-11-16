@@ -211,7 +211,7 @@ scp -s -P 2222 -i ~/.ssh/id_ed25519 game.vpk vita@192.168.1.50:/ux0/data/
 scp -s -P 2222 -i ~/.ssh/id_ed25519 vita@192.168.1.50:/ux0/data/vitasshd/sshd.log .
 ```
 
-Paths are the same POSIX paths the shell uses: `/` lists the devices, `/ux0` is the memory card, and a session starts in `ux0:data/vitasshd`. `-s` selects scp's SFTP mode, which is the default from OpenSSH 9.0; the legacy scp protocol (`scp -O`) is not supported, because the shell has no `scp` command to run.
+Paths are the same POSIX paths the shell uses: `/` lists the devices, `/ux0` is the memory card, and a session starts in `ux0:data/vitasshd`. `-s` selects scp's SFTP mode, which needs OpenSSH 8.7 or later and is the default from 9.0 (an older client has no `-s`, so use `sftp`); the legacy scp protocol (`scp -O`) is not supported, because the shell has no `scp` command to run.
 
 What to expect, because the Vita is not a Unix filesystem:
 
