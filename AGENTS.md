@@ -3,14 +3,14 @@
 ## Provenance
 
 - Standalone repo, not a fork. It began as a fork of Rompelhd's VitaSSH
-  (https://github.com/rompelhd/VitaSSH), whose history was dropped when this became its own
+  (<https://github.com/rompelhd/VitaSSH>), whose history was dropped when this became its own
   project; packaging and installation also follow TheOfficialFloW's VitaShell. Both are
   credited in README.md. Upstream is effectively unmaintained and is not a seam to keep
   clean: this repo is canonical, so fix cruft rather than working around it.
 
 ## Build
 
-- `task` (Taskfile, https://taskfile.dev) is the entry point — never run `cmake` directly.
+- `task` (Taskfile, <https://taskfile.dev>) is the entry point — never run `cmake` directly.
   Bare `cmake` dies with "Please define VITASDK" because CMakeLists.txt reads it from the
   environment. `task` with no args lists tasks.
 - Order matters: `task setup` → `task build`. Setup builds the OpenSSL 1.1.1 Vita port
@@ -81,6 +81,16 @@
   passes the "Crypto library: OpenSSL" check, then fails to link against the 1.1.1 Vita
   port. Don't "clean that up".
 
+## Context7 Libraries
+
+- astral-sh/docs
+- j178/prek
+- jdx/mise
+- mrlesk/backlog.md 
+- openssl/openssl
+- websites/taskfile_dev
+- websites/vitasdk
+
 <!-- BACKLOG.MD MCP GUIDELINES START -->
 <!-- backlog.md-instructions-version: 1.55.0 -->
 
@@ -100,6 +110,7 @@ This project uses Backlog.md MCP for all task and project management activities.
 - **When to read it**: BEFORE creating tasks, or when you're unsure whether to track work
 
 These guides cover:
+
 - Decision framework for when to create tasks
 - Search-first workflow to avoid duplicates
 - Links to detailed guides for task creation, execution, and finalization
@@ -110,4 +121,3 @@ You MUST read the overview resource to understand the complete workflow. The inf
 </CRITICAL_INSTRUCTION>
 
 <!-- BACKLOG.MD MCP GUIDELINES END -->
-
