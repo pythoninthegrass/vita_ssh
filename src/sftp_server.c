@@ -105,14 +105,16 @@ static int resolve(const char *path, sh_target_t *t)
 }
 
 /* The mutating calls refuse before the syscall, same as the shell does, so a
- * write to /os0 says "read-only file system" and not an sceIo code. */
+ * write to /os0 is refused with a status and not an sceIo code. EACCES, not
+ * EROFS: libssh maps only EACCES to SSH_FX_PERMISSION_DENIED and answers every
+ * other errno with a bare SSH_FX_FAILURE. */
 static int writable_target(const char *path, sh_target_t *t)
 {
     if (resolve(path, t) != 0) {
         return -1;
     }
     if (t->kind == SH_TARGET_ROOT || t->dev == NULL || !t->dev->writable) {
-        errno = EROFS;
+        errno = EACCES;
         return -1;
     }
     return 0;
