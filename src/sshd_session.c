@@ -29,6 +29,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
 
 /* callbacks.h declares ssh_server_callbacks_struct, ssh_channel_callbacks_struct,
  * ssh_callbacks_init() and the two setters below. server.h does not pull it in,
@@ -37,6 +38,8 @@
 #include <libssh/server.h>
 
 #define MAX_OUTPUT 2048
+/* Seconds an sftp channel may take to answer our close before the session is dropped. */
+#define SFTP_CLOSE_WAIT_S 3
 /* Kept small on purpose: the expansion buffer below is twice this and lives on
  * the stack, and a Vita thread's stack is whatever we asked sceKernelCreateThread
  * for, not the megabytes a desktop process gets. */
@@ -94,6 +97,7 @@ struct sh_session {
     int authenticated;
     int exit_requested;
     int finished;
+    time_t sftp_closing; /* when the sftp channel close was started, 0 before */
 
     /* Set by the editor on Enter, consumed by sh_session_pump(). */
     int pending_ready;
@@ -1057,6 +1061,7 @@ static int on_channel_data(ssh_session session, ssh_channel channel,
 
         sh_session_get_fsctx(s, &fs);
         if (sh_sftp_data(s->sftp, &fs, data, len) != 0) {
+            sh_console_log("sftp: closing the channel after a data error");
             ssh_channel_send_eof(channel);
             ssh_channel_close(channel);
             s->finished = 1;
@@ -1183,6 +1188,9 @@ static void on_channel_close(ssh_session session, ssh_channel channel,
     (void)session;
     (void)channel;
     if (s != NULL) {
+        if (s->sftp != NULL && !s->finished) {
+            sh_console_log("sftp: client closed the channel");
+        }
         s->finished = 1;
     }
 }
@@ -1195,6 +1203,9 @@ static void on_channel_eof(ssh_session session, ssh_channel channel,
     (void)session;
     (void)channel;
     if (s != NULL) {
+        if (s->sftp != NULL && !s->finished) {
+            sh_console_log("sftp: client sent EOF");
+        }
         s->finished = 1;
     }
 }
@@ -1406,14 +1417,38 @@ int sh_session_pump(sh_session_t *s)
         s->finished = 1;
         return 1;
     }
+    if (s->sftp != NULL && !s->finished) {
+        sh_fsctx_t fs;
+
+        sh_session_get_fsctx(s, &fs);
+        if (sh_sftp_pump(s->sftp, &fs) != 0) {
+            sh_console_log("sftp: closing the channel after a pump error");
+            if (s->channel != NULL) {
+                ssh_channel_send_eof(s->channel);
+                ssh_channel_close(s->channel);
+            }
+            s->finished = 1;
+        }
+    }
     if (s->sftp != NULL && s->finished) {
+        time_t now = time(NULL);
+
+        if (s->channel == NULL) {
+            return 1;
+        }
         /* The client sent EOF or closed: nothing else ends an sftp session, and
          * its ssh waits for our channel close before it exits. */
-        if (s->channel != NULL) {
+        if (s->sftp_closing == 0) {
+            s->sftp_closing = now;
+            ssh_channel_request_send_exit_status(s->channel, 0);
             ssh_channel_send_eof(s->channel);
             ssh_channel_close(s->channel);
         }
-        return 1;
+        /* Tearing the transport down before the client has answered the close
+         * makes its ssh exit 255, and scp reports that as a failed copy. A client
+         * that never answers is let go after a few seconds. */
+        return ssh_channel_is_closed(s->channel) ||
+               now - s->sftp_closing >= SFTP_CLOSE_WAIT_S;
     }
     if (!s->pending_ready) {
         return 0;

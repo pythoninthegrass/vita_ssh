@@ -37,6 +37,11 @@ sh_sftp_t *sh_sftp_new(ssh_session session, ssh_channel channel);
 int sh_sftp_data(sh_sftp_t *sftp, const sh_fsctx_t *fs, const void *data,
                  uint32_t len);
 
+/* Called on every pass of the poll loop: sends queued reply data as the
+ * client's window opens and handles requests that were held back. Same return
+ * as sh_sftp_data(). */
+int sh_sftp_pump(sh_sftp_t *sftp, const sh_fsctx_t *fs);
+
 /* Closes every handle the client left open and removes the .part files of
  * uploads that never finished. */
 void sh_sftp_free(sh_sftp_t *sftp);

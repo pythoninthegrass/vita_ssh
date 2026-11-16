@@ -150,6 +150,7 @@ target_link_options(${VITA_SERVER_NAME} PRIVATE
   -Wl,--wrap=chown
   -Wl,--wrap=truncate
   -Wl,--wrap=statvfs
+  -Wl,--wrap=ssh_channel_write
   -Wl,--wrap=realpath
 )
 

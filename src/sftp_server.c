@@ -38,6 +38,8 @@
 #define SFTP_MAX_FILES 32
 #define SFTP_MAX_DIRS 16
 #define PART_SUFFIX ".part"
+/* Replies held back from libssh before new requests stop being handled. */
+#define SFTP_OUT_HIGH (128 * 1024)
 
 typedef struct {
     int fd;           /* -1 when the slot is free */
@@ -54,9 +56,19 @@ typedef struct {
 
 struct sh_sftp {
     sftp_session sftp;
+    ssh_channel channel;
+    uint8_t *out;     /* reply bytes not yet handed to libssh */
+    size_t out_len;
+    size_t out_off;
+    size_t out_cap;
     uint8_t *buf;
     size_t len;
     size_t cap;
+    uint8_t *cur;     /* the packet being handled, copied out of buf */
+    size_t cur_cap;
+    int busy;         /* set while a packet is inside the stock callback */
+    int queued_logged;
+    unsigned bulk;    /* READ and WRITE requests seen */
     sftp_file_t files[SFTP_MAX_FILES];
     sftp_dir_t dirs[SFTP_MAX_DIRS];
 };
@@ -81,6 +93,7 @@ int __real_utimes(const char *path, const struct timeval tv[2]);
 int __real_chown(const char *path, uid_t uid, gid_t gid);
 int __real_truncate(const char *path, off_t len);
 int __real_statvfs(const char *path, struct statvfs *st);
+int __real_ssh_channel_write(ssh_channel channel, const void *data, uint32_t len);
 
 /* ------------------------------------------------------------------ */
 /* path translation                                                   */
@@ -310,6 +323,7 @@ DIR *__wrap_opendir(const char *path)
 {
     sh_target_t t;
     sftp_dir_t *slot = NULL;
+    sh_sftp_t *saved_active = active;
     int i;
 
     if (active == NULL) {
@@ -333,8 +347,17 @@ DIR *__wrap_opendir(const char *path)
         slot->used = 1;
         return (DIR *)slot;
     }
+    /* newlib's opendir is open(path, O_DIRECTORY) underneath, and --wrap catches
+     * that call too: it would translate the already translated path a second
+     * time. With active cleared the inner open passes straight through. */
+    active = NULL;
     slot->real = __real_opendir(t.sce);
+    active = saved_active;
     if (slot->real == NULL) {
+        int saved = errno;
+
+        sh_console_log("sftp: opendir %s failed: %s", t.sce, strerror(saved));
+        errno = saved;
         return NULL;
     }
     slot->used = 1;
@@ -430,7 +453,9 @@ int __wrap_unlink(const char *path)
     return __real_unlink(t.sce);
 }
 
-/* No permission bits to set: answer OP_UNSUPPORTED rather than claim success. */
+/* No permission bits to set: answer OP_UNSUPPORTED rather than claim success.
+ * A request for the mode already reported never gets here; see
+ * handle_perm_setstat(). */
 int __wrap_chmod(const char *path, mode_t mode)
 {
     if (active == NULL) {
@@ -516,6 +541,37 @@ char *__wrap_realpath(const char *path, char *resolved)
     return strdup(t.posix);
 }
 
+/* The stock handlers write each reply with ssh_channel_write. On a session that
+ * is attached to the poll event that call blocks on the client's window or on a
+ * full socket by running libssh's packet loop, which polls the shared event
+ * context from inside the poll loop that called us: other sessions' callbacks
+ * fire in the middle of it and this session stops being served. So replies are
+ * only queued here and drain_out() hands libssh what the window allows. */
+int __wrap_ssh_channel_write(ssh_channel channel, const void *data, uint32_t len)
+{
+    if (active == NULL || channel != active->channel) {
+        return __real_ssh_channel_write(channel, data, len);
+    }
+    if (active->out_len + len > active->out_cap) {
+        size_t cap = active->out_cap != 0 ? active->out_cap : 4096;
+        uint8_t *grown;
+
+        while (cap < active->out_len + len) {
+            cap *= 2;
+        }
+        grown = realloc(active->out, cap);
+        if (grown == NULL) {
+            sh_console_log("sftp: out of memory queueing %u reply bytes", len);
+            return -1;
+        }
+        active->out = grown;
+        active->out_cap = cap;
+    }
+    memcpy(active->out + active->out_len, data, len);
+    active->out_len += len;
+    return (int)len;
+}
+
 /* ------------------------------------------------------------------ */
 /* session                                                            */
 /* ------------------------------------------------------------------ */
@@ -531,11 +587,15 @@ sh_sftp_t *sh_sftp_new(ssh_session session, ssh_channel channel)
     for (i = 0; i < SFTP_MAX_FILES; i++) {
         s->files[i].fd = -1;
     }
+    sh_console_log("sftp: server code built %s %s", __DATE__, __TIME__);
     if (sftp_channel_default_subsystem_request(session, channel, "sftp",
                                                &s->sftp) != SSH_OK) {
         free(s);
         return NULL;
     }
+    s->channel = channel;
+    /* Nothing here may wait inside libssh; see __wrap_ssh_channel_write. */
+    ssh_set_blocking(session, 0);
     return s;
 }
 
@@ -574,6 +634,17 @@ static int read_string(reader_t *r, char *out, size_t cap)
     out[n] = '\0';
     r->p += n;
     r->left -= n;
+    return 0;
+}
+
+static int read_u32(reader_t *r, uint32_t *out)
+{
+    if (r->left < sizeof(uint32_t)) {
+        return -1;
+    }
+    *out = be32(r->p);
+    r->p += sizeof(uint32_t);
+    r->left -= sizeof(uint32_t);
     return 0;
 }
 
@@ -696,21 +767,81 @@ static int handle_rename(sh_sftp_t *s, const sh_fsctx_t *fs,
     return 1;
 }
 
+/* What scp sends after an upload: SETSTAT (by path) or FSETSTAT (by handle)
+ * carrying only permission bits. The Vita has no permission bits to set, so the
+ * request succeeds only when it asks for exactly what is already reported, which
+ * leaves the file as the client believes it is. Any other request, including
+ * one that also carries times or a size, is left to the stock server and
+ * answered as unsupported. An FSETSTAT names a handle, not a path, so it is
+ * compared against the mode reported for a file on a writable device. Returns 1
+ * when the packet was answered here. */
+static int handle_perm_setstat(sh_sftp_t *s, const uint8_t *packet, size_t len)
+{
+    uint8_t type = packet[4];
+    char path[SH_POSIX_PATH_MAX];
+    reader_t r = { packet + 5, len - 5 };
+    uint32_t raw_id, flags, perm;
+    mode_t reported = S_IFREG | 0644;
+
+    if (len < 9 || (type != SSH_FXP_SETSTAT && type != SSH_FXP_FSETSTAT)) {
+        return 0;
+    }
+    memcpy(&raw_id, r.p, sizeof(raw_id));
+    r.p += sizeof(raw_id);
+    r.left -= sizeof(raw_id);
+    if (type == SSH_FXP_SETSTAT) {
+        struct stat st;
+
+        if (read_string(&r, path, sizeof(path)) != 0 ||
+            stat_common(path, &st, 1) != 0) {
+            return 0;
+        }
+        reported = st.st_mode;
+    } else {
+        uint32_t handle_len;
+
+        if (read_u32(&r, &handle_len) != 0 || handle_len > r.left) {
+            return 0;
+        }
+        r.p += handle_len;
+        r.left -= handle_len;
+    }
+    if (read_u32(&r, &flags) != 0 || flags != SSH_FILEXFER_ATTR_PERMISSIONS ||
+        read_u32(&r, &perm) != 0 || r.left != 0) {
+        return 0;
+    }
+    if ((perm & 07777) != (reported & 07777)) {
+        sh_console_log("sftp: permission request %o refused, reported mode is %o",
+                       (unsigned)(perm & 07777), (unsigned)(reported & 07777));
+        return 0;
+    }
+    reply_status(s, raw_id, SSH_FX_OK, "");
+    return 1;
+}
+
 static int feed_packet(sh_sftp_t *s, const sh_fsctx_t *fs, void *packet,
                        uint32_t len)
 {
     uint8_t type = ((const uint8_t *)packet)[4];
     int rc;
 
-    /* READ and WRITE are per-chunk, so logging them would drown a transfer. */
-    if (type != SSH_FXP_READ && type != SSH_FXP_WRITE) {
+    /* READ and WRITE are per-chunk, so only every 32nd is logged: enough to see
+     * where a transfer stops without drowning it. */
+    if (type == SSH_FXP_READ || type == SSH_FXP_WRITE) {
+        if (s->bulk++ % 32 == 0) {
+            sh_console_log("sftp: bulk request type %u #%u", type, s->bulk);
+        }
+    } else {
         sh_console_log("sftp: request type %u, %u bytes", type, (unsigned)len);
-    }
-    if (handle_rename(s, fs, packet, len)) {
-        return 0;
     }
     active = s;
     active_fs = fs;
+    if (handle_rename(s, fs, packet, len) ||
+        handle_perm_setstat(s, packet, len)) {
+        active = NULL;
+        active_fs = NULL;
+        return 0;
+    }
     rc = sftp_channel_default_data_callback(NULL, NULL, packet, len, 0,
                                             &s->sftp);
     active = NULL;
@@ -719,6 +850,89 @@ static int feed_packet(sh_sftp_t *s, const sh_fsctx_t *fs, void *packet,
         sh_console_log("sftp: request type %u failed (%d)", type, rc);
     }
     return rc < 0 ? -1 : 0;
+}
+
+/* Hands libssh as much queued reply data as the client's window allows. The
+ * session is non-blocking, so this never waits: whatever does not fit stays
+ * queued and goes out on a later pass. */
+static int drain_out(sh_sftp_t *s)
+{
+    while (s->out_off < s->out_len) {
+        size_t pending = s->out_len - s->out_off;
+        uint32_t window = ssh_channel_window_size(s->channel);
+        uint32_t n = pending < window ? (uint32_t)pending : window;
+        int wrote;
+
+        if (n == 0) {
+            break;
+        }
+        wrote = __real_ssh_channel_write(s->channel, s->out + s->out_off, n);
+        if (wrote < 0) {
+            sh_console_log("sftp: reply write failed (%d), %u bytes queued", wrote,
+                           (unsigned)(s->out_len - s->out_off));
+            return -1;
+        }
+        if (wrote == 0) {
+            break;
+        }
+        s->out_off += (size_t)wrote;
+    }
+    if (s->out_off == s->out_len) {
+        s->out_off = 0;
+        s->out_len = 0;
+    } else if (s->out_off >= SFTP_OUT_HIGH) {
+        memmove(s->out, s->out + s->out_off, s->out_len - s->out_off);
+        s->out_len -= s->out_off;
+        s->out_off = 0;
+    }
+    return 0;
+}
+
+/* Handles whole requests from buf while the reply queue is short. Requests left
+ * in buf are picked up by the next sh_sftp_pump(). Each packet is copied out of
+ * buf before the stock callback reads it. */
+static int run_requests(sh_sftp_t *s, const sh_fsctx_t *fs)
+{
+    if (drain_out(s) != 0) {
+        return -1;
+    }
+    s->busy = 1;
+    while (s->len >= sizeof(uint32_t) &&
+           s->out_len - s->out_off < SFTP_OUT_HIGH) {
+        uint32_t body = be32(s->buf);
+        size_t total;
+
+        if (body < 1 || body > SFTP_MAX_PACKET) {
+            sh_console_log("sftp: bad packet length %u", body);
+            s->busy = 0;
+            return -1;
+        }
+        total = (size_t)body + sizeof(uint32_t);
+        if (s->len < total) {
+            break;
+        }
+        if (total > s->cur_cap) {
+            uint8_t *grown = realloc(s->cur, total);
+
+            if (grown == NULL) {
+                sh_console_log("sftp: out of memory for a %u byte packet", body);
+                s->busy = 0;
+                return -1;
+            }
+            s->cur = grown;
+            s->cur_cap = total;
+        }
+        memcpy(s->cur, s->buf, total);
+        memmove(s->buf, s->buf + total, s->len - total);
+        s->len -= total;
+        if (feed_packet(s, fs, s->cur, (uint32_t)total) != 0 ||
+            drain_out(s) != 0) {
+            s->busy = 0;
+            return -1;
+        }
+    }
+    s->busy = 0;
+    return 0;
 }
 
 int sh_sftp_data(sh_sftp_t *s, const sh_fsctx_t *fs, const void *data,
@@ -732,10 +946,12 @@ int sh_sftp_data(sh_sftp_t *s, const sh_fsctx_t *fs, const void *data,
         uint8_t *grown;
 
         if (cap > 2 * SFTP_MAX_PACKET) {
+            sh_console_log("sftp: %u bytes of requests waiting, closing", (unsigned)cap);
             return -1;
         }
         grown = realloc(s->buf, cap);
         if (grown == NULL) {
+            sh_console_log("sftp: out of memory for %u bytes of requests", (unsigned)cap);
             return -1;
         }
         s->buf = grown;
@@ -743,25 +959,19 @@ int sh_sftp_data(sh_sftp_t *s, const sh_fsctx_t *fs, const void *data,
     }
     memcpy(s->buf + s->len, data, len);
     s->len += len;
-
-    while (s->len >= sizeof(uint32_t)) {
-        uint32_t body = be32(s->buf);
-        size_t total;
-
-        if (body < 1 || body > SFTP_MAX_PACKET) {
-            return -1;
+    if (s->busy) {
+        if (!s->queued_logged) {
+            s->queued_logged = 1;
+            sh_console_log("sftp: data arrived while a request was running; queued");
         }
-        total = (size_t)body + sizeof(uint32_t);
-        if (s->len < total) {
-            break;
-        }
-        if (feed_packet(s, fs, s->buf, (uint32_t)total) != 0) {
-            return -1;
-        }
-        memmove(s->buf, s->buf + total, s->len - total);
-        s->len -= total;
+        return 0;
     }
-    return 0;
+    return run_requests(s, fs);
+}
+
+int sh_sftp_pump(sh_sftp_t *s, const sh_fsctx_t *fs)
+{
+    return s == NULL || s->busy ? 0 : run_requests(s, fs);
 }
 
 void sh_sftp_free(sh_sftp_t *s)
@@ -790,5 +1000,7 @@ void sh_sftp_free(sh_sftp_t *s)
     }
     sftp_server_free(s->sftp);
     free(s->buf);
+    free(s->cur);
+    free(s->out);
     free(s);
 }
