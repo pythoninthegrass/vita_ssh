@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-11-15T22:57:00Z'
-updated_date: '2026-11-16T06:40:00Z'
+updated_date: '2026-11-16T07:14:00Z'
 labels: []
 dependencies:
   - TASK-002.01
@@ -69,4 +69,13 @@ Evidence: task build produces both VPKs with no warnings; objdump of build/ssh_s
 Not verified: nothing runs on the host and there is no test harness, so no TDD test was written and AC1-AC5 behaviour is unconfirmed on a device (TASK-002.03). Only AC6 (documentation) is checkable here.
 
 Known limits: setstat applies size, chmod, chown, utimes in order and stops at the first error, so a setstat carrying permissions plus times fails before the times land (scp -p style); fstat/fsetstat stay stock OP_UNSUPPORTED. AC5 'removing ... across devices' was read as rename only. TASK-002.01 is still In Progress, so this sits on unverified groundwork.
+
+First on-device run (smoke.sh sftp) found three defects, all outside the 002.02 opcodes but in the SFTP path from 002.01:
+1. Crash: libssh's readdir long name calls ctime_r() and passes the result to asctime_r() unchecked; newlib's localtime_r returns NULL for a time sceRtc rejects, and the synthetic device-directory stat had mtime 0. Fixed by usable_time() in src/sftp_server.c.
+2. Hang: on_channel_eof/on_channel_close only set s->finished and sh_session_pump() never acted on it for an SFTP session, so the channel stayed open and the client's ssh never exited. Fixed in sh_session_pump().
+3. No visibility: added one log line per SFTP request (not READ/WRITE).
+
+Added scripts/smoke.sh sftp half, scripts/parse_dump.py (crash dump symboliser) and docs/development.md. After the fixes ls / works on device; the remaining smoke.sh sftp checks have not been seen to pass yet, so no further AC is checked.
+
+Correction to the note above: 'ls / works on device' is inferred from sshd.log, which shows INIT, REALPATH, LSTAT, OPENDIR, READDIR x2 and CLOSE handled without a failure line; the client's own output was never seen.
 <!-- SECTION:NOTES:END -->
