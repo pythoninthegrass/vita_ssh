@@ -488,14 +488,10 @@ static int server_thread(SceSize args, void *argp)
     (void)args;
     (void)argp;
 
-    /* Before anything else, because everything worth knowing about a run that
-     * dies early is decided before anything else happens: the last line in the
-     * log is the stage the app did not come back from. */
-    if (sh_log_open() == 0) {
-        sh_console_log("=== VitaSSHd starting, log %s ===", sh_log_path());
-    } else {
-        sh_console_log("=== VitaSSHd starting, no writable log ===");
-    }
+    /* The log is opened in main(), before this thread exists: failing to create
+     * the thread at all is one of the ways this app can die, and it would leave
+     * no trace from in here. */
+    sh_console_log("server thread started (%d KB stack)", SERVER_STACK / 1024);
 
     vita2d_init();
     vita2d_set_clear_color(RGBA8(16, 18, 22, 255));
@@ -507,7 +503,6 @@ static int server_thread(SceSize args, void *argp)
          * user the same way, so say what happened there and leave the device in
          * a state they can still recover from. */
         sh_console_log("error: the console font did not load, cannot start");
-        sh_log_close();
         vita2d_fini();
         sceKernelExitDeleteThread(0);
         return 0;
@@ -568,7 +563,10 @@ static int server_thread(SceSize args, void *argp)
     ssh_finalize();
     vita2d_fini();
     sh_console_log("stopped");
-    sh_log_close();
+    /* No sh_log_close() here or in the font path: main() opened the log and owns
+     * closing it, so it can still write the line saying how the thread ended.
+     * Every line is flushed as it is written, so a thread that never comes back
+     * loses nothing that was said before it died. */
     sceKernelExitDeleteThread(0);
     return 0;
 }
@@ -576,18 +574,42 @@ static int server_thread(SceSize args, void *argp)
 int main(void)
 {
     /* Arg 6 is an int cpuAffinityMask, not a pointer: 0 lets the kernel pick. */
-    SceUID thread = sceKernelCreateThread("sshd", server_thread, 0x10000100,
-                                          SERVER_STACK, 0, 0, NULL);
+    SceUID thread;
+    int status = 0;
 
+    /* Opened here rather than in the server thread, because the two quiet ways
+     * this app can end both happen outside that thread: the thread may never be
+     * created (no memory for a 512 KB stack being the real candidate), and the
+     * server thread may return. Either one leaves the livearea with no dialog and
+     * no frame drawn, which looks exactly like a crash and used to leave no
+     * evidence whatsoever. */
+    if (sh_log_open() == 0) {
+        sh_console_log("=== VitaSSHd starting, log %s ===", sh_log_path());
+    } else {
+        sh_console_log("=== VitaSSHd starting, no writable log ===");
+    }
+
+    thread = sceKernelCreateThread("sshd", server_thread, 0x10000100,
+                                   SERVER_STACK, 0, 0, NULL);
     if (thread < 0) {
+        sh_console_log("error: could not create the server thread: 0x%08X",
+                       (unsigned int)thread);
+        sh_log_close();
         return 1;
     }
     if (sceKernelStartThread(thread, 0, NULL) != 0) {
+        sh_console_log("error: could not start the server thread");
+        sh_log_close();
         return 1;
     }
     /* The main thread's only job is to stay alive until the server finishes:
      * if it exited, the process would go with it. */
-    sceKernelWaitThreadEnd(thread, NULL, NULL);
+    sceKernelWaitThreadEnd(thread, &status, NULL);
+    /* The distinction the user cannot see from the sofa: a thread that came back
+     * on its own means the log already says why, while a run that stops here
+     * without this line died somewhere it could not report. */
+    sh_console_log("server thread ended, status 0x%08X", (unsigned int)status);
+    sh_log_close();
     sceKernelExitProcess(0);
     return 0;
 }
