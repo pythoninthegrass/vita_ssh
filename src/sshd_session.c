@@ -125,15 +125,19 @@ struct sh_session {
 /* output                                                             */
 /* ------------------------------------------------------------------ */
 
-/* Waits for the client to open its window again, servicing every session's
- * socket meanwhile. Returns 0 once there is room, -1 when the client is gone or
- * has kept the window shut for WINDOW_STALL_S; the session is then marked
- * finished so the running command stops writing. */
-static int wait_for_window(sh_session_t *s)
+/* libssh must hold no unsent bytes (its blocking flush has no timeout) and, with need_window, the window must be open. */
+static int output_has_room(const sh_session_t *s, int need_window)
+{
+    return (!need_window || ssh_channel_window_size(s->channel) > 0) &&
+           (ssh_get_status(s->ssh) & SSH_WRITE_PENDING) == 0;
+}
+
+/* Polls every session until output_has_room(); -1 if the client is gone or stalled for WINDOW_STALL_S, with the session marked finished. */
+static int wait_for_room(sh_session_t *s, int need_window)
 {
     time_t start = time(NULL);
 
-    while (ssh_channel_window_size(s->channel) == 0) {
+    while (!output_has_room(s, need_window)) {
         if (s->finished ||
             (ssh_get_status(s->ssh) & (SSH_CLOSED | SSH_CLOSED_ERROR)) != 0) {
             s->finished = 1;
@@ -164,7 +168,7 @@ static void chan_write_raw(sh_session_t *s, const char *data, size_t len)
              * the whole server inside libssh until the client reads. */
             uint32_t window;
 
-            if (wait_for_window(s) != 0) {
+            if (wait_for_room(s, 1) != 0) {
                 return;
             }
             window = ssh_channel_window_size(s->channel);
@@ -1521,18 +1525,28 @@ int sh_session_pump(sh_session_t *s)
         {
             int status;
 
+            /* Non-blocking for the length of the command, so a client that stops
+             * reading can never park libssh in a flush; callbacks keep the
+             * blocking session they were written for. */
+            ssh_set_blocking(s->ssh, 0);
             s->in_pump = 1;
             status = sh_execute_line(s, line);
-            s->in_pump = 0;
 
             if (!s->shell) {
                 /* exec mode: the client asked for one command, so report its
-                 * status and hang up the way sshd would. */
+                 * status and hang up the way sshd would. The session is freed
+                 * as soon as this returns, so what libssh still holds has to
+                 * reach the socket first or the tail of the output is lost. */
                 ssh_channel_request_send_exit_status(s->channel, status);
                 ssh_channel_send_eof(s->channel);
+                wait_for_room(s, 0);
+                s->in_pump = 0;
+                ssh_set_blocking(s->ssh, 1);
                 s->finished = 1;
                 return 1;
             }
+            s->in_pump = 0;
+            ssh_set_blocking(s->ssh, 1);
         }
     }
     if (s->exit_requested || s->finished) {
