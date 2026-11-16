@@ -26,6 +26,7 @@ Nothing here runs on the host: the apps are cross-compiled for the Vita, so ever
    ```bash
    scripts/smoke.sh          # exec, pty and sftp checks
    scripts/smoke.sh sftp     # sftp half only
+   scripts/throughput.sh bench any@<ip>   # repeatable throughput figures, see throughput.md
    ```
 
    The scripts need key auth and a terminal on the same LAN as the Vita. The authoring agent's sandbox cannot reach the device, so run them yourself.

@@ -448,7 +448,7 @@ Ground rules, all of them inherited from how this repo is built:
 
 - Read [`AGENTS.md`](AGENTS.md) first. It is the build contract, and several lines in it
   exist because the obvious thing does not work.
-- `task` is the entry point; never run `cmake` directly. A successful `task build` producing both VPKs is the only check that runs without a device. [`scripts/smoke.sh`](scripts/smoke.sh) checks a running server over the LAN, and [`docs/development.md`](docs/development.md) covers installing a build on the Vita and debugging it from the log and crash dumps.
+- `task` is the entry point; never run `cmake` directly. A successful `task build` producing both VPKs is the only check that runs without a device. [`scripts/smoke.sh`](scripts/smoke.sh) checks a running server over the LAN, [`docs/throughput.md`](docs/throughput.md) has the throughput procedure and baseline, and [`docs/development.md`](docs/development.md) covers installing a build on the Vita and debugging it from the log and crash dumps.
 - The two apps keep separate link lists. The client stays a libssh2 client and the server
   stays a libssh server.
 - Tile PNGs are generated. Edit the SVG in `assets/` and run `assets/render_tiles.sh`; it verifies

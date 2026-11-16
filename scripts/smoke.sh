@@ -399,20 +399,10 @@ mkdir $REMOTE/d2" >/dev/null
     head -c 1 /dev/urandom > "$XL/tree/one.bin"
     : > "$XL/tree/a/zero.bin"
     head -c 70000 /dev/urandom > "$XL/tree/a/b/odd.bin"   # not a multiple of any block size
-    sha() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1"; else shasum -a 256 "$1"; fi | cut -d' ' -f1; }
+    # sha, timed and rate (the AC4 THROUGHPUT line) come from the shared library.
+    . "$(dirname "$0")/transfer_lib.sh"
     # Name, size and checksum of every file under a directory, for comparing two trees.
     tree_sums() { ( cd "$1" && find . -type f | LC_ALL=C sort | while read -r f; do printf '%s %s %s\n' "$f" "$(wc -c < "$f" | tr -d ' ')" "$(sha "$f")"; done; ( find . -type d | LC_ALL=C sort ) ); }
-    # Runs a command, leaving its wall time in ELAPSED; perl because macOS date has no %N.
-    timed() {
-      local t0 rc
-      t0=$(perl -MTime::HiRes=time -e 'print time')
-      "$@"; rc=$?
-      ELAPSED=$(perl -MTime::HiRes=time -e "printf '%.2f', time - $t0")
-      return $rc
-    }
-    # AC4: one parseable line per direction, so a later run can be diffed against this one.
-    rate() { printf 'THROUGHPUT %s %s %s %s bytes %s s %s MB/s client=%s\n' "$(date +%Y-%m-%d)" "$1" "$2" "$3" "$ELAPSED" \
-      "$(awk -v b="$3" -v s="$ELAPSED" 'BEGIN { printf "%.2f", b / s / 1048576 }')" "$(ssh -V 2>&1 | cut -d, -f1)"; }
 
     sftp_run "mkdir $X" >/dev/null; check "mkdir transfer scratch (-> 0)" 0 $?
 
