@@ -5,7 +5,7 @@
 #   scripts/smoke.sh                everything: exec, pty, then sftp checks
 #   scripts/smoke.sh exec           exec-mode checks only   (ACs 2, 3, 4, 5, 6)
 #   scripts/smoke.sh pty            interactive checks only (ACs 3, 7, 8)
-#   scripts/smoke.sh sftp           sftp and scp checks only (TASK-002.01, TASK-002.02)
+#   scripts/smoke.sh sftp           sftp and scp checks only (TASK-002.01 to TASK-002.03)
 #   scripts/smoke.sh MODE [user@host] [port]     (defaults: all any@192.168.8.57 2222)
 #
 # The exec half drives one-shot `ssh host "cmd"` calls and grades the exit
@@ -389,6 +389,112 @@ mkdir $REMOTE/d2" >/dev/null
     fi
     sftp_run "rename $REMOTE/victim.bin /os0/smoke.bin" >/dev/null; RC=$?
     check "rename onto read-only device refused (-> nonzero)" 1 "$(failed "$RC")"
+
+    # --- TASK-002.03: real-client transfers, checksummed and timed --------------
+    local X=$REMOTE/x XL="$LOCAL/x" VPK
+    VPK="$(dirname "$0")/../build/ssh_server_vita.vpk"
+    mkdir -p "$XL/tree/a/b/c" "$XL/tree/empty"
+    head -c 12582912 /dev/urandom > "$LOCAL/over10.bin"   # AC1: over 10 MB
+    head -c 3145728 /dev/urandom > "$XL/tree/a/b/c/deep.bin"
+    head -c 1 /dev/urandom > "$XL/tree/one.bin"
+    : > "$XL/tree/a/zero.bin"
+    head -c 70000 /dev/urandom > "$XL/tree/a/b/odd.bin"   # not a multiple of any block size
+    sha() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1"; else shasum -a 256 "$1"; fi | cut -d' ' -f1; }
+    # Name, size and checksum of every file under a directory, for comparing two trees.
+    tree_sums() { ( cd "$1" && find . -type f | LC_ALL=C sort | while read -r f; do printf '%s %s %s\n' "$f" "$(wc -c < "$f" | tr -d ' ')" "$(sha "$f")"; done; ( find . -type d | LC_ALL=C sort ) ); }
+    # Runs a command, leaving its wall time in ELAPSED; perl because macOS date has no %N.
+    timed() {
+      local t0 rc
+      t0=$(perl -MTime::HiRes=time -e 'print time')
+      "$@"; rc=$?
+      ELAPSED=$(perl -MTime::HiRes=time -e "printf '%.2f', time - $t0")
+      return $rc
+    }
+    # AC4: one parseable line per direction, so a later run can be diffed against this one.
+    rate() { printf 'THROUGHPUT %s %s %s %s bytes %s s %s MB/s client=%s\n' "$(date +%Y-%m-%d)" "$1" "$2" "$3" "$ELAPSED" \
+      "$(awk -v b="$3" -v s="$ELAPSED" 'BEGIN { printf "%.2f", b / s / 1048576 }')" "$(ssh -V 2>&1 | cut -d, -f1)"; }
+
+    sftp_run "mkdir $X" >/dev/null; check "mkdir transfer scratch (-> 0)" 0 $?
+
+    # AC1: scp -s of a file over 10 MB, both directions, sha256
+    timed scp -s -q $SSHO -P "$PORT" "$LOCAL/over10.bin" "$HOST:$X/over10.bin" 2>"$ERRF"
+    check "scp -s upload 12 MB (-> 0)" 0 $?
+    rate scp-up over10.bin 12582912
+    timed scp -s -q $SSHO -P "$PORT" "$HOST:$X/over10.bin" "$LOCAL/over10.back" 2>"$ERRF"
+    check "scp -s download 12 MB (-> 0)" 0 $?
+    rate scp-down over10.bin 12582912
+    check "12 MB scp sha256 identical both ways" "$(sha "$LOCAL/over10.bin")" "$(sha "$LOCAL/over10.back" 2>/dev/null)"
+
+    # AC4: sftp throughput on the same file
+    timed sftp_run "put $LOCAL/over10.bin $X/over10s.bin" >/dev/null; check "sftp put 12 MB (-> 0)" 0 $?
+    rate sftp-put over10.bin 12582912
+    timed sftp_run "get $X/over10s.bin $LOCAL/over10s.back" >/dev/null; check "sftp get 12 MB (-> 0)" 0 $?
+    rate sftp-get over10.bin 12582912
+    check "12 MB sftp sha256 identical both ways" "$(sha "$LOCAL/over10.bin")" "$(sha "$LOCAL/over10s.back" 2>/dev/null)"
+
+    # AC2: recursive put and get reproduce a tree
+    sftp_run "put -r $XL/tree $X/tree" >/dev/null; check "sftp put -r tree (-> 0)" 0 $?
+    mkdir -p "$LOCAL/treeback"
+    sftp_run "get -r $X/tree $LOCAL/treeback/tree" >/dev/null; check "sftp get -r tree (-> 0)" 0 $?
+    check "tree names, sizes, sha256 identical" "$(tree_sums "$XL/tree")" "$(tree_sums "$LOCAL/treeback/tree" 2>/dev/null)"
+
+    # AC7: a VPK in one command, byte-identical afterwards
+    if [ -f "$VPK" ]; then
+      timed scp -s -q $SSHO -P "$PORT" "$VPK" "$HOST:$X/app.vpk" 2>"$ERRF"
+      check "scp -s put build VPK (-> 0)" 0 $?
+      rate scp-up "$(basename "$VPK")" "$(wc -c < "$VPK" | tr -d ' ')"
+      scp -s -q $SSHO -P "$PORT" "$HOST:$X/app.vpk" "$LOCAL/app.vpk.back" 2>"$ERRF"
+      check "VPK lands byte-identical (cmp)" ok "$(same "$VPK" "$LOCAL/app.vpk.back")"
+      # exec output past 64 KB was cut off when the session was torn down with replies still queued.
+      ssh -p "$PORT" $SSHO "$HOST" "cat $X/app.vpk" > "$LOCAL/app.vpk.cat" 2>"$ERRF"
+      check "exec cat of the VPK is not cut off" ok "$(same "$VPK" "$LOCAL/app.vpk.cat")"
+    else
+      skip "VPK put" "build/ssh_server_vita.vpk missing, run task build"
+    fi
+
+    # AC3: the client must be told why. One session runs every refused operation (a "-"
+    # prefix keeps the batch going), so there is no exit status per command: a refusal is
+    # the client printing text after the echoed command, and a bare "Failure" is graded
+    # as unhelpful. The text is printed so it can be reviewed.
+    local OPS=("put $LOCAL/small.txt /os0/smoke.txt" "mkdir /os0/smoke" "rm /os0/smoke.txt"
+               "get /ux0/data/does-not-exist $LOCAL/nope"
+               "put $LOCAL/small.txt /ux0/data/does-not-exist/x.txt"
+               "ls /nodevice/x" "rmdir /ux0/data/does-not-exist") op MSG
+    OUT=$(for op in "${OPS[@]}"; do printf -- '-%s\n' "$op"; done |
+      sftp -q $SSHO -P "$PORT" -b - "$HOST" 2>&1)
+    for op in "${OPS[@]}"; do
+      # The echoed "sftp> cmd" line, then everything up to the next echo.
+      MSG=$(printf '%s\n' "$OUT" | awk -v c="$op" '
+        /^sftp> / { line = $0; sub(/^sftp> -?/, "", line); on = (line == c); next }
+        on && !/^Connection to / { printf "%s ", $0 }')
+      printf '      %s -> %s\n' "$(printf '%s' "$op" | sed "s|$LOCAL|\$LOCAL|g")" "$MSG"
+      check "refused: $(printf '%s' "$op" | sed "s|$LOCAL/||g" | cut -c1-40)" ok "$([ -n "$MSG" ] && echo ok || echo silent)"
+      case "$MSG" in
+        *": Failure"*|*"Unknown error"*) check "  message names the cause: ${op%% *}" ok "generic: $MSG" ;;
+        *) check "  message names the cause: ${op%% *}" ok ok ;;
+      esac
+    done
+
+    # AC8: legacy scp has no scp binary behind the shell; it must fail fast, not hang.
+    timed perl -e 'alarm 20; exec @ARGV' scp -O -q $SSHO -P "$PORT" "$LOCAL/small.txt" "$HOST:$X/legacy.txt" 2>"$ERRF"
+    RC=$?
+    printf '      scp -O -> exit %s in %ss: %s\n' "$RC" "$ELAPSED" "$(tr '\n' ' ' < "$ERRF" | cut -c1-160)"
+    check "scp -O fails, not hangs (-> nonzero, not 142)" ok "$([ "$RC" -ne 0 ] && [ "$RC" -ne 142 ] && echo ok || echo "$RC")"
+    check "scp -O prints a message" ok "$([ -s "$ERRF" ] && echo ok || echo silent)"
+
+    # AC9: two sessions transferring at once do not corrupt each other
+    head -c 8388608 /dev/urandom > "$LOCAL/cc1.bin"; head -c 8388608 /dev/urandom > "$LOCAL/cc2.bin"
+    scp -s -q $SSHO -P "$PORT" "$LOCAL/cc1.bin" "$HOST:$X/cc1.bin" 2>"$LOCAL/cc1.err" & BGPID=$!
+    scp -s -q $SSHO -P "$PORT" "$LOCAL/cc2.bin" "$HOST:$X/cc2.bin" 2>"$LOCAL/cc2.err"; RC=$?
+    wait "$BGPID"; check "two concurrent scp uploads (-> 0, 0)" "0 0" "$? $RC"
+    scp -s -q $SSHO -P "$PORT" "$HOST:$X/cc1.bin" "$LOCAL/cc1.back" 2>"$ERRF" & BGPID=$!
+    scp -s -q $SSHO -P "$PORT" "$HOST:$X/cc2.bin" "$LOCAL/cc2.back" 2>"$ERRF"; RC=$?
+    wait "$BGPID"; check "two concurrent scp downloads (-> 0, 0)" "0 0" "$? $RC"
+    check "concurrent transfer 1 intact" ok "$(same "$LOCAL/cc1.bin" "$LOCAL/cc1.back")"
+    check "concurrent transfer 2 intact" ok "$(same "$LOCAL/cc2.bin" "$LOCAL/cc2.back")"
+
+    # The shell's rm -r removes the tree that sftp has no command for.
+    ssh -p "$PORT" $SSHO "$HOST" "rm -r $X" >/dev/null 2>"$ERRF"; check "rm -r transfer scratch (-> 0)" 0 $?
 
     # What the stock clients cannot reach: a refused subsystem followed by a good one on
     # the same channel (TASK-002.01 AC5) and SETSTAT with times (TASK-002.02 AC1).
