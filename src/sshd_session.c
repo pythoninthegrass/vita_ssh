@@ -41,6 +41,12 @@
  * for, not the megabytes a desktop process gets. */
 #define WRITE_CHUNK 4096
 
+/* This newlib ships no NAME_MAX (sshd_builtins.c defines the same value); 255
+ * is the POSIX minimum and FAT's own limit for long names. */
+#ifndef NAME_MAX
+#define NAME_MAX 255
+#endif
+
 /* Keys the editor claims. Anything else is inserted. */
 #define KEY_CTRL_C 0x03
 #define KEY_CTRL_D 0x04
@@ -87,6 +93,12 @@ struct sh_session {
     /* Set by the editor on Enter, consumed by sh_session_pump(). */
     int pending_ready;
     char pending[SSHD_LINE_MAX];
+
+    /* While set, sh_write() lands here instead of the channel: `command > file`
+     * and `command >> file`, opened and closed by sh_execute_line around one
+     * command. sh_eprintf ignores this, on purpose: `cmd > file` redirects
+     * stdout, and errors belong on the terminal. */
+    FILE *out_fp;
 
     /* Escape-sequence state so arrow keys and terminal reports never land in
      * the line: 0 normal, 1 after ESC, 2 after "ESC [", 3 after "ESC O". */
@@ -160,7 +172,53 @@ static void chan_write(sh_session_t *s, const char *data, size_t len)
 
 void sh_write(sh_session_t *s, const char *data, size_t len)
 {
+    if (s->out_fp != NULL) {
+        /* Flushed per write, for the same reason sh_log_line flushes: a ^C or a
+         * dropped channel mid-command must not leave the buffered half of the
+         * file on the floor. The volumes here are small (one key line, one
+         * listing), so the cost is nothing. */
+        fwrite(data, 1, len, s->out_fp);
+        fflush(s->out_fp);
+        return;
+    }
     chan_write(s, data, len);
+}
+
+int sh_session_redirect_start(sh_session_t *s, const char *sce_path,
+                              int append)
+{
+    FILE *fp;
+
+    if (s == NULL || sce_path == NULL || sce_path[0] == '\0') {
+        errno = EINVAL;
+        return -1;
+    }
+    if (s->out_fp != NULL) {
+        errno = EINVAL; /* only one output file per command; the caller undoes */
+        return -1;
+    }
+    /* "w" truncates, "a" appends, both create: the exact difference between
+     * `>` and `>>`, and the modes the authorized_keys workflow needs. */
+    fp = fopen(sce_path, append ? "a" : "w");
+    if (fp == NULL) {
+        return -1;
+    }
+    s->out_fp = fp;
+    return 0;
+}
+
+void sh_session_redirect_end(sh_session_t *s)
+{
+    if (s == NULL || s->out_fp == NULL) {
+        return;
+    }
+    /* fflush before fclose checks the error, because fclose alone swallows the
+     * one case that matters: the card filled up mid-command and the last
+     * writes never landed. The caller has already printed its own diagnostics;
+     * there is nothing better to do with the second failure than drop it. */
+    fflush(s->out_fp);
+    fclose(s->out_fp);
+    s->out_fp = NULL;
 }
 
 void sh_printf(sh_session_t *s, const char *fmt, ...)
@@ -176,7 +234,7 @@ void sh_printf(sh_session_t *s, const char *fmt, ...)
         return;
     }
     if ((size_t)need < sizeof(stack)) {
-        chan_write(s, stack, (size_t)need);
+        sh_write(s, stack, (size_t)need);
         return;
     }
     {
@@ -185,19 +243,22 @@ void sh_printf(sh_session_t *s, const char *fmt, ...)
         if (heap == NULL) {
             /* Fall back to the truncated stack copy: a partial line beats
              * silence, and the caller has no way to report a failed print. */
-            chan_write(s, stack, sizeof(stack) - 1);
+            sh_write(s, stack, sizeof(stack) - 1);
             return;
         }
         va_start(ap, fmt);
         vsnprintf(heap, (size_t)need + 1, fmt, ap);
         va_end(ap);
-        chan_write(s, heap, (size_t)need);
+        sh_write(s, heap, (size_t)need);
         free(heap);
     }
 }
 
 void sh_eprintf(sh_session_t *s, const char *fmt, ...)
 {
+    /* Deliberately chan_write and not sh_write: this is stderr, and
+     * `command > file` redirects stdout only. An error while writing a file --
+     * the redirect target filling up, say -- must reach the terminal. */
     char stack[MAX_OUTPUT];
     va_list ap;
     int need;
@@ -271,6 +332,20 @@ int sh_session_cols(const sh_session_t *s)
         return 80; /* the width a client that never asked for a pty implies */
     }
     return s->cols;
+}
+
+int sh_session_history(sh_session_t *s, const char **entries, int max)
+{
+    int i, n;
+
+    if (s == NULL || entries == NULL || s->hist_len <= 0) {
+        return 0;
+    }
+    n = (s->hist_len < max) ? s->hist_len : max;
+    for (i = 0; i < n; i++) {
+        entries[i] = s->history[i];
+    }
+    return n;
 }
 
 int sh_session_interrupted(const sh_session_t *s)
@@ -473,8 +548,44 @@ static void complete_word(sh_session_t *s)
                 sh_write(s, " ", 1);
             }
         } else if (n > 1) {
+            /* Same ambiguous-match handling as the path branch below: extend
+             * the word as far as every MATCH agrees -- `w<TAB>` over
+             * which/whoami fills "h" -- then show full names. The reference
+             * word is the first match, not table[0]: minimizing over the
+             * whole table would drag the common prefix to nothing. */
+            const char *first = NULL;
+            size_t common = 0;
+
+            for (i = 0; i < (int)count; i++) {
+                size_t j;
+
+                if (strncmp(table[i].name, prefix, plen) != 0) {
+                    continue;
+                }
+                if (first == NULL) {
+                    first = table[i].name;
+                    common = strlen(first);
+                    continue;
+                }
+                j = 0;
+                while (j < common && first[j] == table[i].name[j]) {
+                    j++;
+                }
+                common = j;
+            }
+            if (first != NULL && common > plen) {
+                char tail[NAME_MAX + 1];
+                size_t len = common - plen;
+
+                if (len >= sizeof(tail)) {
+                    len = sizeof(tail) - 1;
+                }
+                memcpy(tail, first + plen, len);
+                tail[len] = '\0';
+                insert_completion(s, tail, 0);
+            }
             sh_printf(s, "\n");
-            for (i = 0; i < count; i++) {
+            for (i = 0; i < (int)count; i++) {
                 if (strncmp(table[i].name, prefix, plen) == 0) {
                     sh_printf(s, "%s  ", table[i].name);
                 }
@@ -544,9 +655,35 @@ static void complete_word(sh_session_t *s)
                 free(tail);
             }
         } else if (n > 1) {
+            /* Ambiguous. Extend the word by the longest prefix every match
+             * shares -- `cd vitassh<TAB>` over vitassh/ and vitasshd/ gains
+             * nothing, but `cd v<TAB>` fills "itassh" -- and then list the
+             * FULL names. Printing suffixes instead turned that first case
+             * into a bare "  d" on the user's screen: correct, and a puzzle.
+             * write_prompt + the line re-echo go last, so the list sits above
+             * the line being typed, as readline does it. */
+            size_t common = strlen(names[0]);
+
+            for (i = 1; i < n && names[i] != NULL; i++) {
+                size_t j = 0;
+
+                while (j < common && names[0][j] == names[i][j]) {
+                    j++;
+                }
+                common = j;
+            }
+            if (common > plen) {
+                char tail[NAME_MAX + 1];
+
+                memcpy(tail, names[0] + plen, common - plen);
+                tail[common - plen] = '\0';
+                insert_completion(s, tail, 0);
+            }
             sh_printf(s, "\n");
             for (i = 0; i < n; i++) {
-                sh_printf(s, "%s  ", names[i] + plen);
+                if (names[i] != NULL) {
+                    sh_printf(s, "%s  ", names[i]);
+                }
             }
             sh_printf(s, "\n");
             write_prompt(s);
@@ -563,12 +700,105 @@ static void complete_word(sh_session_t *s)
 /* line editor                                                        */
 /* ------------------------------------------------------------------ */
 
+/* ------------------------------------------------------------------ */
+/* history expansion                                                  */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Replaces a `!n` / `!!` / `!prefix` reference with the line it names, bash
+ * style: `!12` runs line 12 of `history`, `!!` the previous line, `!cd` the
+ * most recent line starting with "cd". Whatever follows the reference in the
+ * typed line is appended to it, so `!12 -la` re-runs line 12 with an extra
+ * argument. Numbering matches what the `history` builtin prints: oldest line
+ * is 1.
+ *
+ * Takes the history as parameters rather than reading the session, so the
+ * parser can be lifted out and tested on a host without libssh. Single pass:
+ * the substituted text is not re-expanded, so a line that expands to itself
+ * cannot loop. History expansion is interactive-only, which is also why this
+ * sits in the editor and not in sh_execute_line: exec-mode lines have no
+ * history to expand against.
+ *
+ * Returns 0 with the expanded line in out (identical to the input when there
+ * was no reference), or -1 after printing "event not found"; the caller then
+ * runs nothing and pushes nothing, as bash does.
+ */
+static int expand_history_ref(const char **history, int hist_len,
+                              const char *line, char *out, size_t outlen)
+{
+    const char *entry = NULL, *rest = NULL;
+
+    if (line[0] != '!') {
+        snprintf(out, outlen, "%s", line);
+        return 0;
+    }
+
+    if (line[1] == '!') {
+        entry = (hist_len > 0) ? history[hist_len - 1] : NULL;
+        rest = line + 2;
+    } else if (line[1] >= '0' && line[1] <= '9') {
+        char num[8];
+        size_t d = 0;
+        int idx;
+
+        while (line[1 + d] >= '0' && line[1 + d] <= '9' && d < sizeof(num) - 1) {
+            num[d] = line[1 + d];
+            d++;
+        }
+        num[d] = '\0';
+        idx = atoi(num);
+        rest = line + 1 + d;
+        /* 1-based oldest-first, matching the builtin's numbering */
+        if (idx >= 1 && idx <= hist_len) {
+            entry = history[idx - 1];
+        }
+    } else if (line[1] != '\0' && line[1] != ' ') {
+        const char *sp = strchr(line + 1, ' ');
+        size_t plen = (sp != NULL) ? (size_t)(sp - (line + 1)) : strlen(line + 1);
+        int i;
+
+        rest = (sp != NULL) ? sp : line + strlen(line);
+        for (i = hist_len - 1; i >= 0; i--) {
+            if (strncmp(history[i], line + 1, plen) == 0) {
+                entry = history[i];
+                break;
+            }
+        }
+    }
+
+    if (entry == NULL) {
+        return -1; /* the caller reports it: this function stays session-free */
+    }
+    snprintf(out, outlen, "%s%s", entry, rest != NULL ? rest : "");
+    return 0;
+}
+
 static void finish_line(sh_session_t *s)
 {
+    char expanded[SSHD_LINE_MAX];
+
     sh_printf(s, "\n");
-    snprintf(s->pending, sizeof(s->pending), "%s", s->line);
+    if (expand_history_ref((const char **)s->history, s->hist_len, s->line,
+                           expanded, sizeof(expanded)) != 0) {
+        /* Event not found: nothing runs, nothing is remembered. */
+        sh_eprintf(s, "sh: %s: event not found\n", s->line);
+        s->linelen = 0;
+        s->line[0] = '\0';
+        s->hist_pos = SSHD_HISTORY;
+        write_prompt(s);
+        return;
+    }
+    if (strcmp(expanded, s->line) != 0) {
+        /* The line that will run is not the line that was typed: show it,
+         * bash-style, so `!12` is never a surprise. */
+        sh_printf(s, "%s\n", expanded);
+        snprintf(s->pending, sizeof(s->pending), "%s", expanded);
+        history_push(s, expanded);
+    } else {
+        snprintf(s->pending, sizeof(s->pending), "%s", s->line);
+        history_push(s, s->line);
+    }
     s->pending_ready = 1;
-    history_push(s, s->line);
     s->linelen = 0;
     s->line[0] = '\0';
     s->hist_pos = SSHD_HISTORY;
@@ -795,6 +1025,17 @@ static int on_exec_request(ssh_session session, ssh_channel channel,
     /* `ssh vita 'ls /ux0/vita'` has to work or the server is only good for an
      * interactive terminal. It runs from the pump, like a typed line, so the
      * poll loop stays in charge; the exit status goes back when it finishes. */
+    if (strlen(command) >= sizeof(s->pending)) {
+        /* Truncating and running would be worse than refusing: `rm -r` with
+         * its last path component cut off still runs. The client sees the
+         * refusal as a failed exit status and this as its output. */
+        sh_console_log("exec from %s refused: %zu bytes, line limit is %zu",
+                       sh_session_peer(s), strlen(command),
+                       sizeof(s->pending));
+        sh_eprintf(s, "exec: command too long (max %u bytes)\n",
+                   (unsigned)(sizeof(s->pending) - 1));
+        return 1;
+    }
     snprintf(s->pending, sizeof(s->pending), "%s", command);
     s->pending_ready = 1;
     s->shell = 0;
@@ -947,12 +1188,30 @@ static int on_auth_pubkey(ssh_session session, const char *user,
 static int on_service_request(ssh_session session, const char *service,
                               void *userdata)
 {
+    sh_session_t *s = userdata;
+    const char *peer = s != NULL ? sh_session_peer(s) : "unknown";
+
     (void)session;
-    (void)userdata;
-    /* Only "ssh-connection" is meaningful here and there is nothing to
-     * configure per service, so accept it and let the channel requests decide
-     * what a session may actually do. */
-    return (service != NULL && strcmp(service, "ssh-connection") == 0) ? 0 : 1;
+    /*
+     * The name matters, and getting it wrong ends the connection before any
+     * auth callback is reached: after NEWKEYS the client's next packet is
+     * SSH_MSG_SERVICE_REQUEST for "ssh-userauth", and this callback is the
+     * only gate -- returning nonzero makes libssh send its own disconnect
+     * (code 11, "Bye Bye") with no error string to debug from. What the client
+     * asks for is therefore not a detail to guess at. "ssh-connection" is the
+     * service named *inside* the later userauth request (RFC 4252 section 5),
+     * not a service an SSHv2 client requests here, so accepting only it made
+     * every login die at this line.
+     */
+    if (service != NULL && strcmp(service, "ssh-userauth") == 0) {
+        sh_console_log("service accepted: %s from %s", service, peer);
+        return 0; /* libssh answers with SSH_MSG_SERVICE_ACCEPT */
+    }
+    /* No SERVICE_DENY in this libssh, so a refused service ends the session --
+     * which is why the name is logged: it is the whole diagnosis. */
+    sh_console_log("service refused: %s from %s", service ? service : "(none)",
+                   peer);
+    return 1;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1000,7 +1259,11 @@ sh_session_t *sh_session_new(ssh_session ssh, const char *peer)
     }
     /* The auth methods to offer are a policy the host key layer decides: with
      * authorized_keys present, password authentication is still allowed only
-     * when a generated password is also live. */
+     * when a generated password is also live. The reload first is what makes
+     * the bootstrap one-shot: the key the previous session just installed via
+     * exec was written after this server booted, and without this the next
+     * login would be asked for the passphrase forever. */
+    sh_auth_reload_if_changed();
     ssh_set_auth_methods(ssh, sh_server_auth_methods());
     return s;
 }

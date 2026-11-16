@@ -49,7 +49,8 @@ typedef enum {
 
 typedef struct {
   sh_target_kind_t kind;
-  const sh_device_t *dev;       /* NULL unless kind is ROOT */
+  const sh_device_t *dev;       /* the device the path sits on; NULL only for
+                                 * the synthetic "/" root */
   char sce[SH_SCE_PATH_MAX];    /* "ux0:vita/save/x.dat", "" for ROOT */
   char posix[SH_POSIX_PATH_MAX];/* "/ux0/vita/save/x.dat", "/" for ROOT.
                                  * What $PWD holds: normalized, no trailing

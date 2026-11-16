@@ -124,6 +124,27 @@ static const char *mode_string(mode_t mode, char buf[11])
     return buf;
 }
 
+/*
+ * The Vita has no per-file permission bits to show: the memory card is FAT and
+ * stat() fills st_mode with the file type and nothing else, so mode_string()
+ * above would render every entry as "---------", which reads as broken rather
+ * than as "this platform has no bits here". What the platform does enforce is
+ * the device mount -- a read-only device (os0, vs0, gro0) refuses writes no
+ * matter what the bits say -- so synthesize the mode from the two things that
+ * are true: the type, from stat, and the write bit, from the device table.
+ * `dr-xr-xr-x` on /vs0 and `drwxr-xr-x` on /ux0 describe exactly what a client
+ * of this shell can and cannot do, which is more than nine dashes said.
+ */
+static mode_t synth_mode(const struct stat *st, const sh_device_t *dev)
+{
+    mode_t mode = S_ISDIR(st->st_mode) ? (mode_t)0755 : (mode_t)0644;
+
+    if (dev != NULL && !dev->writable) {
+        mode &= (mode_t)~0222;
+    }
+    return mode;
+}
+
 static void format_time(char *dst, size_t dstlen, time_t when, const char *fmt)
 {
     struct tm *tm;
@@ -413,7 +434,10 @@ static int cmd_cd(sh_session_t *s, int argc, char **argv)
         sh_eprintf(s, "cd: too many arguments\n");
         return 1;
     }
-    if (resolve_arg(s, "cd", (argc > 1) ? argv[1] : NULL, &t) != 0) {
+    /* Bare `cd` means home, and the resolver maps "~" there; passing it the
+     * NULL that `ls` hands over for "no argument" would make `cd` resolve to
+     * the cwd and quietly do nothing. */
+    if (resolve_arg(s, "cd", (argc > 1) ? argv[1] : "~", &t) != 0) {
         return 1;
     }
     if (t.kind == SH_TARGET_ROOT) {
@@ -443,7 +467,7 @@ static int cmd_cd(sh_session_t *s, int argc, char **argv)
 /* ------------------------------------------------------------------ */
 
 static void print_long(sh_session_t *s, const char *sce_path,
-                       const char *display)
+                       const char *display, const sh_device_t *dev)
 {
     struct stat st;
     char perms[11], when[32], size[16];
@@ -454,7 +478,8 @@ static void print_long(sh_session_t *s, const char *sce_path,
     }
     format_time(when, sizeof(when), st.st_mtime, "%b %e %H:%M");
     human_size(size, sizeof(size), (long long)st.st_size);
-    sh_printf(s, "%s %6s %s  %s%s\n", mode_string(st.st_mode, perms), size, when,
+    sh_printf(s, "%s %6s %s  %s%s\n",
+              mode_string(synth_mode(&st, dev), perms), size, when,
               display, S_ISDIR(st.st_mode) ? "/" : "");
 }
 
@@ -504,7 +529,7 @@ static int list_one(sh_session_t *s, const char *cmd, const sh_target_t *t,
                 rc = 1;
                 continue;
             }
-            print_long(s, sce, names[i]);
+            print_long(s, sce, names[i], t->dev);
         }
         free(names);
         return rc;
@@ -620,7 +645,7 @@ static int cmd_ls(sh_session_t *s, int argc, char **argv)
         /* A file argument prints as one line, like ls(1): the name, or the
          * long form when -l was asked for. */
         if (long_format) {
-            print_long(s, t.sce, sh_basename(t.posix));
+            print_long(s, t.sce, sh_basename(t.posix), t.dev);
         } else {
             sh_printf(s, "%s\n", sh_basename(t.posix));
         }
@@ -1405,10 +1430,12 @@ static int cmd_stat(sh_session_t *s, int argc, char **argv)
         sh_printf(s, "  Size: %-14lld  Type: %s\n", (long long)st.st_size,
                   S_ISDIR(st.st_mode) ? "directory" : "regular file");
         /* uid and gid are always 0 and always displayed as vita: the Vita has
-         * no account database, so this is a display convention, not a claim. */
+         * no account database, so this is a display convention, not a claim.
+         * The access line shows the synthesized mode, not the zero bits stat
+         * hands back -- same reason as in ls -l. */
         sh_printf(s, "Access: (%04o/%s)  Uid: (0/vita)  Gid: (0/vita)\n",
-                  (unsigned)(st.st_mode & 07777),
-                  mode_string(st.st_mode, perms));
+                  (unsigned)(synth_mode(&st, t.dev) & 07777),
+                  mode_string(synth_mode(&st, t.dev), perms));
         sh_printf(s, "Modify: %s\n", when);
     }
     return status;
@@ -1585,6 +1612,65 @@ static int cmd_env(sh_session_t *s, int argc, char **argv)
     return 0;
 }
 
+static int cmd_which(sh_session_t *s, int argc, char **argv)
+{
+    int i, status = 0;
+
+    if (argc < 2) {
+        sh_eprintf(s, "usage: which COMMAND...\n");
+        return 1;
+    }
+    for (i = 1; i < argc; i++) {
+        /* PATH is decorative (see static_env): everything this shell can run
+         * is in the builtin table, so "found" and "builtin" are the same
+         * event. Saying so beats the traditional "in (/bin:/usr/bin)", which
+         * would claim a search that would find nothing. */
+        if (sh_builtin_lookup(argv[i]) != NULL) {
+            sh_printf(s, "%s: shell builtin\n", argv[i]);
+        } else {
+            sh_eprintf(s, "which: no %s in the builtins\n", argv[i]);
+            status = 1;
+        }
+    }
+    return status;
+}
+
+/*
+ * Prints the session's command history, oldest line numbered 1 -- the same
+ * numbering `!n` in the editor expands against, so the two can never disagree
+ * about what line 7 is. `history N` shows only the last N, with their real
+ * numbers, like bash. History lives per connection and dies with it; there is
+ * no ~/.bash_history equivalent yet.
+ */
+static int cmd_history(sh_session_t *s, int argc, char **argv)
+{
+    const char *entries[SSHD_HISTORY];
+    int n, i, first = 0;
+
+    if (argc > 2) {
+        sh_eprintf(s, "usage: history [COUNT]\n");
+        return 1;
+    }
+    if (argc == 2) {
+        char *end;
+        long want = strtol(argv[1], &end, 10);
+
+        if (end == argv[1] || *end != '\0' || want < 0) {
+            sh_eprintf(s, "history: %s: not a number\n", argv[1]);
+            return 1;
+        }
+        first = (int)want; /* clamped once n is known below */
+    }
+    n = sh_session_history(s, entries, SSHD_HISTORY);
+    if (first > n) {
+        first = n;
+    }
+    for (i = n - first; i < n; i++) {
+        sh_printf(s, "%4d  %s\n", i + 1, entries[i]);
+    }
+    return 0;
+}
+
 static int cmd_date(sh_session_t *s, int argc, char **argv)
 {
     char when[64];
@@ -1685,6 +1771,7 @@ static const sh_builtin_t builtins[] = {
     {"env", cmd_env, "env -- print the environment"},
     {"exit", cmd_exit, "exit -- end this session"},
     {"help", cmd_help, "help [COMMAND] -- usage"},
+    {"history", cmd_history, "history [COUNT] -- show numbered command history (!n re-runs line n)"},
     {"ls", cmd_ls, "ls [-l] [-a] [PATH] -- list a directory (no argument: .)"},
     {"mkdir", cmd_mkdir, "mkdir [-p] DIR... -- create directories"},
     {"mv", cmd_mv, "mv SRC... DST -- rename, copying across devices"},
@@ -1694,6 +1781,7 @@ static const sh_builtin_t builtins[] = {
     {"stat", cmd_stat, "stat PATH... -- size, mode and modification time"},
     {"touch", cmd_touch, "touch FILE... -- create a file or update its time"},
     {"uname", cmd_uname, "uname [-a] -- system name"},
+    {"which", cmd_which, "which COMMAND... -- report whether COMMAND is one of these builtins"},
     {"whoami", cmd_whoami, "whoami -- the name you logged in as"},
 };
 
@@ -1724,16 +1812,64 @@ const sh_builtin_t *sh_builtin_lookup(const char *name)
 
 #define MAX_WORDS (MAX_ARGS * 2)
 
+/*
+ * Pulls redirection words off the argument list: the `>` or `>>` word and the
+ * file name after it. Both must be separate words (`echo hi > /f/x`), because
+ * split_line() has no notion of operator characters; the glued form `hi>/f/x`
+ * arrives as one word and is deliberately left alone rather than guessed at.
+ * A second redirect replaces the first, like sh, so `cmd > a > b` writes b.
+ * Returns 0 with the target word and append flag set (or a NULL target when
+ * there was none), or -1 after reporting a dangling operator.
+ */
+static int extract_redirect(sh_session_t *s, int *argc, char **argv,
+                            int *quoted, const char **path, int *append)
+{
+    int i;
+
+    for (i = 1; i < *argc; i++) {
+        if (quoted[i] || (strcmp(argv[i], ">") != 0 &&
+                          strcmp(argv[i], ">>") != 0)) {
+            continue;
+        }
+        if (i + 1 >= *argc) {
+            sh_eprintf(s, "sh: syntax error: file name expected after %s\n",
+                       argv[i]);
+            return -1;
+        }
+        *append = (argv[i][1] == '>');
+        free(argv[i]); /* the operator itself is consumed */
+        *path = argv[i + 1];
+        {
+            int j;
+
+            for (j = i; j < *argc - 1; j++) {
+                argv[j] = argv[j + 1];
+                quoted[j] = quoted[j + 1];
+            }
+        }
+        (*argc)--;
+        i--; /* the shifted-down name may be followed by another redirect */
+    }
+    return 0;
+}
+
 int sh_execute_line(sh_session_t *s, const char *line)
 {
     char *argv[MAX_WORDS];
     int quoted[MAX_WORDS];
     int argc, i, status = 0;
     const sh_builtin_t *cmd;
+    const char *redir_path = NULL;
+    int redir_append = 0;
 
     argc = split_line(line, argv, quoted, MAX_WORDS);
     if (argc == 0) {
         return 0;
+    }
+    if (extract_redirect(s, &argc, argv, quoted, &redir_path,
+                         &redir_append) != 0) {
+        free_args(argv, MAX_WORDS); /* hmm, argc bookkeeping */
+        return 1;
     }
 
     /* Expand wildcards unless the word was quoted, which is how a quoted "*"
@@ -1775,12 +1911,52 @@ int sh_execute_line(sh_session_t *s, const char *line)
         }
     }
 
+    if (extract_redirect(s, &argc, argv, quoted, &redir_path,
+                         &redir_append) != 0) {
+        free_args(argv, argc);
+        return 1;
+    }
+
+    /* `command > file` / `>>`: the target is resolved like any path argument,
+     * opened before the builtin runs, closed after, on every path below. sh
+     * semantics kept where they cost nothing: the file is created even when
+     * the command is not found, and stderr (sh_eprintf) stays on the
+     * terminal. The write bit is checked here rather than left to fopen so a
+     * read-only device reports "read-only file system", the same message
+     * mkdir gives, instead of an opaque sceIo failure. */
+    if (redir_path != NULL) {
+        sh_target_t t;
+
+        if (resolve_arg(s, "sh", redir_path, &t) != 0) {
+            free_args(argv, argc);
+            return 1;
+        }
+        if (t.kind == SH_TARGET_ROOT || t.kind == SH_TARGET_DEVICE) {
+            sh_eprintf(s, "sh: %s: Is a directory\n", redir_path);
+            free_args(argv, argc);
+            return 1;
+        }
+        if (t.dev != NULL && !t.dev->writable) {
+            sh_eprintf(s, "sh: %s: read-only file system\n", redir_path);
+            free_args(argv, argc);
+            return 1;
+        }
+        if (sh_session_redirect_start(s, t.sce, redir_append) != 0) {
+            sh_eprintf(s, "sh: %s: %s\n", redir_path, strerror(errno));
+            free_args(argv, argc);
+            return 1;
+        }
+    }
+
     cmd = sh_builtin_lookup(argv[0]);
     if (cmd == NULL) {
         sh_eprintf(s, "%s: command not found\n", argv[0]);
         status = 127;
     } else {
         status = cmd->fn(s, argc, argv);
+    }
+    if (redir_path != NULL) {
+        sh_session_redirect_end(s);
     }
     free_args(argv, argc);
     return status;

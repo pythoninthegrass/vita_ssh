@@ -36,6 +36,8 @@
 #include <sys/poll.h>
 #include <sys/socket.h>
 
+/* ssh_set_log_callback() lives here, not in libssh.h. */
+#include <libssh/callbacks.h>
 #include <libssh/server.h>
 #include <vita2d.h>
 
@@ -43,13 +45,29 @@
 #include <psp2/kernel/processmgr.h>
 #include <psp2/kernel/threadmgr.h>
 #include <psp2/net/netctl.h>
+#include <psp2/power.h>
 #include <psp2/sysmodule.h>
 
 #include "network.h"
 
+/*
+ * scePowerSetIdleTimerCount() is not in psp2/power.h, but the ScePower stub the
+ * app links (libScePower_stub.a, generated from Sony's own module exports)
+ * carries it: passing 0 resets the system idle countdown that drives both
+ * display-off and suspend. Ticked periodically, it is what keeps the device --
+ * and with it the WiFi -- up while nothing is touching the screen. VitaShell
+ * ticks it from its main loop for the same reason. When the tick stops, the
+ * device suspends on the system's own schedule: sockets die under suspend, so
+ * a suspended server is a server the client sees as "Host is down".
+ */
+int scePowerSetIdleTimerCount(int count);
+
 #define CONSOLE_LINES 12
 #define CONSOLE_WIDTH 108
 #define DRAW_INTERVAL_US (200 * 1000)
+/* The idle timer is reset at most once a second; the poll loop wakes every 50ms
+ * either way, so this only decides how many syscalls the loop makes. */
+#define POWER_TICK_US (1000 * 1000)
 #define SERVER_STACK (512 * 1024)
 
 typedef struct {
@@ -142,6 +160,23 @@ void net_log(const char *fmt, ...)
     sh_console_log("%s", line);
 }
 
+/* libssh's own diagnostics, into the same log as ours so the two interleave in
+ * the right order -- which is the point: our call sites can say a key exchange
+ * returned OK while libssh's protocol log says it never finished. The level is
+ * chosen at the install site; nothing there prints packet payloads, which is
+ * what keeps this safe to leave world-readable on the USB mount while a
+ * generated session password may be live. */
+static void libssh_log(int priority, const char *function,
+                       const char *buffer, void *userdata)
+{
+    (void)priority;
+    (void)userdata;
+
+    sh_console_log("libssh: %s%s%s", function ? function : "",
+                   (function != NULL && function[0] != '\0') ? ": " : "",
+                   buffer ? buffer : "");
+}
+
 static void draw_console(vita2d_pgf *font, const sh_auth_t *auth,
                          const char *ip)
 {
@@ -175,8 +210,6 @@ static void draw_console(vita2d_pgf *font, const sh_auth_t *auth,
     vita2d_pgf_draw_text(font, 16, y += 20, DIM, 1.0f, "host key");
     {
         const char *fp = auth->fingerprint[0] ? auth->fingerprint : "-";
-        int tail = 120 + (int)strlen(fp) * 8 + 16;
-
         vita2d_pgf_draw_text(font, 120, y, WHITE, 1.0f, fp);
         /*
          * Whether that key is on storage is the difference between a fingerprint
@@ -185,11 +218,14 @@ static void draw_console(vita2d_pgf *font, const sh_auth_t *auth,
          * because the log scrolls and this is the line somebody needs a day later
          * when their client starts complaining about exactly that.
          */
+        /* PGF is proportional: strlen * 8 underestimates the fingerprint's
+         * width. Give persistence its own row instead of overlapping the hash. */
+        y += 20;
         if (auth->key_persisted && auth->key_path[0] != '\0') {
-            vita2d_pgf_draw_textf(font, tail, y, DIM, 1.0f, "saved in %s",
+            vita2d_pgf_draw_textf(font, 120, y, DIM, 1.0f, "saved in %s",
                                   auth->key_path);
         } else {
-            vita2d_pgf_draw_text(font, tail, y, AMBER, 1.0f,
+            vita2d_pgf_draw_text(font, 120, y, AMBER, 1.0f,
                                  "not saved: new fingerprint each boot");
         }
     }
@@ -201,8 +237,12 @@ static void draw_console(vita2d_pgf *font, const sh_auth_t *auth,
                               "%d key(s) in %s", auth->keys_loaded,
                               auth->keys_path);
     } else if (auth->password_used) {
+        /* One line, all of it: the person standing at the Vita has to read this
+         * off a small screen and type it on another machine, so the passphrase
+         * is shown in full, spaces included, with nothing that could be mistaken
+         * for part of it (no quotes inside, no trailing punctuation). */
         vita2d_pgf_draw_textf(font, 120, y, AMBER, 1.0f,
-                              "password \"%s\" (any username)",
+                              "passphrase \"%s\" (any username)",
                               auth->password);
     } else {
         vita2d_pgf_draw_text(font, 120, y, AMBER, 1.0f,
@@ -306,16 +346,24 @@ static int on_incoming(socket_t fd, int revents, void *userdata)
     char ip[INET_ADDRSTRLEN] = "unknown";
     int index;
 
-    (void)fd;
-    (void)revents;
+    sh_console_log("incoming: fd %d, events 0x%X; accepting",
+                   (int)fd, (unsigned int)revents);
 
     /* One accept per callback. See the file header for why the loop below is
      * deliberately absent. */
     memset(&peer, 0, sizeof(peer));
     client = accept((int)fd, (struct sockaddr *)&peer, &peerlen);
     if (client < 0) {
+        int error = errno;
+        /* sceNet puts its own 0x80...... codes in errno and newlib's strerror()
+         * has no text for them -- the first of these lines read "errno
+         * -2143223389 ()" -- so print the hex, which is the only legible form. */
+        sh_console_log("accept failed: errno %d (0x%08X) %s", error,
+                       (unsigned int)error, strerror(error));
         return SSH_OK; /* spurious readiness: nothing to do */
     }
+    sh_console_log("accept returned fd %d, family %d", (int)client,
+                   (int)peer.sin_family);
     if (peer.sin_family == AF_INET) {
         const char *seen = inet_ntoa(peer.sin_addr);
 
@@ -331,12 +379,14 @@ static int on_incoming(socket_t fd, int revents, void *userdata)
         return SSH_OK;
     }
 
+    sh_console_log("peer %s: allocating SSH session", ip);
     ssh = ssh_new();
     if (ssh == NULL) {
         sh_console_log("refused %s: out of memory", ip);
         close((int)client);
         return SSH_OK;
     }
+    sh_console_log("peer %s: attaching fd %d to libssh", ip, (int)client);
     if (ssh_bind_accept_fd(bind, ssh, client) != SSH_OK) {
         sh_console_log("refused %s: %s", ip, ssh_get_error(ssh));
         ssh_free(ssh);
@@ -344,6 +394,7 @@ static int on_incoming(socket_t fd, int revents, void *userdata)
         return SSH_OK;
     }
 
+    sh_console_log("peer %s: fd attached; installing session callbacks", ip);
     sh = sh_session_new(ssh, ip);
     if (sh == NULL) {
         sh_console_log("refused %s: session allocation failed", ip);
@@ -351,6 +402,7 @@ static int on_incoming(socket_t fd, int revents, void *userdata)
         close((int)client);
         return SSH_OK;
     }
+    sh_console_log("peer %s: starting key exchange", ip);
     if (ssh_handle_key_exchange(ssh) != SSH_OK) {
         /* Reaching here and failing is normal for a port scan or a client that
          * does not speak the same kex: log it, but do not treat it as an error
@@ -363,6 +415,7 @@ static int on_incoming(socket_t fd, int revents, void *userdata)
         return SSH_OK;
     }
 
+    sh_console_log("peer %s: key exchange complete; adding to poll event", ip);
     if (ssh_event_add_session(poll_event, ssh) != SSH_OK) {
         sh_console_log("refused %s: could not join the poll loop", ip);
         sh_session_free(sh);
@@ -395,12 +448,18 @@ static ssh_bind make_bind(const sh_auth_t *auth, int port)
         ssh_bind_free(bind);
         return NULL;
     }
-    /* IMPORT_KEY hands libssh the key we already hold. SSH_BIND_OPTIONS_HOSTKEY
-     * would make libssh re-read it off storage, which fails on exactly the device
-     * where the save did not work -- and that is a server with no identity rather
-     * than a server with a warning. */
+    /* IMPORT_KEY transfers ownership to the bind. Keep the auth layer's original
+     * alive across failed listeners (notably port 22 -> 2222) and final cleanup.
+     * Import an in-memory copy so RAM-only identities work too. */
+    key = ssh_key_dup(key);
+    if (key == NULL) {
+        sh_console_log("could not copy host key for port %d", port);
+        ssh_bind_free(bind);
+        return NULL;
+    }
     if (ssh_bind_options_set(bind, SSH_BIND_OPTIONS_IMPORT_KEY, key) != 0) {
-        sh_console_log("host key rejected by libssh");
+        sh_console_log("port %d host key: %s", port, ssh_get_error(bind));
+        ssh_key_free(key); /* ownership transfers only on successful import */
         ssh_bind_free(bind);
         return NULL;
     }
@@ -438,10 +497,18 @@ static int start_pressed(void)
 static void server_loop(ssh_bind bind, const sh_auth_t *auth, vita2d_pgf *font)
 {
     unsigned long long next_draw = 0;
+    unsigned long long next_power_tick = 0;
     char ip[64];
+    /* The draw takes a copy, not the caller's: the live state can move under
+     * it (a key installed over this very session), and a const pointer cannot
+     * follow it. */
+    sh_auth_t shown;
+
+    (void)auth;
 
     local_ip(ip, sizeof(ip));
     sh_console_log("ready: ssh any@%s -p %d", ip, listen_port);
+    sh_console_log("poll: watching listener fd %d", (int)ssh_bind_get_fd(bind));
 
     while (!quit_requested) {
         int i;
@@ -464,8 +531,22 @@ static void server_loop(ssh_bind bind, const sh_auth_t *auth, vita2d_pgf *font)
             }
             status = ssh_get_status(slots[i].ssh);
             if ((status & (SSH_CLOSED | SSH_CLOSED_ERROR)) != 0) {
-                sh_console_log("session %s dropped (socket closed)",
-                               sh_session_peer(slots[i].sh));
+                /* The two bits mean different failures -- a peer that hung up
+                 * versus a protocol or crypto error on our side -- and libssh's
+                 * own error string names the reason. Without both, a dropped
+                 * session says nothing that the client did not already show.
+                 * Protocol text only: libssh never puts secrets in its error
+                 * buffer. */
+                const char *why = ssh_get_error(slots[i].ssh);
+                int has_why = why != NULL && why[0] != '\0';
+
+                sh_console_log("session %s dropped: %s 0x%X%s%s",
+                               sh_session_peer(slots[i].sh),
+                               (status & SSH_CLOSED_ERROR) ? "error"
+                                                           : "peer closed",
+                               status,
+                               has_why ? " -- " : "",
+                               has_why ? why : "");
                 slot_free(i);
             }
         }
@@ -476,8 +557,26 @@ static void server_loop(ssh_bind bind, const sh_auth_t *auth, vita2d_pgf *font)
         {
             unsigned long long now = sceKernelGetProcessTimeWide();
 
+            /* Keep the device awake while there is a reason to. The idle
+             * timer is what suspended the process mid-session and looked like
+             * "Host is down" on the client; the reset below is why it will
+             * not happen again. An active session always counts as a reason,
+             * even on a low battery -- a session dying to standby dies
+             * anyway. With nobody connected, a low battery is allowed to win
+             * and the device sleeps on its own schedule, rather than the
+             * server holding it awake until the battery is flat. */
+            if (now >= next_power_tick) {
+                if (count_sessions() > 0 || !scePowerIsLowBattery()) {
+                    scePowerSetIdleTimerCount(0);
+                }
+                next_power_tick = now + POWER_TICK_US;
+            }
             if (now >= next_draw) {
-                draw_console(font, auth, ip);
+                /* Refresh before drawing: a key installed over the session
+                 * that is on screen right now has to change what the screen
+                 * says, without waiting for a reboot. */
+                sh_auth_snapshot(&shown);
+                draw_console(font, &shown, ip);
                 next_draw = now + DRAW_INTERVAL_US;
             }
         }
@@ -524,6 +623,26 @@ static int server_thread(SceSize args, void *argp)
     sh_console_log("display and font ready (libssh %d.%d.%d)",
                    LIBSSH_VERSION_MAJOR, LIBSSH_VERSION_MINOR,
                    LIBSSH_VERSION_MICRO);
+    /* FUNCTIONS, not the quieter levels: libssh 0.12.2 has no SSH_LOG_PROTOCOL
+     * lines in kex.c, server.c, packet.c or session.c at all -- the packet
+     * trace ("packet: read type N", "Dispatching handler for packet type N",
+     * "Auth request for service ... method ...") is SSH_LOG_PACKET, and
+     * socket.c's poll trace ("Poll callback on socket 5 (POLLIN ...)"), which is
+     * the line that distinguishes a lost packet from a peer that hung up, is
+     * priority 4. Nothing at these levels prints payload bytes: ssh_get_hexa()
+     * appears in logging only under WITH_GSSAPI, which this build does not
+     * enable, so the log stays safe to leave world-readable on the USB mount
+     * while a generated password may still be live.
+     *
+     * The level and callback are thread-local storage in libssh unless the port
+     * is configured with HAVE_GCC_THREAD_LOCAL_STORAGE=OFF (see
+     * taskfiles/setup.yml), which this app's server thread needs because
+     * sceKernelCreateThread gives it no TLS block. The line below is what proves
+     * that took: without the port flag it reads back level 0 / unset here. */
+    ssh_set_log_level(SSH_LOG_FUNCTIONS);
+    ssh_set_log_callback(libssh_log);
+    sh_console_log("libssh log: level %d, callback %s", ssh_get_log_level(),
+                   ssh_get_log_callback() == NULL ? "unset" : "set");
 
     if (ssh_init() != SSH_OK) {
         sh_console_log("error: ssh_init failed");
@@ -553,6 +672,10 @@ static int server_thread(SceSize args, void *argp)
             sh_console_log("error: could not watch the listening socket");
         } else {
             sh_console_log("poll loop starting");
+            /* So the log explains the next mystery too: why the device stayed
+             * awake with nobody touching it. */
+            sh_console_log("power: idle timer reset 1/s; the device stays "
+                           "awake while the server runs");
             server_loop(bind, &auth, font);
         }
     }

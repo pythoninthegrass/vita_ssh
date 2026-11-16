@@ -132,6 +132,8 @@ target_compile_definitions(${VITA_SERVER_NAME} PRIVATE WITH_SERVER)
 # absent: nothing in the server pulls vita2d's image loaders, so those archives are
 # never searched. SceAppMgr_stub and SceCommonDialog_stub are the non-obvious ones —
 # vita2d's sharedFB path references them, so omitting either breaks the link.
+# ScePower_stub is the idle-timer tick that keeps the device awake while the
+# server runs.
 target_link_libraries(${VITA_SERVER_NAME}
   vita2d
   ssh
@@ -150,6 +152,7 @@ target_link_libraries(${VITA_SERVER_NAME}
   SceAppMgr_stub
   SceCommonDialog_stub
   ScePgf_stub
+  ScePower_stub
   m
 )
 
