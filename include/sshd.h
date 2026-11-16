@@ -26,8 +26,18 @@
 #define SSHD_PORT_PRIMARY 22
 #define SSHD_PORT_FALLBACK 2222
 #define SSHD_MAX_SESSIONS 4
-#define SSHD_LINE_MAX 512
-#define SSHD_HISTORY 12
+/* Room for a remote command that carries what authorized_keys can: an ssh-rsa
+ * 8192-bit key line is about 1.6 KB, and `ssh host "echo KEY > path"` has to
+ * hold the key AND the path in one line. The interactive editor shares the
+ * size. A command longer than this is REJECTED, never truncated -- a silent
+ * `rm -r /ux0/data/vita` with the tail missing is how a cleanup command
+ * becomes a disaster. */
+#define SSHD_LINE_MAX 4096
+/* Per-connection history: what `history` lists and what `!n` recalls. Heap
+ * copies behind the pointers, so this is pointer slots, not text. Enough to
+ * retrace a working session; not bash's 500, because every entry is a strdup
+ * on a device whose spare memory is the OS's too. */
+#define SSHD_HISTORY 32
 #define SSHD_COPY_BUFSIZE (64 * 1024)
 
 /* Where the server keeps its own files -- host key, authorized_keys -- and the
@@ -67,6 +77,17 @@ int sh_session_finished(const sh_session_t *s);
 void sh_printf(sh_session_t *s, const char *fmt, ...);
 void sh_eprintf(sh_session_t *s, const char *fmt, ...);
 void sh_write(sh_session_t *s, const char *data, size_t len);
+
+/* Redirects what sh_write() puts out into sce_path for one command -- the
+ * `command > file` and `command >> file` forms. sce_path is a resolved device
+ * path, the same string a builtin would open() for reading. Returns 0, or -1
+ * with errno set for the caller to report. Every path that calls _start calls
+ * _end, which flushes and closes. sh_eprintf keeps going to the terminal:
+ * `cmd > file` redirects stdout, and errors belong where the user is. */
+int sh_session_redirect_start(sh_session_t *s, const char *sce_path,
+                              int append);
+void sh_session_redirect_end(sh_session_t *s);
+
 void sh_prompt(sh_session_t *s);
 
 void sh_session_get_fsctx(const sh_session_t *s, sh_fsctx_t *fs);
@@ -77,6 +98,12 @@ void sh_session_request_exit(sh_session_t *s);
 const char *sh_session_user(const sh_session_t *s);
 const char *sh_session_peer(const sh_session_t *s);
 int sh_session_cols(const sh_session_t *s);
+
+/* Copies up to max history entries into entries, oldest first, and returns how
+ * many: the `history` builtin numbers them 1..n from here, and `!n` in the
+ * editor indexes the same way. Pointers stay valid until the session's next
+ * history push. */
+int sh_session_history(sh_session_t *s, const char **entries, int max);
 
 /* Set by Ctrl-C at the line editor and by the close callbacks; long-running
  * commands (rm -r, cp -r, du) check it so a stuck walk is not a hung device. */
@@ -111,8 +138,12 @@ typedef struct {
     int keys_loaded;    /* authorized_keys entries accepted */
     int keys_rejected;  /* lines in that file that were not usable */
     int key_persisted;  /* the host key is on storage: same fingerprint next boot */
-    int password_used;  /* no authorized_keys: a generated password is live */
-    char password[24];  /* shown once, on the Vita's own screen */
+    int password_used;  /* no authorized_keys: a generated passphrase is live */
+    char password[64];  /* PASSPHRASE_WORDS words, no separators; shown once, on the
+                         * Vita's own screen. Comfortably fits the longest words the
+                         * table can produce -- scripts/gen_wordlist.py --check is
+                         * what proves that, since the runtime guard can only fail
+                         * closed on an empty string. */
 } sh_auth_t;
 
 /* Loads the host key -- read from wherever it is, else generate and save it
@@ -124,6 +155,14 @@ int sh_auth_prepare(sh_auth_t *auth);
 
 /* The single prepared state, for the session callbacks. */
 const sh_auth_t *sh_server_auth(void);
+
+/* Re-reads authorized_keys when it changed on disk and returns 1 when it did.
+ * Called once per connection at session setup: the exec that installs the
+ * first key runs on a server that booted before the file existed. */
+int sh_auth_reload_if_changed(void);
+/* Copies the live auth state for drawing; the console must show a key that was
+ * installed after boot. */
+void sh_auth_snapshot(sh_auth_t *out);
 ssh_key sh_server_host_key(void);
 /* The directory a session starts in, in POSIX spelling: the one the server could
  * write, or the first that exists, or ux0's root. Valid once sh_auth_prepare()

@@ -1,0 +1,180 @@
+# The candidate pool the login passphrase's word list is chosen from.
+#
+# This is input, not the list itself: src/sshd_hostkey.c holds the 1024 words the
+# server actually draws from, and scripts/gen_wordlist.py decides which of these
+# candidates may be among them and checks the properties that makes true. Nothing
+# here reaches a binary; editing this file changes nothing until the array in the
+# source is regenerated and re-checked.
+#
+# Shape rules a candidate must satisfy to be eligible (see the script for why):
+# lowercase a-z only, three to nine letters, distinct, and not a prefix of another
+# kept word. Words that fail are dropped with a count, not a fatal error, so a
+# stray long word in the pool costs it its place and nothing else.
+#
+# Grouping is only for readability; the emitted list is shuffled deterministically
+# so a passphrase is not "six animals in a row".
+
+# animals
+badger beetle bison bobcat camel cobra condor coyote crane crow osprey falcon
+finch ferret gecko gibbon goose heron hyena impala jaguar kitten koala lemur
+lizard llama magpie mallard marmot mole moose egret newt otter owl panda parrot
+pelican pony quail rabbit raven robin salmon sparrow squid swan tapir tiger
+toucan trout turkey turtle viper weasel whale zebra donkey mule mare foal lamb
+puppy
+
+# plants, trees, fruit, food
+almond apple apricot artichoke asparagus avocado banana barley bean berry
+birch blueberry bran cabbage caramel carrot cashew celery cherry chestnut
+coconut corn cranberry date fig walnut wheat yam lemon lime mango melon mint
+millet olive onion orange oat peach peanut pear pecan pepper plum potato
+pumpkin raisin rice spinach squash tomato turnip vanilla acorn bamboo cedar
+cypress elm fern hazel hickory holly laurel maple oak palm pine poplar spruce
+willow basil dill fennel sage
+
+# colours, shapes, sizes
+amber azure beige black blue bronze brown cerise coral cream crimson cyan gold
+green grey indigo ivory jade khaki lavender lilac magenta maroon olive pink
+purple red ruby salmon silver tan teal violet white yellow
+circle cone cube crescent diamond dome hexagon line oblong octagon oval prism
+pyramid ring sphere square star triangle wide narrow broad shallow hollow
+flat round tall short thick slim
+
+# nature, weather, places
+alpine arctic avalanche bay beach blizzard boulder brook canyon cave cliff
+cloud coast crater creek delta desert dune eclipse field fjord forest glacier
+granite gully harbor hill island jungle lake meadow mesa meteor mountain
+nebula ocean oasis plateau pond quarry rain reef ridge river rock sand shore
+spring storm summit sunset swamp tidal thunder tide valley volcano waterfall
+wave weather wind aurora breeze cyclone frost gale hail horizon lagoon mist
+moon rainbow snow slope stone sun
+
+# body, clothes, worn things
+ankle arm bag belt bib boot bowl bra cap coat collar cuff dress fabric glove
+gown hat jacket jeans jersey knee lapel linen mitten muffler neck nose pocket
+quilt robe sandal scarf shirt shoe skirt sock sole sash shoulder sleeve
+slipper smock suit sweater tie torso trouser tunic vest wallet watch wool
+zipper agate bead brooch charm gem jewel
+
+# home, furniture, tools
+anvil attic axle barrel basket beam bell bench beaker bin blanket bolt book
+bottle bowl bracket broom bucket bureau cabinet candle canvas carp chain
+chair chalk chest chisel clock cloth coil comb crate cradle curtain cushion
+cutter dagger drum file flacon frame furnace gauge girder globe grater grid
+grinder hammer hinge hook jar keel kettle key knife ladder lamp lathe lever
+lock magnet mallet map mill mirror nail needle pan panel pestle piano pillar
+plank pliers plug plow pot pulley putty quill rack razor reel rope saw shelf
+shovel sink slate stove strap switch tap thimble tile tool tube urn vase vice
+wagon well whisk window wire wrench yard
+
+# travel, vehicles
+barge bicycle boat brake bus cab canoe cart coach cycle dinghy dock engine
+ferry float gangway gauge gear glue harbor hatch highway horse jet wagon
+lantern lorry motor oar pedal pilot plane port rail road rocket sail ship
+skate sledge sled track tanker taxi ticket tire torch tour train tram trolley
+truck tunnel vehicle wheel wing anchor mast deck cabin
+
+# work, school, books, music
+album archive atlas ballad banjo bass battery beacon ledger brush canvas
+carver chalk chart clerk chisel code column composer copy cymbal dance degree
+drill echo etch flute forge frame glyph grade gram guitar hammer harbor horn
+ink journal keyboard kiln laser lesson letter lyric magnify markup metric
+mixtape mural music note novel orchestra organ paint paper patent pencil photo
+piano poem prism print proof puzzle quill quote radio rafter rhythm ruler
+score script sculpt stamp studio study drum tablet tally template text type
+violin verse video viola volume wax weld written
+
+# sports, play, games
+ball bat buckle club dart dice dive fence flag goal golf judo kart kite maze
+medal chess rugby run ski snowboard sport squad surf swim tag team tennis
+tread trick vinyl walk wand archery balance bowling circuit climb count crawl
+endurance fitness relay race sprint stride
+
+# time, calendar, order
+agenda annual april august autumn week hour dawn dusk day month year noon
+midnight minute second decade epoch era future early late instant moment
+morrow nonce prime quarter season summer winter today twin june july march may
+october sunday monday tuesday friday saturday january
+
+# common verbs
+accept advise allow answer arrive ask awake bake begin belong bind bloom boil
+borrow bounce breathe bring build bump burn buy call carry catch cause change
+cheer choose claim clap clean clip cover create decide deliver dig draw dream
+drink drive drop eat earn enter exchange explain fall feed feel fetch fight
+fill find finish fix flap flow fold follow found gain gather glide glow grab
+grant greet grow guide hang harm heal hear help hide hit hold hunt invite join
+jump keep knit knock know land laugh lead learn lift light listen live load
+love mark measure meet mend mix melt move name notice observe offer open
+paint pass pick place plan play pour praise print produce pull push put race
+raise reach read record relieve repair reply rest ring roll row rub ruin run
+sail salute save saw say seek sell send serve shake shape share shine shoot
+show shrink shut sing sit sketch sleep slide slip slow smash smile snap soak
+soften solve sort sound speak spend spin split spread stand start stay steer
+step stick stir stop strike submit supply swim take talk teach tell thank
+think throw tie lift hunt vote wait wake walk want warm watch wear win wind
+wish write yield
+
+# adjectives
+able actual acute agile airy alert ample apt arid armed artful awake bashful
+beaming benign bright brisk bulky calm candid careful casual cheerful clever
+cloudy comic compact cool crisp curious curvy dainty dear dense delicate
+diligent direct distant dizzy dreamy eager early earthy easy edgy elegant
+elite even exotic famous fancy festive fierce final fitting fluffy fluid
+formal frank fresh friendly frugal full gentle genuine giant gilded glad
+glossy graceful grand great handy happy hard healthy hearty helpful high
+hollow honest humble humid hunter husky ideal idle instant inward jovial
+jolly joyful keen kind kindly lavish lazy lean light lively lovely lucky magic
+major many mellow merry mild misty modest moist nimble noble normal notable
+novel oceanic odd offset open orderly outward plain plump polite prime prompt
+proper quiet rapid ready real refined remote rich robust round ruby rugged
+sudden sundry sunny sure swift tall tender thick tidy tiny total
+usual vivid vocal warm watery wealth wide wild windy winter witty wonderful
+
+# everyday abstract nouns
+accent account aim angle appeal arch asset award basis batch bay bean benefit
+bid birth bit blast block bloom board bonnet boost border branch breath brand
+bridge budget burden cable caliber capital career case cash caveat center
+chance charge cheat chef choice classic client cluster coach cohort comfort
+comment complex concept concert conduct consent contest control corner cost
+cottage counsel credit cradle crest crime critic cycle daily datum debut
+decode defect degree delay delta demand depot desire detail device diagram
+digest digit dinner direct district dingo dock document domain draft drama
+drawer duty echo edge effect effort elbow element emblem empire enable encore
+end entry equal error essay event exam excess excuse exhibit export factor
+faculty faith fame fault feature figure filter fleet flicker flux folk force
+format forum fossil frame fruit future gallery gateway gesture gift glance
+globe glory gospel grade grain grant grasp growth guild habit half hand
+harmony haste haven health heart height herb highlight hint hire hobby humor
+index industry inlet insight kitchen intent interest invoice iron issue
+item jewel joint journey judge justice kernel label labour lack landmark
+language layer league legacy legend level link list loan locus logic lounge
+luck lunch luxury magnet manner market mastery match maze measure mentor
+method midst mildew million mine mini mode moment mosaic motive mound mount
+mural music mutual nap need neuron niche night noise north notion novel number
+object ocean offer onset opus orbit organ outset pact page panel paper parcel
+pardon part passage patent pause payment pebble peak peer person pest pilot
+pitch place plan plant plate plea plot plug poem point polar porch pledge port
+poster pound power praise prayer prefix preset prey price pride prince prize
+probe process produce profit proof proper prospect proud public pulse punch
+purpose quota query queue quest radar raft rage raid rank rate ratio realm
+reason rebel recall record region reign relay relic remedy reply report rescue
+resolve respect result return reward rhythm ribbon riddle ridge rift ritual
+roar rocket role room route ruler rumor safety sage salute sample savour scale
+scene schedule scope scrap seal search season secret sector seed segment sense
+series servant session setting shade shame shape share shell shift shore shout
+shrub sight signal silence silk silver simplex skill slumber snack snake
+soccer social solar soldier solve sound south space spark speech spell spend
+sphere spice spider split sport spread spring square stage stair stamp stance
+star start state steak steam stem step steward stick sting stock stone storm
+story strain strand street stress stride strike strip strut study stuff style
+subject suck suite summit sun supper supply surf survey swarm sweet switch
+symbol syrup system tactic tail talent target taste tax tea teach team teaser
+temple tenant tension term test text theme theory thick thief thought thumb
+ticket time tint tip tissue title toast today token tone tool topic torch
+total touch tower town trace track trade trail train transit trap travel treat
+tree trek tribe trick troop trust truth tuition tune tunnel turkey tutor twist
+type uncle under union unit universe uplift upper urban usage usual utter
+valley value vapor vault verse very vessel view village visit vital volume
+voyage wage waist ward warrant waste watch water wealth weapon wear weave week
+weight welcome welfare western wheat wheel whisper widow width wife will
+window winter wisdom wish wonder wood word work worry worth wound wreath
+wrench wrest wrist yacht yard year yield yogurt zeal zone

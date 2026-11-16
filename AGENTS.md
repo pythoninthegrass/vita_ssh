@@ -76,6 +76,14 @@
   Check with `file tile.png` → must say `8-bit colormap`; `magick identify` cannot tell you this
   (it reports 8-bit depth per channel and calls a TrueColor render a `Palette` image). Note that
   "-depth 8" alone means 8 bits *per channel*, which looks correct and is not.
+- With no `authorized_keys`, the server prints a generated **passphrase** instead: `PASSPHRASE_WORDS`
+  words from a 1024-entry table in `src/sshd_hostkey.c`, concatenated with no separators. The table's
+  three properties — exactly 2^10 entries (the generator indexes it with 10 random bits, so a short
+  table is an out-of-bounds read), no entry a prefix of another (no separators means the reader segments
+  it by eye, and a prefix pair renders two different secrets identically), and long enough to keep
+  `password[64]` in `include/sshd.h` from truncating — are all checked by
+  `python3 scripts/gen_wordlist.py --check`. Never edit the array by hand: edit `scripts/wordlist-pool.txt`,
+  run `--emit`, paste, re-check. `--check` fails on a table the pool would not produce.
 - In `taskfiles/setup.yml`, the `env -u CPPFLAGS -u LDFLAGS -u PKG_CONFIG_*` around
   libssh2's configure is load-bearing: a host Homebrew OpenSSL leaking into the probe
   passes the "Crypto library: OpenSSL" check, then fails to link against the 1.1.1 Vita
@@ -86,6 +94,7 @@
 - astral-sh/docs
 - j178/prek
 - jdx/mise
+- libssh2/libssh2
 - mrlesk/backlog.md 
 - openssl/openssl
 - websites/taskfile_dev

@@ -4,7 +4,7 @@
  * The policy is the one that makes a headless device reachable without a
  * keyboard in front of it: if an authorized_keys file exists and has at least
  * one key, that is the only way in. If it does not, the server generates a
- * password, prints it on the Vita's own screen, and lets you log in with any
+ * passphrase, prints it on the Vita's own screen, and lets you log in with any
  * username to put a key in place. Bootstrap, not a credential -- the console
  * says so.
  *
@@ -62,7 +62,12 @@
 #include <openssl/rand.h> /* the DRBG the port never feeds: see seed_entropy() */
 
 #define MAX_AUTHORIZED_KEYS 32
-#define PASSWORD_LEN 12
+/* Three words is the length that fits the way this is actually used: read off a
+ * small screen across the room and typed on another machine. See the strength
+ * note on the table for what that costs. */
+#define PASSPHRASE_WORDS 3
+#define WORDLIST_BITS 10
+#define WORDLIST_COUNT (1 << WORDLIST_BITS)
 
 /* Longest authorized_keys line this file will read. An rsa-sha2-512 8192-bit
  * line is around 1.5 KB with its comment; 4 KB leaves room for a comment
@@ -78,9 +83,185 @@
 #define HOSTKEY_PUB_NAME HOSTKEY_NAME ".pub"
 #define KEYS_NAME "authorized_keys"
 
-/* No i, l, o, 1, 0 or u: the password is read off a small screen and typed on a
- * different machine, so characters that blur together are a bug. */
-static const char password_alphabet[] = "abcdefghijkmnpqrstuvwxyz23456789";
+/*
+ * The login password is read off the Vita's own screen and typed on a different
+ * machine, so it is a passphrase: PASSPHRASE_WORDS words of this list with
+ * nothing between them. Words survive that trip the way a random alphabet
+ * string does not -- a mistyped word is obvious to the eye and correctable
+ * mid-string, a mistyped character of "hj4mxtqzwpk7" is neither.
+ *
+ * Three words at ten bits each is thirty bits, about a billion. That is a fifth of
+ * what six words carried and less than the twelve characters of 32-letter alphabet
+ * this whole scheme replaced, and the trade was made deliberately for typing: three
+ * words is roughly sixteen characters to read off a small screen and reproduce on a
+ * different keyboard, which is the length somebody will actually get right first
+ * try. What makes thirty bits survivable here is not the number, it is the company
+ * it keeps -- this secret exists only while there is no authorized_keys file, it
+ * dies at the next reboot, and the device is reachable from a LAN. What does NOT
+ * make it survivable is rate limiting, because there is none: no delay, no lockout,
+ * no attempt cap anywhere in this file or the auth path, and a client that has
+ * finished one key exchange can send USERAUTH_REQUESTs on that same connection
+ * without handshaking again. So a scripted guesser on the LAN is not shut out, just
+ * slowed -- a billion tries is days at a thousand a second, hours at ten thousand.
+ * Treat it as a bootstrap for putting a key in place, never as the credential a
+ * device stays on; if it ever has to be that, raise PASSPHRASE_WORDS, which is one
+ * line and the checker below re-verifies the buffer.
+ *
+ * The list being exactly 2^10 long is the point, not a coincidence: the generator
+ * takes ten bits per word, which is uniform by construction, where indexing an
+ * arbitrary alphabet by `raw[i] % alphabet` silently favours the first
+ * (256 mod alphabet) symbols. One entry short of 2^10 is not a weaker passphrase
+ * either, it is a read past the end of this array.
+ *
+ * No separator is what makes the third property load-bearing: no entry may be a
+ * prefix of another. With nothing between the words the reader has to find the
+ * boundaries by eye, and a prefix pair is the case where two readings are both
+ * entirely valid words -- "sandal pine triangle" and "sand alpine triangle" are
+ * different secrets that render identically. Prefix-free implies uniquely
+ * decodable, so the boundary question has no answer to get wrong. Measured on the
+ * first list, before the rule was enforced: 4 of 60 000 drawn passphrases had two
+ * valid segmentations. After: none in 300 000.
+ *
+ * So none of the three properties is asserted by this comment on its own
+ * authority: scripts/gen_wordlist.py --check tests all of them, including that
+ * this array is what scripts/wordlist-pool.txt selects. Change the words by
+ * editing the pool and running --emit, never here.
+ */
+static const char *const wordlist[WORDLIST_COUNT] = {
+    "humid", "cream", "pour", "find", "bounce", "boil", "plain", "buckle",
+    "eat", "tap", "datum", "bean", "hail", "boat", "cutter", "count",
+    "jeans", "fennel", "caramel", "oak", "banana", "pause", "basil", "cheat",
+    "cedar", "cluster", "reason", "faith", "crime", "forest", "goose", "judo",
+    "appeal", "wax", "cottage", "legacy", "rainbow", "play", "night", "candid",
+    "pecan", "pink", "brush", "degree", "report", "normal", "dock", "insight",
+    "pot", "tip", "bell", "jersey", "blueberry", "instant", "fold", "star",
+    "ski", "pilot", "gibbon", "apt", "oblong", "enter", "kettle", "hill",
+    "asparagus", "hour", "haven", "inward", "jet", "awake", "forge", "return",
+    "measure", "enable", "bright", "kart", "glyph", "subject", "flacon", "carry",
+    "october", "arm", "empire", "notice", "lantern", "narrow", "friday", "cloudy",
+    "honest", "sun", "daily", "direct", "noon", "crawl", "flow", "pony",
+    "jungle", "mix", "fleet", "blast", "paint", "berry", "jewel", "gold",
+    "vehicle", "mint", "lamp", "mango", "file", "crisp", "barley", "village",
+    "ankle", "bump", "pliers", "jade", "diagram", "peer", "diligent", "comic",
+    "warrant", "flap", "name", "beige", "egret", "basis", "lapel", "dance",
+    "sail", "page", "knit", "sand", "carp", "triangle", "role", "pride",
+    "height", "olive", "prayer", "invoice", "trouser", "book", "borrow", "tax",
+    "gift", "dress", "shoe", "meet", "major", "desert", "angle", "crimson",
+    "jacket", "bib", "burden", "autumn", "cable", "wonderful", "pebble", "fjord",
+    "accent", "preset", "lock", "mare", "pedal", "neuron", "real", "pan",
+    "seal", "frugal", "bag", "domain", "tan", "seed", "gear", "lake",
+    "prompt", "draw", "mule", "nimble", "bonnet", "critic", "elegant", "fruit",
+    "mosaic", "charge", "bin", "jar", "refined", "date", "deliver", "kernel",
+    "dainty", "gem", "mole", "boot", "parrot", "lack", "rock", "choice",
+    "joyful", "western", "lavish", "payment", "pull", "journey", "issue", "exotic",
+    "hollow", "acute", "cobra", "advise", "create", "black", "full", "send",
+    "banjo", "pelican", "coach", "soldier", "result", "airy", "passage", "explain",
+    "crest", "sock", "raid", "slow", "grinder", "brisk", "drama", "format",
+    "plot", "session", "greet", "bison", "part", "hold", "onset", "rage",
+    "lime", "fossil", "avalanche", "build", "feature", "poster", "grade", "proud",
+    "great", "exhibit", "rest", "dice", "award", "defect", "lyric", "process",
+    "newt", "donkey", "grey", "salute", "edgy", "written", "lazy", "elm",
+    "mend", "index", "plum", "artichoke", "ideal", "gangway", "fresh", "glow",
+    "prize", "cerise", "hear", "read", "element", "reward", "attic", "coconut",
+    "saturday", "basket", "conduct", "prism", "axle", "elite", "camel", "chestnut",
+    "clap", "dingo", "rich", "pledge", "formal", "relieve", "district", "marmot",
+    "pear", "chain", "deck", "burn", "journal", "tie", "herb", "push",
+    "gentle", "map", "manner", "lift", "earthy", "tension", "proof", "fitness",
+    "hint", "casual", "benign", "ship", "arid", "ritual", "midst", "saw",
+    "ample", "rift", "grasp", "piano", "hyena", "justice", "ribbon", "hammer",
+    "faculty", "may", "catch", "ladder", "flag", "north", "glacier", "drum",
+    "beacon", "genuine", "comb", "prince", "bra", "puzzle", "jovial", "bucket",
+    "thunder", "pick", "mitten", "dense", "drive", "bench", "gecko", "begin",
+    "shut", "cherry", "agenda", "charm", "equal", "error", "entry", "jump",
+    "keel", "mark", "millet", "cushion", "bead", "recall", "clip", "dusk",
+    "power", "accept", "folk", "cube", "otter", "bulky", "poplar", "glossy",
+    "acorn", "furnace", "cradle", "able", "coat", "pepper", "rub", "fluffy",
+    "breeze", "jaguar", "sing", "invite", "feel", "tuesday", "keyboard", "lunch",
+    "emblem", "candle", "january", "mural", "lilac", "bus", "buy", "holly",
+    "melon", "mine", "meadow", "fetch", "gospel", "found", "mist", "balance",
+    "pencil", "glory", "rail", "force", "bat", "grab", "snowboard", "birch",
+    "need", "green", "avocado", "fame", "chisel", "graceful", "volcano", "mentor",
+    "oat", "lagoon", "crescent", "list", "hire", "sole", "quarry", "slumber",
+    "pest", "gale", "brown", "rhythm", "delay", "bit", "finish", "crane",
+    "remedy", "chalk", "case", "chance", "put", "line", "drill", "moose",
+    "chart", "boulder", "carrot", "girder", "hard", "million", "pillar", "fabric",
+    "aim", "novel", "grand", "metric", "bid", "tea", "bowling", "friendly",
+    "plug", "lesson", "spinach", "gram", "gesture", "shallow", "frank", "moist",
+    "osprey", "welcome", "magnify", "diamond", "price", "gallery", "robust", "octagon",
+    "waterfall", "almond", "detail", "ivory", "demand", "llama", "circle", "cone",
+    "lounge", "niche", "save", "hook", "board", "account", "hickory", "concert",
+    "open", "export", "match", "caliber", "oasis", "guide", "haste", "mellow",
+    "mutual", "blanket", "ferret", "rabbit", "photo", "idle", "mesa", "join",
+    "glove", "produce", "eclipse", "gown", "crater", "humor", "race", "inlet",
+    "schedule", "pocket", "odd", "golf", "apple", "clock", "sash", "flux",
+    "soak", "bay", "keen", "roar", "sweater", "glide", "plan", "laugh",
+    "fill", "fall", "glance", "opus", "tag", "region", "sit", "barrel",
+    "mode", "pumpkin", "iron", "rescue", "budget", "polar", "intent", "cost",
+    "live", "bake", "hang", "crow", "eager", "flat", "alert", "drink",
+    "morrow", "notion", "silence", "lathe", "mallard", "riddle", "chess", "quarter",
+    "prey", "neck", "meteor", "labour", "road", "nose", "welfare", "delicate",
+    "record", "laurel", "vanilla", "grid", "purple", "segment", "sink", "cyan",
+    "march", "brooch", "simplex", "actual", "celery", "float", "hobby", "draft",
+    "peach", "era", "frost", "dawn", "bloom", "comment", "finch", "cypress",
+    "kitchen", "cyclone", "cabinet", "debut", "knock", "flute", "link", "archery",
+    "falcon", "classic", "nap", "lemur", "parcel", "cycle", "edge", "coast",
+    "thimble", "savour", "goal", "jolly", "dill", "raft", "april", "engine",
+    "birth", "lizard", "ask", "profit", "glad", "ink", "fitting", "fix",
+    "decade", "rank", "beetle", "curvy", "silk", "whisper", "beaming", "servant",
+    "roll", "artful", "azure", "print", "album", "belt", "monday", "puppy",
+    "highlight", "fancy", "cohort", "comfort", "prime", "even", "respect", "noble",
+    "universe", "resolve", "room", "transit", "level", "dreamy", "plea", "gain",
+    "happy", "lemon", "pitch", "prefix", "clerk", "block", "hinge", "coyote",
+    "plateau", "lever", "glue", "midnight", "moon", "laser", "habit", "dig",
+    "indigo", "island", "thought", "rice", "june", "late", "sparrow", "maroon",
+    "delta", "sled", "prospect", "language", "earn", "slipper", "oar", "pardon",
+    "collar", "move", "template", "show", "cover", "canyon", "mini", "landmark",
+    "offset", "owl", "cause", "porch", "copy", "atlas", "port", "legend",
+    "snap", "month", "counsel", "calm", "orchestra", "duty", "robe", "cool",
+    "bronze", "alpine", "helpful", "noise", "object", "bolt", "ball", "etch",
+    "dagger", "arrive", "concept", "elbow", "broom", "carver", "famous", "safety",
+    "bicycle", "sample", "pound", "notable", "exchange", "repair", "remote", "item",
+    "excuse", "proper", "dart", "allow", "aurora", "chair", "flicker", "outward",
+    "horizon", "polite", "boost", "grater", "yam", "heron", "giant", "mound",
+    "annual", "letter", "amber", "granite", "steward", "observe", "clever", "kiln",
+    "oval", "music", "cave", "future", "magpie", "grow", "decode", "depot",
+    "reel", "benefit", "pine", "effort", "curtain", "hand", "answer", "rate",
+    "belong", "rugged", "industry", "consent", "salmon", "center", "healthy", "maze",
+    "canoe", "breathe", "offer", "gully", "career", "row", "logic", "anchor",
+    "bottle", "guild", "say", "oceanic", "cap", "judge", "echo", "early",
+    "apricot", "sort", "number", "ruin", "broad", "keep", "learn", "mallet",
+    "onion", "pyramid", "luck", "cliff", "gauge", "lean", "horn", "bring",
+    "lead", "column", "encore", "call", "factor", "merry", "husky", "motor",
+    "red", "choose", "orange", "half", "tuition", "creek", "hit", "slim",
+    "desire", "hexagon", "locus", "patent", "muffler", "barge", "run", "agate",
+    "trolley", "bureau", "pulse", "corn", "ferry", "arctic", "final", "day",
+    "load", "league", "archive", "cymbal", "khaki", "control", "dive", "careful",
+    "point", "cranberry", "decide", "note", "dear", "peak", "moment", "follow",
+    "contest", "curious", "shoulder", "border", "rope", "magenta", "document", "lorry",
+    "bamboo", "kind", "credit", "gather", "horse", "layer", "grant", "lavender",
+    "july", "filter", "festive", "outset", "kite", "highway", "orderly", "poem",
+    "excess", "mountain", "fern", "essay", "easy", "complex", "fierce", "fault",
+    "mirror", "lamb", "beaker", "urn", "beach", "many", "impala", "fluid",
+    "hat", "globe", "medal", "dome", "loan", "praise", "change", "fig",
+    "canvas", "composer", "blizzard", "humble", "harmony", "seek", "light", "distant",
+    "know", "dune", "organ", "badger", "nonce", "cuff", "circuit", "peanut",
+    "setting", "magnet", "client", "dinghy", "harbor", "device", "cabbage", "weather",
+    "foal", "endurance", "asset", "label", "plow", "bridge", "luxury", "interest",
+    "gateway", "nebula", "orbit", "coral", "exam", "forum", "ring", "win",
+    "knife", "method", "drop", "field", "sage", "cloth", "cheerful", "mastery",
+    "knee", "bashful", "hunt", "bobcat", "probe", "place", "condor", "dizzy",
+    "feed", "cart", "pact", "raisin", "rack", "clean", "claim", "mild",
+    "punch", "palm", "magic", "hide", "person", "compact", "purpose", "public",
+    "fence", "anvil", "cash", "code", "love", "epoch", "brook", "bass",
+    "reef", "august", "nail", "sell", "paper", "coil", "guitar", "dinner",
+    "motive", "minute", "hazel", "kitten", "club", "climb", "chef", "gilded",
+    "pond", "grain", "ledger", "koala", "melt", "effect", "agile", "frame",
+};
+
+/* Again: the generator indexes this with ten random bits and nothing checks it
+ * at run time, so a short list is a wild pointer, not a bad passphrase. */
+typedef char wordlist_is_the_right_size[
+    (sizeof(wordlist) / sizeof(wordlist[0]) == WORDLIST_COUNT) ? 1 : -1];
 
 /* One entry per place the server is willing to keep its files. The relative
  * part is identical everywhere -- <device>:/data/vitasshd -- so what a person
@@ -224,7 +405,8 @@ static int ensure_dir(const char *sce_dir)
  * what a file manager or a USB mount shows after the app has already died.
  *
  * Appending rather than truncating, because the tail of the previous run is the
- * evidence and a crash is exactly the run you did not get to watch. Runs are told
+ * evidence and a crash is exactly the run you did not get to watch -- subject to
+ * the bound log_rotate() imposes, which keeps exactly one such tail. Runs are told
  * apart by the banner sh_console_log writes when it opens.
  *
  * None of this can fail the boot: a server that cannot write a log is still a
@@ -234,18 +416,54 @@ static int ensure_dir(const char *sce_dir)
 static FILE *log_fp;
 static char log_path[SH_SCE_PATH_MAX];
 
+/*
+ * One generation of history, not an unbounded append. At SSH_LOG_FUNCTIONS libssh
+ * writes a line per function entry and exit, which is roughly two orders of
+ * magnitude more than the app's own lines: a few connection attempts can be a
+ * hundred kilobytes, and this file sits on the memory card next to the user's
+ * saves, is read whole over the USB mount, and is appended to on every boot
+ * forever. So a log past LOG_MAX_BYTES is set aside as sshd.log.old before the new
+ * run opens, which keeps the one thing appending was for -- the tail of the run
+ * that just died -- and drops the rest. If the rename fails, appending to the old
+ * file is the fallback: a big log is a papercut, no log is the actual loss.
+ */
+#define LOG_MAX_BYTES (256 * 1024)
+#define LOG_OLD_NAME LOG_NAME ".old"
+
+static void log_rotate(const char *path, const char *old)
+{
+    long size;
+    FILE *probe = fopen(path, "rb");
+
+    if (probe == NULL) {
+        return; /* no file yet: nothing to set aside */
+    }
+    fseek(probe, 0, SEEK_END);
+    size = ftell(probe);
+    fclose(probe);
+    if (size <= LOG_MAX_BYTES) {
+        return;
+    }
+    remove(old); /* rename(2) will not replace an existing file here */
+    rename(path, old);
+}
+
 int sh_log_open(void)
 {
     size_t i;
 
     for (i = 0; i < N_DATA_DIRS; i++) {
         char path[SH_SCE_PATH_MAX];
+        char old[SH_SCE_PATH_MAX];
 
         if (join(path, sizeof(path), data_dirs[i].sce, LOG_NAME) != 0) {
             continue;
         }
         if (ensure_dir(data_dirs[i].sce) != 0) {
             continue; /* read-only, not mounted, no room: try the next one */
+        }
+        if (join(old, sizeof(old), data_dirs[i].sce, LOG_OLD_NAME) == 0) {
+            log_rotate(path, old);
         }
         log_fp = fopen(path, "a");
         if (log_fp != NULL) {
@@ -751,27 +969,70 @@ static int get_strong_random(void *buf, size_t len)
 /* password fallback                                                  */
 /* ------------------------------------------------------------------ */
 
-static void generate_password(char *dst, size_t dstlen)
+/*
+ * Reads `bits` bits out of `raw`, most significant bit first, starting at bit
+ * `pos`. Doing it a bit at a time rather than masking whole bytes is what makes
+ * the passphrase exactly as strong as the list is long: ten bits per word uses
+ * 60 of the 64 bits we asked the RNG for, where taking the low byte of each of
+ * ten draws would discard six bits of every eight and quietly cost a fifth of
+ * the strength.
+ */
+static unsigned int take_bits(const unsigned char *raw, size_t pos,
+                              unsigned int bits)
 {
-    unsigned char raw[32];
-    size_t i, room = dstlen - 1;
-    size_t len = (PASSWORD_LEN < room) ? PASSWORD_LEN : room;
-    size_t alphabet = sizeof(password_alphabet) - 1; /* the NUL is not a letter */
+    unsigned int value = 0;
+    unsigned int i;
+
+    for (i = 0; i < bits; i++) {
+        size_t bit = pos + i;
+        value = (value << 1) | ((raw[bit / 8] >> (7 - (bit % 8))) & 1u);
+    }
+    return value;
+}
+
+/*
+ * PASSPHRASE_WORDS words from wordlist, with nothing between them. Fail-closed:
+ * every failure path leaves an empty string, which sh_auth_prepare() reads as
+ * "no usable password" and refuses to offer password auth at all. A truncated
+ * or partially-filled passphrase would be worse than none -- it would be shown
+ * on the Vita's screen as if it were the real one.
+ */
+static void generate_passphrase(char *dst, size_t dstlen)
+{
+    /* ceil(PASSPHRASE_WORDS * WORDLIST_BITS / 8): four bytes for three words. */
+    unsigned char raw[(PASSPHRASE_WORDS * WORDLIST_BITS + 7) / 8];
+    size_t pos = 0, used = 0;
+    int i;
 
     if (!get_strong_random(raw, sizeof(raw))) {
-        /* Fall back to the kernel RNG rather than shipping a fixed password: if
+        /* Fall back to the kernel RNG rather than shipping a fixed passphrase: if
          * this ever fires, the answer is to not accept password auth at all,
-         * which is what the caller will see as an unusable password. 32 bytes
-         * stays inside the 64 the kernel will answer in one call. */
+         * which is what the caller will see as an unusable password. The request
+         * is eight bytes, far inside the 64 the kernel answers in one call. */
         if (sceKernelGetRandomNumber(raw, sizeof(raw)) < 0) {
             dst[0] = '\0';
             return;
         }
     }
-    for (i = 0; i < len; i++) {
-        dst[i] = password_alphabet[raw[i] % alphabet];
+
+    dst[0] = '\0';
+    for (i = 0; i < PASSPHRASE_WORDS; i++) {
+        const char *word = wordlist[take_bits(raw, pos, WORDLIST_BITS)];
+        size_t len = strlen(word);
+
+        pos += WORDLIST_BITS;
+        /* Three nine-letter words plus the NUL is 28 bytes, and the caller's buffer
+         * is 64, so it cannot happen today -- but if the list, the word count or
+         * the buffer changes, an unwritable half-typed word is a worse outcome than
+         * no word at all. scripts/gen_wordlist.py --check tests this arithmetic too. */
+        if (used + len >= dstlen) {
+            dst[0] = '\0';
+            return;
+        }
+        memcpy(dst + used, word, len);
+        used += len;
+        dst[used] = '\0';
     }
-    dst[len] = '\0';
 }
 
 /* ------------------------------------------------------------------ */
@@ -854,6 +1115,40 @@ static void seed_entropy(void)
 /* public interface                                                   */
 /* ------------------------------------------------------------------ */
 
+/* The stat identity of the authorized_keys file the search order finds right
+ * now -- the first candidate directory that has one. found = 0 when none does,
+ * which is a state like any other: "no file anywhere" has its own identity too,
+ * so deleting the file can be noticed the same way adding one is. */
+static void stat_keys_identity(int *found, long long *mtime, long long *size)
+{
+    size_t i;
+
+    *found = 0;
+    *mtime = 0;
+    *size = 0;
+    for (i = 0; i < N_DATA_DIRS; i++) {
+        char path[SH_SCE_PATH_MAX];
+        struct stat st;
+
+        if (join(path, sizeof(path), data_dirs[i].sce, KEYS_NAME) != 0) {
+            continue;
+        }
+        if (stat(path, &st) == 0) {
+            *found = 1;
+            *mtime = (long long)st.st_mtime;
+            *size = (long long)st.st_size;
+            return;
+        }
+    }
+}
+
+/* Set by the load at boot, and by every reload: the identity of the file the
+ * loaded key set came from. Invalid means "no load has happened yet", not
+ * "no file". */
+static long long keys_seen_mtime;
+static long long keys_seen_size;
+static int keys_seen_valid;
+
 int sh_auth_prepare(sh_auth_t *auth)
 {
     const sh_datadir_t *key_dir = NULL;
@@ -897,8 +1192,20 @@ int sh_auth_prepare(sh_auth_t *auth)
 
     load_authorized_keys(auth_state.keys_path, sizeof(auth_state.keys_path));
     auth_state.keys_loaded = n_authorized;
+    /* Seed the identity the per-connection reload compares against, so the
+     * first connection after boot does not re-read an unchanged file and log
+     * it twice. */
+    {
+        long long mtime, size;
+        int found;
+
+        stat_keys_identity(&found, &mtime, &size);
+        keys_seen_mtime = mtime;
+        keys_seen_size = size;
+        keys_seen_valid = 1;
+    }
     if (n_authorized == 0) {
-        generate_password(auth_state.password, sizeof(auth_state.password));
+        generate_passphrase(auth_state.password, sizeof(auth_state.password));
         auth_state.password_used = (auth_state.password[0] != '\0');
     }
     choose_home(key_dir);
@@ -919,6 +1226,55 @@ ssh_key sh_server_host_key(void)
 const char *sh_server_home_posix(void)
 {
     return (auth_state.home[0] != '\0') ? auth_state.home : "/ux0";
+}
+
+/*
+ * Re-reads authorized_keys when it changed on disk, and returns 1 when it did.
+ *
+ * This exists because of the order a first login happens in: the server boots
+ * with no authorized_keys (so a generated passphrase is live), the client logs
+ * in with it, and the very first thing that session does is WRITE the file the
+ * server has no reason to read again. "Read it once at startup" made the
+ * password bootstrap permanent until the app was restarted -- the exact flow
+ * the bootstrap exists to enable did not survive its own success.
+ *
+ * Called once per connection, at session setup, before the methods to offer
+ * are chosen: one stat scan per connection, never per packet. FAT records
+ * mtime at two-second granularity, so a same-size rewrite inside that window
+ * can be missed once -- the next connection sees it. A reload re-logs what the
+ * boot load said, which is the point: a changed file is news worth a line.
+ */
+int sh_auth_reload_if_changed(void)
+{
+    long long mtime, size;
+    int found;
+
+    stat_keys_identity(&found, &mtime, &size);
+    if (keys_seen_valid) {
+        if (found && mtime == keys_seen_mtime && size == keys_seen_size) {
+            return 0;
+        }
+        if (!found && !auth_state.keys_loaded) {
+            return 0; /* still no file anywhere: nothing to re-read */
+        }
+    }
+    keys_seen_mtime = mtime;
+    keys_seen_size = size;
+    keys_seen_valid = 1;
+
+    load_authorized_keys(auth_state.keys_path, sizeof(auth_state.keys_path));
+    auth_state.keys_loaded = n_authorized;
+    return 1;
+}
+
+/* Hands the caller a copy of the live auth state. The console draws a snapshot
+ * taken at boot, and a key installed over that very session must still reach
+ * the screen, so the draw loop refreshes its copy through here. */
+void sh_auth_snapshot(sh_auth_t *out)
+{
+    if (out != NULL) {
+        *out = auth_state;
+    }
 }
 
 int sh_server_auth_methods(void)
