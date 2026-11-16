@@ -1212,7 +1212,9 @@ static void on_channel_eof(ssh_session session, ssh_channel channel,
 
     (void)session;
     (void)channel;
-    if (s != NULL) {
+    /* An exec client with no stdin sends EOF right behind the request; that only
+     * means "no more input" and must not stop the command it asked for. */
+    if (s != NULL && (s->sftp != NULL || s->shell)) {
         if (s->sftp != NULL && !s->finished) {
             sh_console_log("sftp: client sent EOF");
         }
