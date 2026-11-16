@@ -208,7 +208,7 @@ The server speaks SFTP, so `sftp` works as usual and `scp` works through its SFT
 sftp -P 2222 -i ~/.ssh/id_ed25519 vita@192.168.1.50
 
 scp -s -P 2222 -i ~/.ssh/id_ed25519 game.vpk vita@192.168.1.50:/ux0/data/
-scp -s -P 2222 -i ~/.ssh/id_ed25519 vita@192.168.1.50:/ux0/data/sshd.log .
+scp -s -P 2222 -i ~/.ssh/id_ed25519 vita@192.168.1.50:/ux0/data/vitasshd/sshd.log .
 ```
 
 Paths are the same POSIX paths the shell uses: `/` lists the devices, `/ux0` is the memory card, and a session starts in `ux0:data/vitasshd`. `-s` selects scp's SFTP mode, which is the default from OpenSSH 9.0; the legacy scp protocol (`scp -O`) is not supported, because the shell has no `scp` command to run.
@@ -217,7 +217,7 @@ What to expect, because the Vita is not a Unix filesystem:
 
 - An upload is written to `NAME.part` and renamed over `NAME` when the transfer finishes, so a transfer that is cut off leaves nothing under the real name, and the `.part` file is removed when the session ends.
 - Every file reports owner 0:0 and mode 0644 (directories 0755, read-only devices 0444 and 0555), and nothing is ever reported as a symlink.
-- `chmod` and `chown` fail with "Operation unsupported" instead of pretending to work. A request for the mode a file already shows succeeds, which is what `scp` sends after an upload, so `scp` of a 0644 file completes. A file with another mode (0755, 0600) arrives intact and then `scp` reports an error.
+- `chmod` and `chown` fail with "Operation unsupported" instead of pretending to work. `scp` sends a chmod after every upload, so each upload prints `scp: remote fsetstat: Operation unsupported`; the file still arrives byte for byte and `scp` exits 0, for a 0644 file and for a 0755 one alike (checked with OpenSSH 10.6 on macOS).
 - File times cannot be set, so `scp -p` and `sftp put -p` copy the data and leave the times alone.
 - `rename` works within a device. Across devices it is refused rather than copied, and renaming onto a directory is refused. `sftp`'s `rename` replaces an existing file.
 - At most four sessions run at once; a fifth connection is refused.
