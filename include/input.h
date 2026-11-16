@@ -10,4 +10,7 @@ int kb(const uint16_t* title, uint16_t* initial_text, uint16_t* output_buffer, i
 
 void utf16_to_utf8(const uint16_t* src, char* dst, size_t dst_size);
 
+/* Widens a recalled entry for the IME's UTF-16 initialText; dst is MAX_TEXT_LENGTH + 1 wide. */
+void utf8_to_utf16(const char* src, uint16_t* dst);
+
 #endif

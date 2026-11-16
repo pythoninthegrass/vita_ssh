@@ -448,6 +448,25 @@ void terminal_print(const char *text) {
     }
 }
 
+void terminal_print_history(const char *entry, int position, int total) {
+    if (entry == NULL) return;
+
+    char buffer[MAX_LINE_LENGTH];
+    unsigned int old_color = current_color;
+
+    /* An empty entry is the "new command" slot past the newest one. */
+    if (entry[0] == '\0') {
+        current_color = RGBA8(150, 150, 150, 255);
+        snprintf(buffer, sizeof(buffer), "history: [new] (%d/%d)", position, total);
+    } else {
+        current_color = RGBA8(255, 255, 0, 255);
+        snprintf(buffer, sizeof(buffer), "history: [%d/%d] %s", position, total, entry);
+    }
+
+    terminal_print(buffer);
+    current_color = old_color;
+}
+
 void terminal_print_color(const char *text, unsigned int color) {
     if (in_interactive_mode) {
         return;
