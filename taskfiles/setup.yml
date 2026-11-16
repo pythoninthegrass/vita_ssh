@@ -228,6 +228,14 @@ tasks:
         mkdir -p "$build"
         tar xf "$base/$tarball" -C "$base"
         ( cd "$src" && patch -p1 -s < "$root/libs/libssh/vita.patch" )
+        # HAVE_GCC_THREAD_LOCAL_STORAGE=OFF below: priv.h turns LIBSSH_THREAD into
+        # __thread when config.h defines it, and log.c keeps the log level, the log
+        # callback and its userdata in LIBSSH_THREAD statics. A thread made by
+        # sceKernelCreateThread -- not pthread_create -- has no TLS block to write
+        # to, so ssh_set_log_level()/ssh_set_log_callback() look like they
+        # succeeded while the library still reads level 0 with no callback: not one
+        # protocol line, ever. Those three variables are the macro's only users and
+        # a single thread of this app touches libssh, so plain globals are right.
         env -u CPPFLAGS -u CFLAGS -u CXXFLAGS -u LDFLAGS -u LIBS \
           -u PKG_CONFIG_PATH -u PKG_CONFIG_LIBDIR \
           cmake -S "$src" -B "$build" \
@@ -239,7 +247,8 @@ tasks:
             -DWITH_NACL=OFF \
             -DOPENSSL_ROOT_DIR={{.VITASDK}}/arm-vita-eabi \
             -DOPENSSL_USE_STATIC_LIBS=TRUE \
-            -DTHREADS_HAVE_PTHREAD_ARG=NO > "$build/configure.log" 2>&1 \
+            -DTHREADS_HAVE_PTHREAD_ARG=NO \
+            -DHAVE_GCC_THREAD_LOCAL_STORAGE=OFF > "$build/configure.log" 2>&1 \
             || { tail -20 "$build/configure.log" >&2; exit 1; }
         # FindOpenSSL will happily return /opt/homebrew/opt/openssl@3, and a
         # stale cache repeats it, so assert the resolved path instead of grepping

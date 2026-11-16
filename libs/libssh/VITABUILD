@@ -18,6 +18,9 @@ build() {
   # BUILD_SHARED_LIBS is the real option name; BUILD_SHARED_LIB is accepted by
   # cmake as an unused variable and quietly builds the shared lib anyway.
   # POSITION_INDEPENDENT_CODE must be off for the same reason as the patch above.
+  # HAVE_GCC_THREAD_LOCAL_STORAGE=OFF keeps log.c's log level, callback and
+  # userdata out of __thread storage: sceKernelCreateThread gives a thread no TLS
+  # block, so setting them would be silent and libssh would log nothing.
   cmake -S . -B build \
     -DCMAKE_TOOLCHAIN_FILE=$VITASDK/share/vita.toolchain.cmake \
     -DCMAKE_BUILD_TYPE=Release \
@@ -27,7 +30,8 @@ build() {
     -DWITH_NACL=OFF \
     -DOPENSSL_ROOT_DIR=$VITASDK/arm-vita-eabi \
     -DOPENSSL_USE_STATIC_LIBS=TRUE \
-    -DTHREADS_HAVE_PTHREAD_ARG=NO
+    -DTHREADS_HAVE_PTHREAD_ARG=NO \
+    -DHAVE_GCC_THREAD_LOCAL_STORAGE=OFF
   make -C build -j$(nproc)
 }
 
