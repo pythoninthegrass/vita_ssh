@@ -77,6 +77,14 @@ typedef struct {
 } slot_t;
 
 static ssh_event poll_event;
+
+void sh_server_poll_slice(int ms)
+{
+    if (poll_event != NULL) {
+        ssh_event_dopoll(poll_event, ms);
+    }
+}
+
 static slot_t slots[SSHD_MAX_SESSIONS];
 static int listen_port;
 static volatile int quit_requested;

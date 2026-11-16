@@ -44,6 +44,11 @@
  * the stack, and a Vita thread's stack is whatever we asked sceKernelCreateThread
  * for, not the megabytes a desktop process gets. */
 #define WRITE_CHUNK 4096
+/* Seconds a command's output may wait on a client that keeps its window shut
+ * before the session is dropped. */
+#define WINDOW_STALL_S 30
+/* Length of one poll slice while waiting for the window to reopen. */
+#define WINDOW_POLL_MS 50
 
 /* This newlib ships no NAME_MAX (sshd_builtins.c defines the same value); 255
  * is the POSIX minimum and FAT's own limit for long names. */
@@ -97,6 +102,7 @@ struct sh_session {
     int authenticated;
     int exit_requested;
     int finished;
+    int in_pump; /* set while sh_session_pump() runs a command: only then may a write wait on the poll loop */
     time_t sftp_closing; /* when the sftp channel close was started, 0 before */
 
     /* Set by the editor on Enter, consumed by sh_session_pump(). */
@@ -119,6 +125,31 @@ struct sh_session {
 /* output                                                             */
 /* ------------------------------------------------------------------ */
 
+/* Waits for the client to open its window again, servicing every session's
+ * socket meanwhile. Returns 0 once there is room, -1 when the client is gone or
+ * has kept the window shut for WINDOW_STALL_S; the session is then marked
+ * finished so the running command stops writing. */
+static int wait_for_window(sh_session_t *s)
+{
+    time_t start = time(NULL);
+
+    while (ssh_channel_window_size(s->channel) == 0) {
+        if (s->finished ||
+            (ssh_get_status(s->ssh) & (SSH_CLOSED | SSH_CLOSED_ERROR)) != 0) {
+            s->finished = 1;
+            return -1;
+        }
+        if (time(NULL) - start >= WINDOW_STALL_S) {
+            sh_console_log("%s stopped reading for %d s; dropping the session",
+                           sh_session_peer(s), WINDOW_STALL_S);
+            s->finished = 1;
+            return -1;
+        }
+        sh_server_poll_slice(WINDOW_POLL_MS);
+    }
+    return 0;
+}
+
 static void chan_write_raw(sh_session_t *s, const char *data, size_t len)
 {
     size_t off = 0;
@@ -126,7 +157,22 @@ static void chan_write_raw(sh_session_t *s, const char *data, size_t len)
     while (off < len) {
         uint32_t want = (uint32_t)((len - off > WRITE_CHUNK) ? WRITE_CHUNK
                                                              : (len - off));
-        int n = ssh_channel_write(s->channel, data + off, want);
+        int n;
+
+        if (s->in_pump) {
+            /* Never hand libssh more than the window: a write past it would park
+             * the whole server inside libssh until the client reads. */
+            uint32_t window;
+
+            if (wait_for_window(s) != 0) {
+                return;
+            }
+            window = ssh_channel_window_size(s->channel);
+            if (want > window) {
+                want = window;
+            }
+        }
+        n = ssh_channel_write(s->channel, data + off, want);
 
         if (n <= 0) {
             /* The channel is gone. Dropping the rest is the only safe answer:
@@ -1473,7 +1519,11 @@ int sh_session_pump(sh_session_t *s)
         s->pending[0] = '\0';
         clear_line(s);
         {
-            int status = sh_execute_line(s, line);
+            int status;
+
+            s->in_pump = 1;
+            status = sh_execute_line(s, line);
+            s->in_pump = 0;
 
             if (!s->shell) {
                 /* exec mode: the client asked for one command, so report its

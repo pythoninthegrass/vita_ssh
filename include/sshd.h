@@ -176,6 +176,15 @@ int sh_auth_check_pubkey(const sh_auth_t *auth, const char *user, ssh_key key);
 int sh_auth_check_password(const sh_auth_t *auth, const char *user,
                            const char *password);
 
+/* --- the poll loop (sshd.c) --- */
+
+/* Runs one slice of the server's poll event, waiting at most ms. A command that
+ * has to wait for a client (an exec's output with the client's window shut) calls
+ * this instead of blocking inside libssh, so every session's socket keeps being
+ * read. Only from a command run by sh_session_pump(), never from a libssh
+ * callback: the poll loop is not reentrant from inside its own callbacks. */
+void sh_server_poll_slice(int ms);
+
 /* --- the Vita's own screen (console code in sshd.c) --- */
 
 void sh_console_log(const char *fmt, ...);

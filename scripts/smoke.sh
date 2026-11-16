@@ -452,6 +452,14 @@ mkdir $REMOTE/d2" >/dev/null
       skip "VPK put" "build/ssh_server_vita.vpk missing, run task build"
     fi
 
+    # TASK-002.03.02: exec output is paced by the client's window, so a 12 MB cat must arrive whole.
+    ssh -p "$PORT" $SSHO "$HOST" "cat $X/over10s.bin" > "$LOCAL/over10.cat" 2>"$ERRF"
+    check "exec cat of 12 MB arrives byte-identical" ok "$(same "$LOCAL/over10.bin" "$LOCAL/over10.cat")"
+    # A reader that stops reading must not hold the server: it drops that session after ~30 s,
+    # then answers the next one. The pipe to sleep keeps ssh's stdout full without closing it.
+    ssh -p "$PORT" $SSHO "$HOST" "cat $X/over10s.bin" 2>"$ERRF" | sleep 45
+    ssh -p "$PORT" $SSHO "$HOST" "pwd" >/dev/null 2>&1; check "server answers after a reader stalled (-> 0)" 0 $?
+
     # AC3: the client must be told why. One session runs every refused operation (a "-"
     # prefix keeps the batch going), so there is no exit status per command: a refusal is
     # the client printing text after the echoed command, and a bare "Failure" is graded
