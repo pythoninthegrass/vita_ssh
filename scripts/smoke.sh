@@ -126,7 +126,7 @@ run_pty() {
   # A subshell on purpose: the FIFO fds (3/4) and the two ssh children close
   # with it, so a failed check cannot leak a session into the caller.
   (
-    local D SSHA SSHB
+    local D SSHA SSHB SSHC
     PASS=0; FAIL=0
     D=$(mktemp -d)
     mkfifo "$D/a.in" "$D/b.in"
@@ -153,6 +153,15 @@ run_pty() {
     printf 'echo GARBAGE\x15echo after-cu\r' >&3; sleep 1
     printf 'echo one two\x17three\r' >&3; sleep 1
 
+    # AC8: cursor editing -- each case only runs if the edit landed where the
+    # cursor was, so the marker line is the command's own output
+    printf 'cho smoke-ca\x01e\r' >&3; sleep 1                     # Ctrl-A, insert at start
+    printf 'echo smoke-ce\x01\x05X\r' >&3; sleep 1                 # Ctrl-E back to the end
+    printf 'echo smoke-lfg\x1b[D\x1b[DZ\r' >&3; sleep 1           # Left twice, insert mid-line
+    printf 'echo smoke-rt\x01\x1b[C\x1b[C\x1b[C\x1b[C\x1b[CQ\r' >&3; sleep 1  # Right x5 over "echo "
+    printf 'echo smoke-bsZ1\x1b[D\x7f\r' >&3; sleep 1             # backspace mid-line
+    printf 'echo smoke-cd\x04\r' >&3; sleep 1                      # Ctrl-D on a non-empty line is a no-op
+
     # AC8: Ctrl-L repaints (clear-screen escape), Ctrl-C abandons the line
     printf '\x0c' >&3; sleep 1
     printf 'echo BAD\x03' >&3; printf 'pwd\r' >&3; sleep 1
@@ -174,6 +183,19 @@ run_pty() {
     check "connection after abrupt hangup still works" 0 "$?"
     kill $SSHA $SSHB 2>/dev/null
 
+    # AC8: Ctrl-D on an empty line ends the session. The FIFO's write end
+    # stays open so the client sees no EOF of its own: only the key can end it.
+    mkfifo "$D/c.in"
+    ssh -tt -p $PORT -o BatchMode=yes "$HOST" < "$D/c.in" > "$D/c.out" 2>&1 &
+    SSHC=$!
+    exec 5> "$D/c.in"
+    sleep 2
+    printf '\x04' >&5; sleep 2
+    kill -0 $SSHC 2>/dev/null && check "Ctrl-D on an empty line ended the session" ok fail \
+      || check "Ctrl-D on an empty line ended the session" ok ok
+    kill $SSHC 2>/dev/null
+    exec 5>&-
+
     # --- grade the transcripts -------------------------------------------
     # The echo alone proves nothing: the server must also have run the completed name, not the typed prefix.
     grep -q "cat sshd.log" "$D/a.out" && ! grep -q "cat: sshd\.:" "$D/a.out" && check "tab completion filled sshd.log" ok ok || check "tab completion filled sshd.log" ok fail
@@ -181,6 +203,12 @@ run_pty() {
     [ "$(grep -c 'smoke-hist-42' "$D/a.out")" -ge 2 ] && check "!! re-ran the command" ok ok || check "!! re-ran the command" ok fail
     grep -q "after-cu" "$D/a.out" && ! grep -q "^GARBAGE" "$D/a.out" && check "Ctrl-U wiped the line" ok ok || check "Ctrl-U wiped the line" ok fail
     grep -q "one three" "$D/a.out" && check "Ctrl-W wiped one word" ok ok || check "Ctrl-W wiped one word" ok fail
+    grep -q "^smoke-ca" "$D/a.out" && check "Ctrl-A moved to the start of the line" ok ok || check "Ctrl-A moved to the start of the line" ok fail
+    grep -q "^smoke-ceX" "$D/a.out" && check "Ctrl-E moved to the end of the line" ok ok || check "Ctrl-E moved to the end of the line" ok fail
+    grep -q "^smoke-lZfg" "$D/a.out" && check "Left arrow moved the cursor, insert mid-line" ok ok || check "Left arrow moved the cursor, insert mid-line" ok fail
+    grep -q "^Qsmoke-rt" "$D/a.out" && check "Right arrow moved the cursor" ok ok || check "Right arrow moved the cursor" ok fail
+    grep -q "^smoke-bs1" "$D/a.out" && check "backspace deleted before the cursor" ok ok || check "backspace deleted before the cursor" ok fail
+    grep -q "^smoke-cd" "$D/a.out" && check "Ctrl-D on a non-empty line did not end the session" ok ok || check "Ctrl-D on a non-empty line did not end the session" ok fail
     grep -q $'\033\[2J' "$D/a.out" && check "Ctrl-L repainted the screen" ok ok || check "Ctrl-L repainted the screen" ok fail
     grep -q '\^C' "$D/a.out" && ! grep -q "^BAD" "$D/a.out" && check "Ctrl-C abandoned the line" ok ok || check "Ctrl-C abandoned the line" ok fail
     grep -q "before-kill" "$D/b.out" && check "session B ran before the kill" ok ok || check "session B ran before the kill" ok fail
