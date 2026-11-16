@@ -19,6 +19,7 @@
  * reports state we already knew (the channel closed, `exit` was typed) and the
  * tree walks are bounded by their own depth and read limits instead.
  */
+#include "sftp_server.h"
 #include "sshd.h"
 
 #include <dirent.h>
@@ -65,6 +66,7 @@
 struct sh_session {
     ssh_session ssh;
     ssh_channel channel;
+    sh_sftp_t *sftp; /* non-NULL once the sftp subsystem was accepted */
 
     /* Embedded, not heap: libssh keeps the pointer and reads it on every
      * dispatch, so it has to outlive every callback that touches it. */
@@ -1050,6 +1052,17 @@ static int on_channel_data(ssh_session session, ssh_channel channel,
     if (s == NULL) {
         return (int)len;
     }
+    if (s->sftp != NULL) {
+        sh_fsctx_t fs;
+
+        sh_session_get_fsctx(s, &fs);
+        if (sh_sftp_data(s->sftp, &fs, data, len) != 0) {
+            ssh_channel_send_eof(channel);
+            ssh_channel_close(channel);
+            s->finished = 1;
+        }
+        return (int)len;
+    }
     for (i = 0; i < len; i++) {
         feed_byte(s, p[i]);
     }
@@ -1140,15 +1153,20 @@ static int on_subsystem_request(ssh_session session, ssh_channel channel,
 {
     sh_session_t *s = userdata;
 
-    (void)session;
-    (void)channel;
     if (s == NULL || what == NULL) {
         return 1;
     }
     sh_console_log("subsystem \"%s\" from %s", what, sh_session_peer(s));
-    /* Rejected until sftp_server.c wires sftp_server_new() in here; nonzero
-     * makes libssh send the channel failure so scp and sftp fail fast with a
-     * clear message instead of hanging on an accepted subsystem. */
+    if (strcmp(what, "sftp") == 0 && s->sftp == NULL && !s->shell &&
+        !s->pending_ready) {
+        s->sftp = sh_sftp_new(session, channel);
+        if (s->sftp != NULL) {
+            return 0;
+        }
+    }
+    /* Anything else is refused: nonzero makes libssh send the channel failure so
+     * a client fails fast instead of hanging on an accepted subsystem. The
+     * channel stays open for a later request. */
     sh_eprintf(s, "%s: subsystem not supported\n", what);
     return 1;
 }
@@ -1367,6 +1385,7 @@ void sh_session_free(sh_session_t *s)
     if (s == NULL) {
         return;
     }
+    sh_sftp_free(s->sftp);
     for (i = 0; i < s->hist_len; i++) {
         free(s->history[i]);
     }

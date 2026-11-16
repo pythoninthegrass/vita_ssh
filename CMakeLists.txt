@@ -118,6 +118,7 @@ add_executable(${VITA_SERVER_NAME}
   src/sshd_session.c
   src/sshd_builtins.c
   src/sshd_hostkey.c
+  src/sftp_server.c
   src/sh_path.c
   src/vita_shims.c
   src/network.c
@@ -127,6 +128,27 @@ add_executable(${VITA_SERVER_NAME}
 # WITH_SERVER is defined, and it defines that only in its own private config.h. A
 # consumer that does not define it too gets no ssh_bind_* and no sftp_server_*.
 target_compile_definitions(${VITA_SERVER_NAME} PRIVATE WITH_SERVER)
+
+# libssh's stock SFTP handlers call these libc functions with the client's POSIX path.
+# --wrap routes every reference, inside libssh.a too, to __wrap_<name> in
+# src/sftp_server.c, which translates through sh_path.c while an SFTP packet is being
+# handled and passes straight through otherwise. Server target only: the client app
+# never links these wrappers.
+target_link_options(${VITA_SERVER_NAME} PRIVATE
+  -Wl,--wrap=open
+  -Wl,--wrap=close
+  -Wl,--wrap=opendir
+  -Wl,--wrap=readdir
+  -Wl,--wrap=closedir
+  -Wl,--wrap=stat
+  -Wl,--wrap=lstat
+  -Wl,--wrap=mkdir
+  -Wl,--wrap=rmdir
+  -Wl,--wrap=unlink
+  -Wl,--wrap=chmod
+  -Wl,--wrap=utimes
+  -Wl,--wrap=realpath
+)
 
 # ssh is the SDK's static libssh. z is libssh's compression path and pthread is what
 # its pthread.c wants; the SDK ships libpthread.a. png and bz2 are deliberately
