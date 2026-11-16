@@ -1146,7 +1146,7 @@ static int on_subsystem_request(ssh_session session, ssh_channel channel,
         return 1;
     }
     sh_console_log("subsystem \"%s\" from %s", what, sh_session_peer(s));
-    /* Rejected until sshd_sftp.c wires sftp_server_new() in here; nonzero
+    /* Rejected until sftp_server.c wires sftp_server_new() in here; nonzero
      * makes libssh send the channel failure so scp and sftp fail fast with a
      * clear message instead of hanging on an accepted subsystem. */
     sh_eprintf(s, "%s: subsystem not supported\n", what);
