@@ -4,7 +4,7 @@ title: Verify sftp and scp against real clients on device
 status: To Do
 assignee: []
 created_date: '2026-11-15T22:57:00Z'
-updated_date: '2026-11-15T22:57:00Z'
+updated_date: '2026-11-16T08:17:00Z'
 labels: []
 dependencies:
   - TASK-002.01
@@ -37,3 +37,19 @@ The SFTP path has one implementation and one set of assumptions behind it, and t
 - [ ] #8 legacy scp (-O) fails with a clear message instead of hanging
 - [ ] #9 two concurrent sessions transfer at once without corrupting each other
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Evidence that already exists, recorded so it is not redone (none of the criteria below are checked, because this task's own pass has not been run):
+- AC1: smoke.sh round-trips a 6 MB file over sftp and a small file over scp -s, byte-compared with cmp, not sha256, and nothing over 10 MB through scp.
+- AC2: not covered; the smoke test uses single files and flat directories, there is no recursive put or get.
+- AC3: partly; rename onto a directory and onto /os0 and a missing path return statuses, but the text the client shows has not been reviewed.
+- AC4: not recorded; smoke.sh does not time transfers.
+- AC5: README now has a 'Copying files with sftp and scp' section with sftp and scp -s commands; those exact lines were not pasted and run.
+- AC6: not started; no Linux client has been used.
+- AC7: a 64 MB put is killed mid-transfer in smoke.sh, but no completed multi-megabyte VPK put is compared against its source.
+- AC8: not tried; scp -O should fail because the shell has no scp command, but the message and timing are unchecked.
+- AC9: not tested; sessions overlap briefly in the logs, but no two transfers were run at once.
+Dependencies TASK-002.01 and TASK-002.02 are Done, so this task can start.
+<!-- SECTION:NOTES:END -->
