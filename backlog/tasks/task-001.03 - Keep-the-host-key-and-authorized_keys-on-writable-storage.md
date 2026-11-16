@@ -94,4 +94,37 @@ The server generates an Ed25519 host key on first run and looks for an authorize
   present and mounted. The defect that was real is the one this task fixed: a single hardcoded
   path with no fallback, and doc claims nobody had checked. Worth fixing in the description
   rather than passing the claim on.
+
+### Update: [2026-11-16 01:37:06 UTC]
+- On-device verification stopped before it started: installing `build/ssh_server_vita.vpk` on
+  the PCH-2001 failed with `0x8010113D`. Nothing in #1/#2 has been observed yet, so this update
+  records a packaging defect found while trying to reach them, not a hardware result.
+- Cause: the server's tile PNGs were 24-bit TrueColor. The render command in both `assets/sshd-*.svg`
+  headers ended in `-type TrueColor -alpha off -depth 8 PNG24:`, which is 8 bits *per channel* —
+  a 24-bit RGB pixel, not the 8-bit palette PNG the installer accepts — and it left ImageMagick's
+  default `tEXt`/`bKGD`/`tIME` chunks in the file. The client's `icon0.png` and the tile PNGs of
+  another Vita project that does install on this device are both 8-bit palette with only
+  `IHDR,PLTE,IDAT,IEND`.
+- How it was narrowed, because the obvious read was wrong twice: the VPK container, param.sfo
+  schema and SELF header were first compared against a package that installs on the same device
+  and matched it in every respect, which is what left the tile art as the only unexplained
+  difference in the package. The container comparison only became trustworthy after an earlier
+  parse of it was caught reading a ZIP as the old VPK header format — `vita-pack-vpk` writes VPKs
+  as ZIP containers, so a header check written against the pre-ZIP format reports whatever it
+  likes.
+- Fixed in the render pipeline, not the PNGs: both SVG headers now end in
+  `-strip -define png:exclude-chunks=date,bKGD,tIME,tEXt,sRGB,gAMA,cHRM,pHYs -colors 256 -depth 8 PNG8:`.
+  Server tiles re-rendered; the client's `bg0.png` was TrueColor as well and, having no SVG
+  behind it (`TASK-009`), was quantized in place — lossless for a flat fill, and it keeps the two
+  packages the same shape. README documents the rule, the `file` check that discriminates
+  (`8-bit colormap`), and the trap: `magick identify` quotes 8-bit depth per channel and calls a
+  24-bit image `Palette`, so it could not have caught this.
+- Not claimed: that TrueColor tiles are what `0x8010113D` officially means. The code's meaning
+  could not be checked from here (search and fetch both failed), so this is a diagnosis by
+  elimination against a package that does install, and it stands or falls on the retry.
+- Artifacts awaiting the retry: `build/ssh_server_vita.vpk` 1,309,110 bytes
+  `sha256 ffa513b474838fd6…`, `build/ssh_client_vita.vpk` 1,100,709 bytes
+  `sha256 5ee3b24a141c3760…`. Verified packed as `depth=8 colortype=3` inside both containers,
+  with `task --force build` green and the host-key strings still present in the SELF.
+- #1 and #2 stay open and are now blocked on a retry rather than on an unexplained refusal.
 <!-- STATUS:END -->
