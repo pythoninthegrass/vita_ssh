@@ -1,150 +1,385 @@
-# VitaSSH – SSH client and server for PS Vita
+# VitaSSH
 
-VitaSSH is a proof-of-concept SSH client designed specifically for the PlayStation Vita, leveraging **libssh2** for secure shell connections and **VitaSDK** for native Vita hardware integration. This experimental client provides basic SSH terminal functionality on the Vita's unique platform.
+SSH in both directions on the PlayStation Vita. One tree, one build command, two
+homebrew apps that install side by side on the same memory card:
 
-> Prior art: this began as a fork of [VitaSSH](https://github.com/rompelhd/VitaSSH) by
-> rompelhd, and its packaging and installation follow the conventions of
-> [VitaShell](https://github.com/TheOfficialFloW/VitaShell). Both are the reason any of
-> this was possible; the code in this repo has since diverged considerably.
+| App | Tile | TitleID | Built on | What it is |
+| --- | --- | --- | --- | --- |
+| `ssh_client_vita` | VitaSSH | `ROM000069` | libssh2 | Connects **out** to any SSH server, with a vita2d terminal and saved profiles |
+| `ssh_server_vita` | VitaSSHd | `ROM000070` | libssh | Listens for connections **in** from a devbox and gives you a shell over the Vita's devices |
+
+Both are experimental. The client is the older, better-travelled half; the server is the
+half that makes the device worth logging into, and it is new — read its status note before
+planning on it.
 
 ## Screenshot
-<img width="960" height="544" alt="image" src="https://github.com/user-attachments/assets/6dd46da1-1ae0-4790-9b9a-85d6aa143d9d" />
 
+<img width="960" height="544" alt="VitaSSH client terminal" src="https://github.com/user-attachments/assets/6dd46da1-1ae0-4790-9b9a-85d6aa143d9d" />
 
-## 🛠 Technical Foundation
+*The client's interactive shell: `neofetch` on an Alpine box over a pty session. The banner
+block at the top is the terminal's limits showing — see [Terminal](#terminal).*
 
-**Built with:**
-- **Libssh2**: Comprehensive SSH2 protocol implementation.
-- **Vita2d**: Vita2d library for creating 2D graphics.
-- **VitaSDK**: Official PlayStation Vita homebrew SDK.
-- **IME Dialog System**: Vita's on-screen keyboard interface.
+---
 
-## ⚡ Features and Limitations
+## Client — `ssh_client_vita` (`ROM000069`)
 
-### ✅ Working Features
-- Secure SSH2 connections with password authentication.
-- Arbitrary command execution on remote systems.
-- Special character filtering for Vita display compatibility.
-- Network state monitoring with visual feedback.
-- Memory-safe resource cleanup.
+A libssh2 client with its own terminal renderer. Pick or define a profile, connect over
+WiFi, and run commands on the remote host from the Vita.
 
-### ⚠️ Current Limitations
-- No scrollback: Screen clears after each command.
-- No command history: Manual retyping required.
-- No touch input: Physical buttons only (TRIANGLE/SQUARE).
-- Limited character set: ASCII-only display output.
-- No interactive sessions: Single commands only.
-- Experimental status: Not for production use.
+- **Connect** to any SSH server that takes a password, on any port you type in.
+- **Two ways to run something**: <kbd>○</kbd> sends one command over an exec channel,
+  <kbd>△</kbd> opens an interactive pty session (`TERM=xterm`) with Ctrl-C, Tab, arrow
+  keys on the shoulders, and a resize that tells the server.
+- **Profiles**: up to 10, edited through the on-screen keyboard, kept in
+  `ux0:data/vitassh/profiles.dat`.
+- **Network**: sceNet and sceNetCtl bring-up with the state reported to the terminal, so a
+  radio that never came up is not mistaken for a server that is down.
 
-## 🔄 Technical Challenges Solved
-- **Vita IME Integration**: Bridging UTF-16 keyboard to ASCII SSH.
-- **Graphics Context**: One vita2d context for everything, including the text
-  console (this SDK has no `sceDebugScreenInit`, so there is no debug screen to
-  switch to).
-- **Memory Management**: CDRAM/User RAM allocation strategies.
-- **Network Reliability**: Vita-specific NetCtl state handling.
-- **Output Sanitization**: ANSI/Unicode filtering for text display.
+### Controls
 
-## 🚀 Build & Deployment
+| Where | Input | Does |
+| --- | --- | --- |
+| Main menu | <kbd>↑</kbd> <kbd>↓</kbd> <kbd>✕</kbd> | Profiles · About · Exit; <kbd>START</kbd> exits |
+| Profiles | <kbd>△</kbd> | New profile (IME: host, port, user, password) |
+| Profiles | <kbd>✕</kbd> | Connect with the selected profile |
+| Profiles | <kbd>□</kbd> | Edit the selected profile |
+| Profiles | <kbd>START</kbd> | Delete the selected profile (press twice) |
+| Terminal | <kbd>△</kbd> | Interactive shell |
+| Terminal | <kbd>○</kbd> | One command |
+| Terminal | touch drag | Scroll the output |
+| Terminal | back touch | Jump to the bottom |
+| Terminal | <kbd>START</kbd> | Leave the shell, or leave to the menu and disconnect |
+| Shell | <kbd>△</kbd> | Type a line to the pty |
+| Shell | <kbd>□</kbd> | Special-key menu (Ctrl-C, Tab, arrows) |
+| Shell | <kbd>✕</kbd> | Ctrl-C |
+| Shell | <kbd>○</kbd> | Tab |
+| Shell | <kbd>L</kbd> / <kbd>R</kbd> | Up / Down |
+| Shell | <kbd>SELECT</kbd> | Resize the terminal |
 
-```bash
-task setup       # checks vitasdk, builds OpenSSL + libssh2 + libssh into the SDK (skips when installed)
-task build       # configures and builds both apps' SELF + VPK; skips when nothing changed
-task clean       # remove build/, task's fingerprints, and the staged portlib sources
+### Terminal
+
+A 120×24 cell grid drawn with vita2d and the Vita's PGF font. It implements the CSI subset
+that ordinary command output needs: cursor movement and positioning, erase line and screen,
+SGR colours including bold and bright, save and restore cursor. Scrollback is 1000 lines
+with a scrollbar, driven by touch.
+
+What that deliberately leaves out is what full-screen programs ask for — see
+[known issues](#known-issues).
+
+### Where it is limited
+
+Honest list, because the useful part of a README is telling you what will disappoint you:
+
+- **Password authentication only.** No public key auth, and no verification of the
+  server's host key either: the client authenticates to whatever completed the handshake.
+  Do not log in over a network you do not trust. Tracked in `TASK-005`.
+- **No command history** of its own; every single-command prompt starts blank. `TASK-006`.
+- **No full-screen programs.** `vim`, `top` and pagers redraw over themselves because the
+  alternate screen and scroll regions are not implemented. `TASK-007`.
+- **Fonts, not Unicode.** Output is drawn from the PGF font, so the ASCII range is
+  dependable and box-drawing characters, many line-drawing glyphs and non-Latin scripts are
+  not — the garbled banner in the screenshot above is exactly this.
+- **Profiles store the password in plaintext** on the memory card, next to the host and
+  username.
+- Single commands are capped at 256 characters of input.
+
+---
+
+## Server — `ssh_server_vita` (`ROM000070`)
+
+A libssh-based server: `ssh` at the Vita from a devbox and you get a shell whose filesystem
+is the Vita's own devices.
+
+> **Status.** The server is new. It has not had its first on-device smoke test
+> (`TASK-001.04`), and **it does not serve SFTP yet** — an `sftp` or `scp` request is
+> refused with `subsystem not supported` (`TASK-002`). Everything below describes the code
+> as written, not a list of things verified on hardware.
+
+### On the Vita's screen
+
+The server app is a console, not a terminal: it shows listening state, the Vita's IP, the
+port, the session count, the host key fingerprint, how you are allowed to sign in, and a
+rolling log of connections, logins and commands. <kbd>START</kbd> stops the server.
+
+- Listens on **port 22**, falling back to **2222** if something already holds it. The port
+  in use is printed.
+- Up to **4 concurrent sessions**, each with its own working directory, driven from one
+  poll loop, so a slow `du` in one session cannot starve the others.
+
+### Signing in
+
+The host key is Ed25519, generated on first run and kept in
+`ux0:data/vitasshd/ssh_host_ed25519_key` alongside its `.pub`. The fingerprint is on the
+screen, in the `SHA256:…` form OpenSSH prints, so the first connection prompt is something
+you can actually compare.
+
+There are two sign-in states, and the console tells you which one you are in:
+
+1. **`ux0:data/vitasshd/authorized_keys` present** — public key authentication. One key per
+   line in the usual `ssh-ed25519 AAAA… comment` form, `#` comments allowed, up to 32 keys;
+   a malformed line is skipped and named on the console rather than losing you the file.
+   **Any username is accepted; the key is the credential.** The console reads
+   `N key(s) in /ux0/data/vitasshd/authorized_keys`.
+2. **No `authorized_keys`** — the server generates a 12-character password and prints it on
+   the Vita's screen, again for any username. The alphabet drops the letters and digits that
+   are hard to tell apart on a small screen at arm's length. This is a bootstrap for getting
+   your key onto a device that has no keyboard, not a way to live: it stops working the
+   moment `authorized_keys` has a key in it.
+
+The host key, the password and every key exchange are seeded from the Vita's hardware RNG.
+If that seed is not available the server refuses to start rather than mint a predictable
+host key and let you find out later.
+
+### From a devbox
+
+Install `ssh_server_vita.vpk`, launch it, and note the IP and the sign-in line.
+
+```sh
+# bootstrap: any username, password as shown on the Vita's screen
+ssh vita@192.168.1.50
+
+# once your public key is in ux0:data/vitasshd/authorized_keys
+ssh -i ~/.ssh/id_ed25519 vita@192.168.1.50
+
+# one command, no shell
+ssh -i ~/.ssh/id_ed25519 vita@192.168.1.50 'ls /ux0/vita'
+
+# if 22 was taken, the console says so and you want:
+ssh -p 2222 -i ~/.ssh/id_ed25519 vita@192.168.1.50
 ```
 
-`task` (https://taskfile.dev, e.g. `brew install task` or `mise use -g task`) is the
-entry point; CMake does the rest. `VITASDK` resolves from `task build VITASDK=<path>`,
-then `.env`, then `~/.local/opt/vitasdk` — run `cp .env.example .env` and set it there for
-a machine-local default (changing it needs a fresh `build/`, since `CMakeCache.txt` pins
-absolute toolchain paths). The first `task setup` compiles the
-`libs/*/VITABUILD` port recipes into `$VITASDK` — the step the README used to omit,
-which is why a fresh clone failed on a missing `libssh2.h`. Force one package
-after editing its recipe with `task --force setup:openssl` / `setup:libssh2` /
-`setup:libssh`.
+`ssh-copy-id` will not work yet: the shell has no redirection, so install
+`authorized_keys` yourself — VitaShell, a USB copy, or any route that writes a file to
+`ux0:data/vitasshd/` — and restart the server so it re-reads it.
 
-## 📦 Generates
+### The shell
 
-Two apps, two VPKs, one `task build`:
+The Vita has no fork or exec, so this is a busybox-style shell: commands are functions
+running in the server's own process, the working directory belongs to the session rather
+than to libc, and POSIX paths are mapped onto sceIo devices at the boundary.
 
-- `ssh_client_vita.self` / `ssh_client_vita.vpk` — the SSH client (`ROM000069`),
-  libssh2 over a vita2d terminal
-- `ssh_server_vita.self` / `ssh_server_vita.vpk` — the SSH server (`ROM000070`),
-  libssh with the builtin shell and SFTP; log in to the Vita from a devbox
+```
+cat  cd  cp  date  devices  df  du  echo  env  exit  help
+ls   mkdir  mv   pwd      rm   rmdir  stat  touch  uname  whoami
+```
 
-Each app ships its own tile: the client's is `sce_sys/`, the server's is `sce_sys_sshd/`,
-and both are rendered from the SVG sources in `assets/` (the render command is in each
-file's header).
+`/` lists the mounted devices and `/ux0` is the memory card; `devices` and `df` tell you
+what is actually there. Quoting (`'…'`, `"…"`, `\`) works, `*` and `?` expand in arguments
+unless quoted, and the line editor keeps 12 lines of history per session. `help` and
+`help COMMAND` are the reference on the device.
 
----
-
-## 🎯 Use Cases
-
-- Remote server administration from the PS Vita  
-- Quick file system inspection using `ls`, `df`, etc.  
-- Network troubleshooting with `ping`, `netstat`  
-- Educational demonstration of Vita homebrew capabilities  
-- SSH protocol testing in constrained environments
+One command per line. There are **no pipes, no redirection, and no `;` or `&&` chaining** —
+those characters are ordinary text to the tokenizer.
 
 ---
 
-## 📋 Prerequisites
+## Building
 
-- PlayStation Vita with homebrew enabled  
-- VitaSDK development environment  
-- `libssh2` library compiled for Vita  
-- OpenSSL libraries for Vita
+You need [VitaSDK](https://docs.vitasdk.org) (`brew install vitasdk`) and
+[`task`](https://taskfile.dev) (`brew install task`, or `mise use -g task`). Nothing else
+has to be installed by hand — `task setup` builds the libraries both apps link:
+
+```bash
+task setup   # checks the toolchain, then builds OpenSSL, libssh2 and libssh into $VITASDK (skips when installed)
+task build   # configures and builds both apps' SELF + VPK into build/ (skips when nothing changed)
+task clean   # remove build/, task's fingerprints, and the staged portlib sources
+```
+
+`task build` runs CMake; it builds both apps in one invocation and exits non-zero if either
+fails. The outputs are `build/ssh_client_vita.vpk` and `build/ssh_server_vita.vpk`.
+
+`task setup` compiles the `libs/*/VITABUILD` recipes into the SDK, in this order because
+both SSH libraries configure against the OpenSSL built there:
+
+| Package | Version | Built for |
+| --- | --- | --- |
+| OpenSSL | 1.1.1 — [SonicMastr/vita-openssl3](https://github.com/SonicMastr/vita-openssl3), branch `OpenSSL_1_1_1-vita` | both, since the two SSH libraries configure against it |
+| libssh2 | 1.11.1 | the client |
+| libssh | 0.12.2, with `libs/libssh/vita.patch` applied | the server |
+
+Each package checks for the library it installs and skips itself when the SDK already has
+it, so re-running `task setup` after a pull is cheap. After editing a recipe, force just
+that one: `task --force setup:openssl`, `setup:libssh2` or `setup:libssh`. Sources stage
+under `.task/portlibs` (~160 MB, gitignored); `task clean` removes them and leaves the
+libraries already installed in `$VITASDK` alone.
+
+`VITASDK` resolves from `task build VITASDK=<path>`, then `.env`, then
+`~/.local/opt/vitasdk`. Run `cp .env.example .env` and set it there for a machine-local
+default. Changing the SDK path means a fresh `build/`, because `CMakeCache.txt` pins
+absolute toolchain paths.
+
+To compile and link one app while you work on it, build its executable target rather than
+asking make for a VPK (the `.self` and `.vpk` targets are stamped files):
+
+```bash
+cmake --build build --target ssh_server_vita
+```
+
+There are no tests, no lint and no CI. A successful `task build` that produces both VPKs is
+the verification.
+
+## Installing
+
+1. Copy the `.vpk` to the Vita — VitaShell, the content manager, whatever you already use.
+2. Install it. The two apps have different titleids and can both be installed.
+3. Get on WiFi. The server shows the address it thinks it has.
+4. Client: add a profile under **Profiles** and connect. Server: launch it and read the
+   screen.
+
+Each app ships its own tile. The server's is rendered from the SVG sources in `assets/`
+(`assets/sshd-icon0.svg`, `assets/sshd-bg0.svg`), and each file's header carries the exact
+render command — edit the SVG and re-render, never the PNG. The client's tile PNGs
+(`sce_sys/`) arrived without their sources; giving them SVG originals is `TASK-009`.
 
 ---
 
-## 🔧 Installation
+## How the tree fits together
 
-1. Copy the generated `.vpk` file to your Vita.  
-2. Install it using VitaShell or the Package Manager.  
-3. Make sure you have network connectivity (WiFi required).  
-4. Launch VitaSSH and configure your connection details.
+```
+src/main.c input.c network.c ssh_client.c shell.c text.c menu.c   client (libssh2)
+src/sshd.c sshd_session.c sshd_builtins.c sshd_hostkey.c          server (libssh)
+src/sh_path.c vita_shims.c
+src/network.c                                                      the one shared source
+include/                                                           headers for both
+libs/*/VITABUILD + taskfiles/setup.yml                             portlib recipes
+assets/ sce_sys/ sce_sys_sshd/                                     tiles and livearea
+backlog/                                                           the queue
+```
 
----
+Two `add_executable` lists in `CMakeLists.txt`, one per app, and nothing globs: a new `.c`
+file has to be added to the right list or no compiler ever sees it. The client never links
+libssh and the server never links libssh2. `AGENTS.md` is the working document for the
+build quirks that cost someone a day each — the flag shadowing in `vita.cmake`, the VPK
+rebuild edge, the Homebrew OpenSSL that leaks into a configure probe and lies about it.
 
-## 🎮 Controls
+A few of the interesting decisions, while we're here:
 
-- `TRIANGLE`: Open on-screen keyboard for commands  
-- `SQUARE`: Exit the application  
-- `D-Pad/Stick`: Navigate through IME dialogs  
-- `X Button`: Confirm/enter in dialogs
-
----
-
-## ⚠️ Important Notes
-
-- This is **experimental software** — use at your own risk.  
-- Some SSH servers may require specific configuration.  
-- Complex commands with extensive output may cause display issues.  
-- Password authentication only (no key-based authentication yet).
-
----
-
-## 🐛 Known Issues
-
-- Limited output buffer for long command responses  
-- No support for interactive programs (`vim`, `top`, etc.)  
-- ~~Character encoding limitations for non-ASCII text~~ ✅ 
-- Occasional timeouts on unstable network connections
-
----
-
-## 🤝 Contributing
-
-This project is open to contributions! Areas for improvement:
-
-- Scrollback functionality  
-- Command history  
-- Touchscreen integration  
-- SSH key authentication  
+- The Vita has no fork or exec, so the server's commands run in-process and the shell owns
+  its own cwd per session. Two people logged in cannot move each other's relative paths.
+- One vita2d context serves the graphics and the text console: this SDK has no
+  `sceDebugScreenInit`, so there is no debug screen to fall back to, and `printf` is not
+  how anything reaches the user.
+- The IME hands over UTF-16; SSH speaks bytes; the conversion is done on the way in.
+- libssh's server and SFTP declarations are compiled out of its public headers unless
+  `WITH_SERVER` is defined, which only its own private config does — hence the define on
+  the server target.
+- The host key is imported into the bind (`SSH_BIND_OPTIONS_IMPORT_KEY`) rather than handed
+  over as a path, because libssh re-reading it from `ux0:data` fails on exactly the devices
+  where you need it to work.
 
 ---
 
-> **Experimental • Proof of Concept • Vita Homebrew**  
-> *Powered by libssh2 1.11.0+ and VitaSDK toolchain for native Vita SSH capabilities.*
+## Known issues
 
-**Disclaimer:** This software is provided *as-is* for educational and experimental purposes. Use responsibly and in compliance with applicable laws and terms of service.
+Client:
+
+- Full-screen programs do not work (`TASK-007`); the terminal implements the CSI sequences
+  ordinary output uses and ignores the rest.
+- No scroll-region support, so a program that draws its own frame scrolls the whole screen.
+- A single command's output is collected in a 16 KB buffer before it is drawn; anything past
+  that is dropped without a word. Use the interactive shell for output that big.
+- Sessions drop out on a weak radio; reconnecting is manual.
+
+Server:
+
+- `sftp` and `scp` are refused: no SFTP subsystem yet (`TASK-002`).
+- Not yet smoke-tested on a device (`TASK-001.04`), so the shell's edge cases — odd paths,
+  device roots, concurrent sessions, a Ctrl-C in the middle of a recursive `rm` — are
+  unproven.
+- The bootstrap password is compared in non-constant time, and it exists to be replaced.
+  Use `authorized_keys` for anything you care about.
+
+---
+
+## Contributing
+
+The queue is the backlog in [`backlog/`](backlog), and it is the place to look for work
+before proposing your own:
+
+```bash
+backlog task list                 # grouped by status
+backlog task view TASK-006        # one task, with its acceptance criteria
+```
+
+Unclaimed, self-contained, and reasonable to start on:
+
+| Task | Work |
+| --- | --- |
+| `TASK-005.01` | private key authentication in the client |
+| `TASK-005.02` | host key verification in the client |
+| `TASK-006` | command history in the client |
+| `TASK-007` | alternate screen and scroll regions, so `top` and `vim` work |
+| `TASK-008` | touch selection in the menus and profile list |
+| `TASK-009` | SVG sources for the client's tile |
+
+Ground rules, all of them inherited from how this repo is built:
+
+- Read [`AGENTS.md`](AGENTS.md) first. It is the build contract, and several lines in it
+  exist because the obvious thing does not work.
+- `task` is the entry point; never run `cmake` directly. A successful `task build`
+  producing both VPKs is the only automated check that exists.
+- The two apps keep separate link lists. The client stays a libssh2 client and the server
+  stays a libssh server.
+- Tile PNGs are generated. Edit the SVG and re-render with the command in its header.
+- Want something that is not in the backlog? Open a task for it rather than opening a PR
+  that assumes it.
+
+---
+
+## Provenance
+
+VitaSSH is its own project: a standalone repo with its own history, no upstream branch to
+keep in step with, and no reason to preserve a mistake because it came from somewhere else.
+What it stands on:
+
+- It began as a fork of [VitaSSH](https://github.com/rompelhd/VitaSSH) by rompelhd. The
+  client's shape is where that started; the code has since diverged past recognition, and
+  upstream is unmaintained.
+- Packaging and installation follow the conventions of
+  [VitaShell](https://github.com/TheOfficialFloW/VitaShell) by TheOfficialFloW.
+- The OpenSSL Vita port that `task setup` compiles is
+  [SonicMastr/vita-openssl3](https://github.com/SonicMastr/vita-openssl3).
+- The libraries doing the real work — libssh2, libssh, vita2d, VitaSDK — are listed with
+  their versions and licence terms under [Licence](#licence). None of them is vendored; the
+  recipes that build them into `$VITASDK` are in `libs/`.
+
+## Licence
+
+The sources in this repository are released into the public domain under the
+[Unlicense](LICENSE.md). Do what you want with them, including selling them, without asking.
+
+That dedication covers only the files in this repo. It relicenses nothing anybody else wrote,
+and both apps ship statically linked third-party code, which stays under its own terms:
+
+**libssh — LGPL-2.1.** The server app links
+[libssh](https://www.libssh.org) 0.12.2 statically (copyright Aris Adamantiadis and the libssh
+team), under the GNU Lesser General Public License, version 2.1 or any later version. It is not
+vendored here: `task setup` fetches it from libssh.org and builds it with
+[`libs/libssh/VITABUILD`](libs/libssh/VITABUILD) plus
+[`libs/libssh/vita.patch`](libs/libssh/vita.patch), so the exact recipe for the copy in your VPK
+is in this repo. That is also what makes the LGPL's relinking condition practical rather than
+theoretical — take the sources here, build a modified libssh against the same recipe, and relink
+the app. Reverse engineering for the purpose of debugging such modifications is permitted under
+LGPL-2.1 §6. The licence text is at
+<https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html>; libssh's own sources carry the notice
+in their file headers.
+
+The other libraries compiled into the VPKs, for completeness:
+
+| Library | Version | Licence | In |
+| --- | --- | --- | --- |
+| [libssh2](https://www.libssh2.org) | 1.11.1 | BSD-3-Clause | client |
+| [OpenSSL Vita port](https://github.com/SonicMastr/vita-openssl3) | 1.1.1 | dual OpenSSL / SSLeay | both |
+| [vita2d](https://github.com/grapheneSystems/Vita2D) | SDK-provided | see upstream | both |
+| [VitaSDK](https://docs.vitasdk.org) toolchain and stubs | — | see upstream | both |
+
+None of them is relicensed by this repo's dedication, and nothing above is legal advice — if you
+redistribute a VPK, carry the licence texts of the libraries inside it.
+
+---
+
+> Experimental. Proof of concept. Vita homebrew.
+
+This software is provided *as-is*, for educational and experimental purposes. Use it
+responsibly, on machines you are allowed to touch, and in compliance with applicable laws
+and terms of service.
