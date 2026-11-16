@@ -414,7 +414,7 @@ Client:
 Server:
 
 - SFTP cannot set permissions, owners or file times, and the legacy scp protocol (`scp -O`) is not supported; see "Copying files with sftp and scp" for what that means in practice. There is no statvfs over SFTP.
-- Smoke-tested from macOS only. A Linux devbox has not been compared (`TASK-001.04`), and the recursive tools and a cross-device `mv` on awkward input are not yet covered by the smoke tests, nor is a Ctrl-C in the middle of a recursive `rm`.
+- The exec and pty checks have been run from macOS only; a Linux devbox has not been compared (`TASK-001.04`). The sftp and scp checks match between macOS (OpenSSH 10.6) and Linux (OpenSSH 9.6). The recursive tools and a cross-device `mv` on awkward input are not yet covered by the smoke tests, nor is a Ctrl-C in the middle of a recursive `rm`.
 - The bootstrap password is compared in non-constant time, and it exists to be replaced.
   Use `authorized_keys` for anything you care about.
 - If no data directory is writable, the host key lives in memory and every boot introduces
@@ -443,6 +443,9 @@ Unclaimed, self-contained, and reasonable to start on:
 | `TASK-007` | alternate screen and scroll regions, so `top` and `vim` work |
 | `TASK-008` | touch selection in the menus and profile list |
 | `TASK-009` | SVG sources for the client's tile |
+| `TASK-001.05` | dim the server's screen while it runs (needs the brightness call found first; the public ScePower stub has none) |
+| `TASK-001.06` | a full-screen text editor builtin for the server's shell |
+| `TASK-001.07` | a `vpk install` builtin that installs a build over SSH, so the USB and VitaShell loop goes away |
 
 Ground rules, all of them inherited from how this repo is built:
 
