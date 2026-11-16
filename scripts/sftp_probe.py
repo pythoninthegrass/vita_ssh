@@ -87,8 +87,12 @@ def probe_refused_subsystem(transport: paramiko.Transport) -> SFTPClient | None:
         check("sftp is accepted on the same channel", False, str(exc))
         return None
     check("sftp is accepted on the same channel", True)
-    sftp = SFTPClient(chan)
-    names = sftp.listdir("/")
+    try:
+        sftp = SFTPClient(chan)
+        names = sftp.listdir("/")
+    except (paramiko.SFTPError, paramiko.SSHException, OSError) as exc:
+        check("sftp on that channel lists /", False, str(exc))
+        return None
     check("sftp on that channel lists /", "ux0" in names, f"got {names}")
     return sftp
 
