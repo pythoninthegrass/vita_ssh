@@ -43,7 +43,7 @@ ssh -p 2222 any@<ip> "cat sshd.log"
 To paste the log into a bug report or a chat, copy it to the macOS clipboard instead:
 
 ```bash
-ssh -p 2222 any@192.168.8.57 cat sshd.log | pbcopy
+ssh -p 2222 any@<ip> cat sshd.log | pbcopy
 ```
 
 The shell has no `tail`, so the whole file comes back and the newest lines are at the bottom. A `=== VitaSSHd starting` line in the middle of the log means the app restarted, which after a `subsystem "sftp"` line usually means it crashed. The file is also reachable over the USB mount at `data/vitasshd/sshd.log`.
