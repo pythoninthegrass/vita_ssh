@@ -52,6 +52,8 @@
 typedef struct {
     char a[SH_SCE_PATH_MAX];
     char b[SH_SCE_PATH_MAX];
+    char pa[SH_POSIX_PATH_MAX];
+    char pb[SH_POSIX_PATH_MAX];
 } sh_walk_t;
 
 /* ------------------------------------------------------------------ */
@@ -876,8 +878,8 @@ static int cmd_mkdir(sh_session_t *s, int argc, char **argv)
     return status;
 }
 
-static int remove_tree(sh_session_t *s, const sh_target_t *t, int top_level,
-                       int depth, sh_walk_t *w)
+static int remove_tree(sh_session_t *s, const char *cmd, const sh_target_t *t,
+                       int top_level, int depth, sh_walk_t *w)
 {
     DIR *dir;
     struct dirent *ent;
@@ -885,21 +887,23 @@ static int remove_tree(sh_session_t *s, const sh_target_t *t, int top_level,
 
     if (top_level) {
         if (t->kind == SH_TARGET_DEVICE) {
-            sh_eprintf(s, "rm: %s: Cannot remove a device root\n", t->posix);
+            sh_eprintf(s, "%s: %s: Cannot remove a device root\n", cmd,
+                       t->posix);
             return 1;
         }
         if (sh_is_dot(sh_basename(t->posix))) {
-            sh_eprintf(s, "rm: %s: Invalid argument\n", t->posix);
+            sh_eprintf(s, "%s: %s: Invalid argument\n", cmd, t->posix);
             return 1;
         }
     }
     if (depth > MAX_DEPTH) {
-        sh_eprintf(s, "rm: %s: Too many levels of directories\n", t->posix);
+        sh_eprintf(s, "%s: %s: Too many levels of directories\n", cmd,
+                   t->posix);
         return 1;
     }
     dir = opendir(t->sce);
     if (dir == NULL) {
-        sh_eprintf(s, "rm: %s: %s\n", t->posix, strerror(errno));
+        sh_eprintf(s, "%s: %s: %s\n", cmd, t->posix, strerror(errno));
         return 1;
     }
     while ((ent = readdir(dir)) != NULL) {
@@ -911,18 +915,19 @@ static int remove_tree(sh_session_t *s, const sh_target_t *t, int top_level,
         if (sh_is_dot(ent->d_name)) {
             continue;
         }
-        if (sh_join(w->a, sizeof(w->a), t->sce, ent->d_name) != 0) {
+        if (sh_join(w->a, sizeof(w->a), t->sce, ent->d_name) != 0 ||
+            sh_join(w->pa, sizeof(w->pa), t->posix, ent->d_name) != 0) {
             failed = 1;
             continue;
         }
         if (stat(w->a, &st) != 0) {
-            sh_eprintf(s, "rm: %s: %s\n", w->a, strerror(errno));
+            sh_eprintf(s, "%s: %s: %s\n", cmd, w->pa, strerror(errno));
             failed = 1;
             continue;
         }
         if (!S_ISDIR(st.st_mode)) {
             if (unlink(w->a) != 0) {
-                sh_eprintf(s, "rm: %s: %s\n", w->a, strerror(errno));
+                sh_eprintf(s, "%s: %s: %s\n", cmd, w->pa, strerror(errno));
                 failed = 1;
             }
             continue;
@@ -937,14 +942,14 @@ static int remove_tree(sh_session_t *s, const sh_target_t *t, int top_level,
                 failed = 1;
                 continue;
             }
-            if (remove_tree(s, &child, 0, depth + 1, w) != 0) {
+            if (remove_tree(s, cmd, &child, 0, depth + 1, w) != 0) {
                 failed = 1;
             }
         }
     }
     closedir(dir);
     if (rmdir(t->sce) != 0) {
-        sh_eprintf(s, "rm: %s: %s\n", t->posix, strerror(errno));
+        sh_eprintf(s, "%s: %s: %s\n", cmd, t->posix, strerror(errno));
         failed = 1;
     }
     return failed ? 1 : 0;
@@ -1030,7 +1035,7 @@ static int cmd_rm(sh_session_t *s, int argc, char **argv)
                 status = 1;
                 continue;
             }
-            if (remove_tree(s, &t, 1, 0, w) != 0) {
+            if (remove_tree(s, "rm", &t, 1, 0, w) != 0) {
                 status = 1;
             }
             free(w);
@@ -1086,15 +1091,19 @@ static int cmd_rmdir(sh_session_t *s, int argc, char **argv)
 /* cp, mv                                                               */
 /* ------------------------------------------------------------------ */
 
-static int copy_file(sh_session_t *s, const char *src, const char *dst,
-                     char *buf)
+/* src and dst are sceIo paths for the calls; src_name and dst_name are the
+ * POSIX spellings the user typed or would recognise, for errors. cmd names the
+ * command speaking, since mv copies across devices too. */
+static int copy_file(sh_session_t *s, const char *cmd, const char *src,
+                     const char *src_name, const char *dst,
+                     const char *dst_name, char *buf)
 {
     ssize_t got;
     int in, out;
 
     in = open(src, O_RDONLY);
     if (in < 0) {
-        sh_eprintf(s, "cp: %s: %s\n", src, strerror(errno));
+        sh_eprintf(s, "%s: %s: %s\n", cmd, src_name, strerror(errno));
         return -1;
     }
     out = open(dst, O_WRONLY | O_CREAT | O_TRUNC, 0644);
@@ -1102,7 +1111,7 @@ static int copy_file(sh_session_t *s, const char *src, const char *dst,
         int saved = errno;
 
         close(in);
-        sh_eprintf(s, "cp: %s: %s\n", dst, strerror(saved));
+        sh_eprintf(s, "%s: %s: %s\n", cmd, dst_name, strerror(saved));
         return -1;
     }
     while ((got = read(in, buf, SSHD_COPY_BUFSIZE)) > 0) {
@@ -1114,7 +1123,7 @@ static int copy_file(sh_session_t *s, const char *src, const char *dst,
             if (one <= 0) {
                 close(in);
                 close(out);
-                sh_eprintf(s, "cp: %s: %s\n", dst, strerror(errno));
+                sh_eprintf(s, "%s: %s: %s\n", cmd, dst_name, strerror(errno));
                 return -1;
             }
             put += one;
@@ -1123,13 +1132,13 @@ static int copy_file(sh_session_t *s, const char *src, const char *dst,
     close(in);
     close(out);
     if (got < 0) {
-        sh_eprintf(s, "cp: %s: %s\n", src, strerror(errno));
+        sh_eprintf(s, "%s: %s: %s\n", cmd, src_name, strerror(errno));
         return -1;
     }
     return 0;
 }
 
-static int copy_tree(sh_session_t *s, const sh_target_t *src,
+static int copy_tree(sh_session_t *s, const char *cmd, const sh_target_t *src,
                      const sh_target_t *dst, int depth, sh_walk_t *w, char *buf)
 {
     DIR *dir;
@@ -1137,16 +1146,17 @@ static int copy_tree(sh_session_t *s, const sh_target_t *src,
     int failed = 0;
 
     if (depth > MAX_DEPTH) {
-        sh_eprintf(s, "cp: %s: Too many levels of directories\n", src->posix);
+        sh_eprintf(s, "%s: %s: Too many levels of directories\n", cmd,
+                   src->posix);
         return -1;
     }
     if (mkdir(dst->sce, 0755) != 0 && errno != EEXIST) {
-        sh_eprintf(s, "cp: %s: %s\n", dst->posix, strerror(errno));
+        sh_eprintf(s, "%s: %s: %s\n", cmd, dst->posix, strerror(errno));
         return -1;
     }
     dir = opendir(src->sce);
     if (dir == NULL) {
-        sh_eprintf(s, "cp: %s: %s\n", src->posix, strerror(errno));
+        sh_eprintf(s, "%s: %s: %s\n", cmd, src->posix, strerror(errno));
         return -1;
     }
     while ((ent = readdir(dir)) != NULL) {
@@ -1159,17 +1169,19 @@ static int copy_tree(sh_session_t *s, const sh_target_t *src,
             continue;
         }
         if (sh_join(w->a, sizeof(w->a), src->sce, ent->d_name) != 0 ||
-            sh_join(w->b, sizeof(w->b), dst->sce, ent->d_name) != 0) {
+            sh_join(w->b, sizeof(w->b), dst->sce, ent->d_name) != 0 ||
+            sh_join(w->pa, sizeof(w->pa), src->posix, ent->d_name) != 0 ||
+            sh_join(w->pb, sizeof(w->pb), dst->posix, ent->d_name) != 0) {
             failed = 1;
             continue;
         }
         if (stat(w->a, &st) != 0) {
-            sh_eprintf(s, "cp: %s: %s\n", w->a, strerror(errno));
+            sh_eprintf(s, "%s: %s: %s\n", cmd, w->pa, strerror(errno));
             failed = 1;
             continue;
         }
         if (!S_ISDIR(st.st_mode)) {
-            if (copy_file(s, w->a, w->b, buf) != 0) {
+            if (copy_file(s, cmd, w->a, w->pa, w->b, w->pb, buf) != 0) {
                 failed = 1;
             }
             continue;
@@ -1190,7 +1202,8 @@ static int copy_tree(sh_session_t *s, const sh_target_t *src,
                 failed = 1;
                 continue;
             }
-            if (copy_tree(s, &child_src, &child_dst, depth + 1, w, buf) != 0) {
+            if (copy_tree(s, cmd, &child_src, &child_dst, depth + 1, w,
+                          buf) != 0) {
                 failed = 1;
             }
         }
@@ -1291,13 +1304,14 @@ static int cmd_cp(sh_session_t *s, int argc, char **argv)
                 status = 1;
                 continue;
             }
-            if (copy_tree(s, &src, &dst, 0, w, buf) != 0) {
+            if (copy_tree(s, "cp", &src, &dst, 0, w, buf) != 0) {
                 status = 1;
             }
             free(w);
             continue;
         }
-        if (copy_file(s, src.sce, dst.sce, buf) != 0) {
+        if (copy_file(s, "cp", src.sce, src.posix, dst.sce, dst.posix,
+                      buf) != 0) {
             status = 1;
         }
     }
@@ -1369,8 +1383,11 @@ static int cmd_mv(sh_session_t *s, int argc, char **argv)
                 continue;
             }
             if (!S_ISDIR(st.st_mode)) {
-                if (copy_file(s, src.sce, dst.sce, buf) != 0 ||
-                    unlink(src.sce) != 0) {
+                if (copy_file(s, "mv", src.sce, src.posix, dst.sce, dst.posix,
+                              buf) != 0) {
+                    status = 1;
+                } else if (unlink(src.sce) != 0) {
+                    sh_eprintf(s, "mv: %s: %s\n", src.posix, strerror(errno));
                     status = 1;
                 }
                 free(buf);
@@ -1383,8 +1400,8 @@ static int cmd_mv(sh_session_t *s, int argc, char **argv)
                 free(buf);
                 continue;
             }
-            if (copy_tree(s, &src, &dst, 0, w, buf) != 0 ||
-                remove_tree(s, &src, 1, 0, w) != 0) {
+            if (copy_tree(s, "mv", &src, &dst, 0, w, buf) != 0 ||
+                remove_tree(s, "mv", &src, 1, 0, w) != 0) {
                 status = 1;
             }
             free(w);
