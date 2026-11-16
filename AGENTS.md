@@ -66,7 +66,11 @@
 - Each app packages its own tile: the client's `vita_create_vpk` reads `sce_sys/`, the
   server's reads `sce_sys_sshd/`; both pack to `sce_sys/` inside their own VPK, so only the
   source directory differs. The PNGs are generated — edit the SVG sources in `assets/` and
-  re-render (command in each file's header), never the PNGs.
+  re-render (command in each file's header), never the PNGs. Every tile PNG must come out an
+  **8-bit palette PNG** or the installer rejects the whole VPK with `0x8010113D`: the render has
+  to end in `PNG8:`, not `PNG24:`/`-type TrueColor` (that is 8 bits *per channel*, which looks
+  correct and is not), and ImageMagick's default `tEXt`/`bKGD` chunks get stripped. Check with
+  `file tile.png` → must say `8-bit colormap`; `magick identify` cannot tell you this.
 - In `taskfiles/setup.yml`, the `env -u CPPFLAGS -u LDFLAGS -u PKG_CONFIG_*` around
   libssh2's configure is load-bearing: a host Homebrew OpenSSL leaking into the probe
   passes the "Crypto library: OpenSSL" check, then fails to link against the 1.1.1 Vita

@@ -2,7 +2,10 @@
 <!--
   VitaSSHd tile source. Render:
     rsvg-convert -w 128 -h 128 assets/sshd-icon0.svg -o sce_sys_sshd/icon0.png
-    magick sce_sys_sshd/icon0.png -type TrueColor -alpha off -depth 8 -colors 32 PNG24:sce_sys_sshd/icon0.png
+    magick sce_sys_sshd/icon0.png -strip -define png:exclude-chunks=date,bKGD,tIME,tEXt,sRGB,gAMA,cHRM,pHYs -colors 256 -depth 8 PNG8:sce_sys_sshd/icon0.png
+  The second pass is not cosmetic: the Vita's package installer refuses tiles that are not
+  8-bit palette PNGs (install fails with 0x8010113D), so this must write PNG8 — IHDR,PLTE,
+  IDAT,IEND and nothing else. PNG24:/TrueColor output, even at -depth 8, does NOT satisfy it.
   The console geometry (pill, screen, dot clusters, wordmark baseline) is measured off the
   client's sce_sys/icon0.png so the two tiles read as one family; the field hue and the
   screen glyph are what tell them apart.

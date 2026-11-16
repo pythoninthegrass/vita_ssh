@@ -311,6 +311,23 @@ Each app ships its own tile. The server's is rendered from the SVG sources in `a
 render command — edit the SVG and re-render, never the PNG. The client's tile PNGs
 (`sce_sys/`) arrived without their sources; giving them SVG originals is `TASK-009`.
 
+Every tile PNG has to be an **8-bit palette PNG** — color type 3, `IHDR,PLTE,IDAT,IEND` and
+nothing else — or the Vita's package installer refuses the whole VPK and the install dies with
+`0x8010113D`. A 24-bit TrueColor PNG fails even at 8 bits per channel, so the render commands
+finish with `PNG8:`, and the ancillary chunks ImageMagick adds by default (`tEXt` dates,
+`bKGD`) are stripped for the same reason. To check a suspect tile:
+
+```
+file sce_sys_sshd/icon0.png    # must say: 8-bit colormap, non-interlaced
+```
+
+`8-bit/color RGB` or `8-bit/color RGBA` means the installer will reject it. `magick identify`
+cannot tell you this — it quotes 8-bit depth per channel for a 24-bit image and calls both
+files `Palette`, which is how a TrueColor tile got shipped in the first place. This is the
+first thing to look at when a VPK will not install. The client's `bg0.png` was TrueColor too;
+with no SVG to re-render from, it was quantized in place by the same `magick … PNG8:` pass,
+which is lossless for what is a flat fill.
+
 ---
 
 ## How the tree fits together
@@ -404,7 +421,8 @@ Ground rules, all of them inherited from how this repo is built:
   producing both VPKs is the only automated check that exists.
 - The two apps keep separate link lists. The client stays a libssh2 client and the server
   stays a libssh server.
-- Tile PNGs are generated. Edit the SVG and re-render with the command in its header.
+- Tile PNGs are generated. Edit the SVG and re-render with the command in its header, and
+  keep the output an 8-bit palette PNG — the installer rejects other formats (`0x8010113D`).
 - Want something that is not in the backlog? Open a task for it rather than opening a PR
   that assumes it.
 
