@@ -209,6 +209,78 @@ static int ensure_dir(const char *sce_dir)
     return is_directory(sce_dir) ? 0 : -1;
 }
 
+/* ------------------------------------------------------------------ */
+/* the log file                                                       */
+/* ------------------------------------------------------------------ */
+
+#define LOG_NAME "sshd.log"
+
+/*
+ * The console is a ring buffer in RAM, so the run that most needs explaining is
+ * the one that takes its explanation with it, and there is no serial cable and no
+ * debug screen on this device to read instead. Every console line therefore goes
+ * to a file too, in the first candidate directory that will take one: that file is
+ * what a file manager or a USB mount shows after the app has already died.
+ *
+ * Appending rather than truncating, because the tail of the previous run is the
+ * evidence and a crash is exactly the run you did not get to watch. Runs are told
+ * apart by the banner sh_console_log writes when it opens.
+ *
+ * None of this can fail the boot: a server that cannot write a log is still a
+ * server. Every error is ignored rather than reported, since the line that would
+ * say "there is no log" has nowhere to be said.
+ */
+static FILE *log_fp;
+static char log_path[SH_SCE_PATH_MAX];
+
+int sh_log_open(void)
+{
+    size_t i;
+
+    for (i = 0; i < N_DATA_DIRS; i++) {
+        char path[SH_SCE_PATH_MAX];
+
+        if (join(path, sizeof(path), data_dirs[i].sce, LOG_NAME) != 0) {
+            continue;
+        }
+        if (ensure_dir(data_dirs[i].sce) != 0) {
+            continue; /* read-only, not mounted, no room: try the next one */
+        }
+        log_fp = fopen(path, "a");
+        if (log_fp != NULL) {
+            snprintf(log_path, sizeof(log_path), "%s", path);
+            return 0;
+        }
+    }
+    log_path[0] = '\0';
+    return -1;
+}
+
+void sh_log_line(const char *line)
+{
+    if (log_fp == NULL) {
+        return;
+    }
+    fprintf(log_fp, "%s\n", line);
+    /* Flushed per line, which is the whole point: the buffered half of the last
+     * thing the app knew is the half a crash is guaranteed to lose. */
+    fflush(log_fp);
+}
+
+const char *sh_log_path(void)
+{
+    return log_path;
+}
+
+void sh_log_close(void)
+{
+    if (log_fp != NULL) {
+        fclose(log_fp);
+        log_fp = NULL;
+    }
+    log_path[0] = '\0';
+}
+
 static void base64(const unsigned char *in, size_t inlen, char *out,
                    size_t outlen)
 {

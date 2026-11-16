@@ -140,6 +140,19 @@ int sh_auth_check_password(const sh_auth_t *auth, const char *user,
 /* --- the Vita's own screen (console code in sshd.c) --- */
 
 void sh_console_log(const char *fmt, ...);
+
+/* --- the log file (storage code in sshd_hostkey.c) --- */
+
+/* Mirrors every console line into <candidate>/sshd.log, in the first candidate
+ * directory that can be created and written, so a crash leaves something a file
+ * manager or a USB mount can read: the console is a ring buffer in RAM and a
+ * crash takes it. Open it before anything else can fail. Returns 0 when the log
+ * is open, -1 when no directory would take it -- which never stops the boot. */
+int sh_log_open(void);
+void sh_log_line(const char *line);
+const char *sh_log_path(void); /* "" when there is no log */
+void sh_log_close(void);
+
 /* Drawing the console is internal to sshd.c: it needs the vita2d font, the slot
  * table and the listening port, none of which belong in a shared header. The
  * console code therefore exposes only the log call above. */

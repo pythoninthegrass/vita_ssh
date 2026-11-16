@@ -86,10 +86,12 @@ static int count_sessions(void)
 /* ------------------------------------------------------------------ */
 
 /*
- * Status goes here, and only here: printf() on this SDK reaches a debug screen
- * that the app never initialises (there is no sceDebugScreenInit in these
- * headers), so a message sent there is a message nobody will ever read. That is
- * also why every failure path below calls sh_console_log rather than fprintf.
+ * Status goes here, and from here to two places: the on-screen ring below, and
+ * the log file sh_log_line() mirrors each line into (sshd_hostkey.c). printf() on
+ * this SDK reaches a debug screen that the app never initialises (there is no
+ * sceDebugScreenInit in these headers), so a message sent there is a message
+ * nobody will ever read. That is also why every failure path below calls
+ * sh_console_log rather than fprintf.
  */
 void sh_console_log(const char *fmt, ...)
 {
@@ -105,6 +107,7 @@ void sh_console_log(const char *fmt, ...)
 
     snprintf(log_ring[log_head], CONSOLE_WIDTH, "[%3llu.%03llu] %s",
              (now / 60) % 1000, now % 1000, body);
+    sh_log_line(log_ring[log_head]); /* same entry, before the head moves on */
     log_head = (log_head + 1) % CONSOLE_LINES;
     if (log_count < CONSOLE_LINES) {
         log_count++;
@@ -485,18 +488,36 @@ static int server_thread(SceSize args, void *argp)
     (void)args;
     (void)argp;
 
+    /* Before anything else, because everything worth knowing about a run that
+     * dies early is decided before anything else happens: the last line in the
+     * log is the stage the app did not come back from. */
+    if (sh_log_open() == 0) {
+        sh_console_log("=== VitaSSHd starting, log %s ===", sh_log_path());
+    } else {
+        sh_console_log("=== VitaSSHd starting, no writable log ===");
+    }
+
     vita2d_init();
     vita2d_set_clear_color(RGBA8(16, 18, 22, 255));
     sceCtrlSetSamplingMode(SCE_CTRL_MODE_ANALOG);
 
     font = vita2d_load_default_pgf();
     if (font == NULL) {
-        /* Nothing else can be reported, so report it the only way left and
-         * leave the device in a state the user can still recover from. */
+        /* Nothing can be shown without the font, but the log file reaches the
+         * user the same way, so say what happened there and leave the device in
+         * a state they can still recover from. */
+        sh_console_log("error: the console font did not load, cannot start");
+        sh_log_close();
         vita2d_fini();
         sceKernelExitDeleteThread(0);
         return 0;
     }
+    /* Positive checkpoints, not just failures: when the log stops mid-boot the
+     * last line has to name the stage the app did not come back from, and a gap
+     * between two error paths would say nothing at all. */
+    sh_console_log("display and font ready (libssh %d.%d.%d)",
+                   LIBSSH_VERSION_MAJOR, LIBSSH_VERSION_MINOR,
+                   LIBSSH_VERSION_MICRO);
 
     if (ssh_init() != SSH_OK) {
         sh_console_log("error: ssh_init failed");
@@ -508,6 +529,7 @@ static int server_thread(SceSize args, void *argp)
         ports[0] = SSHD_PORT_PRIMARY;
         ports[1] = SSHD_PORT_FALLBACK;
         for (p = 0; p < 2; p++) {
+            sh_console_log("trying port %d", ports[p]);
             bind = make_bind(&auth, ports[p]);
             if (bind != NULL) {
                 listen_port = ports[p];
@@ -524,6 +546,7 @@ static int server_thread(SceSize args, void *argp)
                                    on_incoming, bind) != SSH_OK) {
             sh_console_log("error: could not watch the listening socket");
         } else {
+            sh_console_log("poll loop starting");
             server_loop(bind, &auth, font);
         }
     }
@@ -545,6 +568,7 @@ static int server_thread(SceSize args, void *argp)
     ssh_finalize();
     vita2d_fini();
     sh_console_log("stopped");
+    sh_log_close();
     sceKernelExitDeleteThread(0);
     return 0;
 }
