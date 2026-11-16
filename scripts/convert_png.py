@@ -50,7 +50,6 @@ import struct
 import subprocess
 import sys
 from pathlib import Path
-
 from PIL import Image, ImageChops
 
 # Chunks a tile may carry. tRNS only earns its place when the source has real transparency,
@@ -108,7 +107,7 @@ def inspect(path: Path) -> dict:
         problems.append(f"bit depth {depth}, must be 8")
     if interlace != 0:
         problems.append(f"interlace method {interlace}, must be 0")
-    if (extra := sorted(name.decode(errors="replace") for name in set(kinds) - ALLOWED_CHUNKS)):
+    if extra := sorted(name.decode(errors="replace") for name in set(kinds) - ALLOWED_CHUNKS):
         problems.append(f"ancillary chunk(s) {', '.join(extra)}")
     if missing := sorted(name.decode() for name in REQUIRED_CHUNKS - set(kinds)):
         problems.append(f"missing chunk(s) {', '.join(missing)}")
@@ -255,7 +254,10 @@ def check(paths: list[Path]) -> int:
     rejected = 0
     for path in paths:
         info = inspect(path)
-        detail = "; ".join(info["problems"]) or f"{info['colors']} colors, {info['width']}x{info['height']}, {', '.join(info['chunks'])}"
+        detail = (
+            "; ".join(info["problems"])
+            or f"{info['colors']} colors, {info['width']}x{info['height']}, {', '.join(info['chunks'])}"
+        )
         print(f"  {'ok  ' if not info['problems'] else 'FAIL'} {path}  {detail}")
         rejected += bool(info["problems"])
     return rejected
@@ -272,8 +274,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out-dir", dest="out_dir", help="write each input into DIR under its own name")
     parser.add_argument("-f", "--force", action="store_true", help="overwrite an existing destination")
     parser.add_argument("--colors", type=int, default=MAX_COLORS, help=f"palette size, 2-{MAX_COLORS} (default {MAX_COLORS})")
-    parser.add_argument("--dither", choices=sorted(DITHER_MODES), default="floyd-steinberg", help="dithering (default floyd-steinberg)")
-    parser.add_argument("--quantizer", choices=["pillow", "pngquant"], default="pillow", help="encoder to use (default pillow, whose Pillow dependency this file declares; pngquant needs it on PATH)")
+    parser.add_argument(
+        "--dither", choices=sorted(DITHER_MODES), default="floyd-steinberg", help="dithering (default floyd-steinberg)"
+    )
+    parser.add_argument(
+        "--quantizer",
+        choices=["pillow", "pngquant"],
+        default="pillow",
+        help="encoder to use (default pillow, whose Pillow dependency this file declares; pngquant needs it on PATH)",
+    )
     parser.add_argument("--check", action="store_true", help="verify without converting; exit 1 if any file would be rejected")
     args = parser.parse_args(argv)
 
@@ -282,7 +291,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.check:
             if args.force or args.out or args.out_dir:
                 raise PngError("--check writes nothing; drop --out, --out-dir and --force")
-            if (rejected := check(inputs)):
+            if rejected := check(inputs):
                 raise PngError(f"{rejected} of {len(inputs)} file(s) would be rejected by the installer")
             return 0
         for source, target in resolve_targets(inputs, args.out, args.out_dir):

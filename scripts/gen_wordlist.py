@@ -65,10 +65,9 @@ DEFAULT_POOL = Path(__file__).resolve().parent / "wordlist-pool.txt"
 MIN_LEN, MAX_LEN = 3, 9
 SHAPE = re.compile(r"^[a-z]{%d,%d}$" % (MIN_LEN, MAX_LEN))
 SEED = 20261115  # cosmetic: spreads the pool's category grouping across indices,
-                 # so a drawn passphrase is not "six animals in a row". Not secret.
+# so a drawn passphrase is not "six animals in a row". Not secret.
 
-ARRAY_RE = re.compile(
-    r"static const char \*const wordlist\[WORDLIST_COUNT\] = \{(.*?)\n\};", re.S)
+ARRAY_RE = re.compile(r"static const char \*const wordlist\[WORDLIST_COUNT\] = \{(.*?)\n\};", re.S)
 BITS_RE = re.compile(r"#define\s+WORDLIST_BITS\s+(\d+)")
 WORDS_RE = re.compile(r"#define\s+PASSPHRASE_WORDS\s+(\d+)")
 FIELD_RE = re.compile(r"char\s+password\[(\d+)\]")
@@ -130,9 +129,11 @@ def pool_words(pool: Path) -> list[str]:
             (out if SHAPE.match(w) else dropped).append(w)
     if dropped:
         preview = ", ".join(dropped[:8])
-        print("pool: %d word(s) dropped for shape (>%d letters, or not a-z): %s%s"
-              % (len(dropped), MAX_LEN, preview,
-                 " ..." if len(dropped) > 8 else ""), file=sys.stderr)
+        print(
+            "pool: %d word(s) dropped for shape (>%d letters, or not a-z): %s%s"
+            % (len(dropped), MAX_LEN, preview, " ..." if len(dropped) > 8 else ""),
+            file=sys.stderr,
+        )
     if len(out) < 1:
         sys.exit("%s: no usable candidates" % pool)
     return out
@@ -158,8 +159,7 @@ def select(candidates: list[str], count: int) -> list[str]:
     index: set[str] = set()
     cursor: dict[int, int] = {}
     lengths = sorted(buckets, reverse=True)
-    while len(kept) < count and any(
-            cursor.get(L, 0) < len(buckets[L]) for L in lengths):
+    while len(kept) < count and any(cursor.get(L, 0) < len(buckets[L]) for L in lengths):
         for L in lengths:
             bucket = buckets[L]
             i = cursor.get(L, 0)
@@ -177,8 +177,7 @@ def select(candidates: list[str], count: int) -> list[str]:
             if len(kept) == count:
                 break
     if len(kept) < count:
-        sys.exit("pool yields only %d prefix-free words, need %d: add candidates "
-                 "to the pool" % (len(kept), count))
+        sys.exit("pool yields only %d prefix-free words, need %d: add candidates to the pool" % (len(kept), count))
     random.Random(SEED).shuffle(kept)
     return kept
 
@@ -198,27 +197,24 @@ def spellable(word: str, words: set[str]) -> bool:
     return reach[n]
 
 
-def verify(words: list[str], bits: int, passphrase_words: int,
-           bufsize: int, check: Check) -> None:
+def verify(words: list[str], bits: int, passphrase_words: int, bufsize: int, check: Check) -> None:
     count = 1 << bits
     if len(words) != count:
-        check.fail("%d entries, need exactly %d (2**%d): the generator indexes "
-                   "with %d random bits, so a short table reads past the end"
-                   % (len(words), count, bits, bits))
+        check.fail(
+            "%d entries, need exactly %d (2**%d): the generator indexes "
+            "with %d random bits, so a short table reads past the end" % (len(words), count, bits, bits)
+        )
     if len(set(words)) != len(words):
         dupes = sorted({w for w in words if words.count(w) > 1})
         check.fail("%d duplicate word(s): %s" % (len(dupes), ", ".join(dupes[:10])))
     bad = [w for w in words if not SHAPE.match(w)]
     if bad:
-        check.fail("%d word(s) outside [a-z]{%d,%d}: %s"
-                   % (len(bad), MIN_LEN, MAX_LEN, ", ".join(bad[:10])))
+        check.fail("%d word(s) outside [a-z]{%d,%d}: %s" % (len(bad), MIN_LEN, MAX_LEN, ", ".join(bad[:10])))
 
     words_set = set(words)
-    pairs = [(a, b) for a in words_set for b in words_set
-             if a != b and b.startswith(a)]
+    pairs = [(a, b) for a in words_set for b in words_set if a != b and b.startswith(a)]
     if pairs:
-        check.fail("NOT prefix-free, %d pair(s): %s"
-                   % (len(pairs), ", ".join("%s/%s" % p for p in pairs[:6])))
+        check.fail("NOT prefix-free, %d pair(s): %s" % (len(pairs), ", ".join("%s/%s" % p for p in pairs[:6])))
     spelled = [w for w in sorted(words_set) if spellable(w, words_set)]
     if spelled:
         check.fail("spellable from other entries: %s" % ", ".join(spelled[:10]))
@@ -226,15 +222,15 @@ def verify(words: list[str], bits: int, passphrase_words: int,
     longest = max((len(w) for w in words), default=0)
     need = passphrase_words * longest + 1
     if need > bufsize:
-        check.fail("password[N] is %d but %d words of %d letters need %d"
-                   % (bufsize, passphrase_words, longest, need))
+        check.fail("password[N] is %d but %d words of %d letters need %d" % (bufsize, passphrase_words, longest, need))
     # Recorded unconditionally and filtered where it is printed: a later check can
     # still fail, and a healthy-looking summary beside a failure is the line that
     # gets skimmed and trusted.
-    check.ok("%d entries, %d bits, longest %d letters -> %d of %d byte buffer, "
-             "mean %.1f chars to type"
-             % (len(words), bits, longest, need, bufsize,
-                passphrase_words * sum(len(w) for w in words) / float(len(words))))
+    check.ok(
+        "%d entries, %d bits, longest %d letters -> %d of %d byte buffer, "
+        "mean %.1f chars to type"
+        % (len(words), bits, longest, need, bufsize, passphrase_words * sum(len(w) for w in words) / float(len(words)))
+    )
 
 
 def header_buffer(header: Path) -> int:
@@ -245,8 +241,7 @@ def header_buffer(header: Path) -> int:
     return int(field.group(1))
 
 
-def compare_with_pool(words: list[str], pool: Path, count: int,
-                      check: Check) -> None:
+def compare_with_pool(words: list[str], pool: Path, count: int, check: Check) -> None:
     """The array must be what the pool produces, or the pool is decoration.
 
     Without this, --check certifies a table nobody can regenerate: editing the
@@ -255,34 +250,29 @@ def compare_with_pool(words: list[str], pool: Path, count: int,
     script, which is the argument for making it an error rather than a habit.
     """
     if not pool.exists():
-        check.fail("%s missing: the array is only verifiable against its pool"
-                   % pool)
+        check.fail("%s missing: the array is only verifiable against its pool" % pool)
         return
     expected = select(pool_words(pool), count)
     missing = sorted(set(expected) - set(words))
     extra = sorted(set(words) - set(expected))
     if missing or extra:
-        check.fail("array is not what %s produces: %d missing (%s), %d extra (%s)"
-                   " -- edit the pool, then run --emit"
-                   % (pool.name, len(missing), ", ".join(missing[:6]),
-                      len(extra), ", ".join(extra[:6])))
+        check.fail(
+            "array is not what %s produces: %d missing (%s), %d extra (%s)"
+            " -- edit the pool, then run --emit"
+            % (pool.name, len(missing), ", ".join(missing[:6]), len(extra), ", ".join(extra[:6]))
+        )
     elif words != expected:
-        check.fail("array holds the pool's %d words in an order --emit does not "
-                   "produce; run --emit" % count)
+        check.fail("array holds the pool's %d words in an order --emit does not produce; run --emit" % count)
 
 
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[1])
-    ap.add_argument("source", nargs="*", type=Path,
-                    help="file(s) holding the wordlist array")
+    ap.add_argument("source", nargs="*", type=Path, help="file(s) holding the wordlist array")
     ap.add_argument("--pool", type=Path, default=DEFAULT_POOL)
     ap.add_argument("--header", type=Path, default=DEFAULT_HEADER)
-    ap.add_argument("--check", action="store_true",
-                    help="verify the array in place; this is also the default")
-    ap.add_argument("--emit", action="store_true",
-                    help="print a replacement array instead of checking")
-    ap.add_argument("--longest", action="store_true",
-                    help="print the longest entries and the buffer they need")
+    ap.add_argument("--check", action="store_true", help="verify the array in place; this is also the default")
+    ap.add_argument("--emit", action="store_true", help="print a replacement array instead of checking")
+    ap.add_argument("--longest", action="store_true", help="print the longest entries and the buffer they need")
     args = ap.parse_args(argv)
 
     sources = args.source or [DEFAULT_SOURCE]
@@ -292,7 +282,7 @@ def main(argv: list[str]) -> int:
         count = 1 << bits
         words = select(pool_words(args.pool), count)
         for i in range(0, count, 8):
-            print("    " + " ".join('"%s",' % w for w in words[i:i + 8]))
+            print("    " + " ".join('"%s",' % w for w in words[i : i + 8]))
         check = Check()
         verify(words, bits, passphrase_words, header_buffer(args.header), check)
         for note in check.notes:
