@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-11-15T22:57:00Z'
-updated_date: '2026-11-16T06:31:00Z'
+updated_date: '2026-11-16T08:01:00Z'
 labels: []
 dependencies: []
 documentation:
@@ -31,13 +31,13 @@ The channel subsystem callback currently prints 'subsystem not supported' and re
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 sftp opens a subsystem session and lands in the session's current directory
-- [ ] #2 ls, cd, pwd, get, put, mkdir, rmdir, rm, rename and realpath work against a real device
-- [ ] #3 large downloads and uploads complete without truncation, including files larger than the transfer buffer
-- [ ] #4 closing the sftp session leaves the server responsive and the shell session still usable
+- [x] #1 sftp opens a subsystem session and lands in the session's current directory
+- [x] #2 ls, cd, pwd, get, put, mkdir, rmdir, rm, rename and realpath work against a real device
+- [x] #3 large downloads and uploads complete without truncation, including files larger than the transfer buffer
+- [x] #4 closing the sftp session leaves the server responsive and the shell session still usable
 - [ ] #5 a rejected subsystem request still leaves the session able to accept a later one
-- [ ] #6 directory iteration handles a device root and an empty directory without an infinite loop
-- [ ] #7 a failed or interrupted upload leaves no partial file under the target name (temp name then rename, or equivalent)
+- [x] #6 directory iteration handles a device root and an empty directory without an infinite loop
+- [x] #7 a failed or interrupted upload leaves no partial file under the target name (temp name then rename, or equivalent)
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -72,4 +72,18 @@ Implemented: include/sftp_server.h, src/sftp_server.c (wrappers for open/close/o
 Not verified: nothing here runs on the host and the sandbox cannot reach the device, so no acceptance criterion is checked. No TDD test was written: the repo has no test harness and the code is cross-compiled. On-device checks belong to TASK-002.03 / a manual sftp run.
 
 Known gaps for TASK-002.02: libssh's process_close ignores close()'s return, so a failed .part rename at close is logged but the client still sees SSH_FX_OK; statvfs, rename and fstat/fsetstat are not translated or implemented; chmod/utimes are only path-translated, not given Vita semantics.
+
+Device verification, scripts/smoke.sh sftp (35 pass, 0 fail, 1 informational):
+- AC1: pwd lands in /ux0/data/vitasshd, the session's home.
+- AC2: ls, pwd (REALPATH), get, put, mkdir, rm, rmdir and rename all pass; cd is client-side (REALPATH plus STAT) and was not run as a separate command.
+- AC3: a 6 MB upload and download round-trip byte-identical, and an empty file round-trips.
+- AC4: after the sessions the shell session and a second sftp session both work.
+Still unverified: AC5 (a rejected subsystem request leaves the session able to accept a later one; needs a client that sends two requests on one session), AC6 (device root and empty directory iteration: ls / works, ls /ux0 and an empty directory are not yet in the smoke test), AC7 (interrupted upload leaves no partial file; only the successful-upload case is checked).
+
+The first on-device runs found four defects in this task's code, all fixed: a localtime_r NULL crash on ls / (synthetic stat had mtime 0), no channel close on client EOF (client hung), blocking ssh_channel_write inside the poll callback (downloads stalled and leaked sessions), and double path translation in opendir (every real directory listing failed). Details in AGENTS.md.
+
+Device verification, scripts/smoke.sh sftp (41 pass, 0 fail, 1 informational):
+- AC6: ls of a device root (/ux0) and of an empty directory both terminate; the root lists data and the empty directory lists no entries besides . and ..
+- AC7: a 64 MB upload is confirmed in flight (a second session sees interrupted.bin.part), the client is killed with SIGKILL, and after the server tears the session down neither interrupted.bin nor interrupted.bin.part exists.
+Remaining unverified: AC5 (a rejected subsystem request leaves the session able to accept a later one), which needs a client that sends two subsystem requests on one channel; stock ssh/sftp cannot.
 <!-- SECTION:NOTES:END -->

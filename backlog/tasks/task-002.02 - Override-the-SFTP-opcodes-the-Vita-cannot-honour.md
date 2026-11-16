@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-11-15T22:57:00Z'
-updated_date: '2026-11-16T07:14:00Z'
+updated_date: '2026-11-16T07:51:00Z'
 labels: []
 dependencies:
   - TASK-002.01
@@ -31,10 +31,10 @@ Stock handlers answer opcodes the Vita cannot back, and the wrong answer here is
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
 - [ ] #1 chmod, chown and utimes answer with an honest status instead of a false success, and the choice for each is recorded with its reason
-- [ ] #2 uid and gid are reported consistently for every file so clients stop trying to resolve names that do not exist
-- [ ] #3 no handler reports a symlink for any path
-- [ ] #4 clients that probe before acting (scp, sftp batch mode) complete their transfers rather than aborting on the unsupported calls
-- [ ] #5 removing and renaming across devices behaves honestly: refused with a clear status, not silently copied
+- [x] #2 uid and gid are reported consistently for every file so clients stop trying to resolve names that do not exist
+- [x] #3 no handler reports a symlink for any path
+- [x] #4 clients that probe before acting (scp, sftp batch mode) complete their transfers rather than aborting on the unsupported calls
+- [x] #5 removing and renaming across devices behaves honestly: refused with a clear status, not silently copied
 - [x] #6 which opcodes are overridden, and why, is documented in the code and in AGENTS.md
 <!-- AC:END -->
 
@@ -78,4 +78,15 @@ First on-device run (smoke.sh sftp) found three defects, all outside the 002.02 
 Added scripts/smoke.sh sftp half, scripts/parse_dump.py (crash dump symboliser) and docs/development.md. After the fixes ls / works on device; the remaining smoke.sh sftp checks have not been seen to pass yet, so no further AC is checked.
 
 Correction to the note above: 'ls / works on device' is inferred from sshd.log, which shows INIT, REALPATH, LSTAT, OPENDIR, READDIR x2 and CLOSE handled without a failure line; the client's own output was never seen.
+
+Device verification, scripts/smoke.sh sftp against the Vita (server code built Nov 16 2026 01:45:35): 35 pass, 0 fail, 1 informational.
+- AC2: ls -ln lists the scratch files and every uid and gid is 0.
+- AC3: ls -ln of the scratch dir and of /ux0/data shows no symlink entries.
+- AC4: scp -s upload and download exit 0, sftp put -p completes, and a '-' prefixed failing command does not abort the batch. scp -s -p exits 0 but its times cannot be honoured (FSETSTAT with times stays unsupported), reported as informational.
+- AC5: cross-device rename is refused with the source kept and no copy left; rename onto an existing directory and onto /os0 are refused; rename onto an existing file replaces it (posix-rename).
+- AC1 stays unchecked: chmod and chown are verified refused, but utimes is not exercised by any stock client (sftp and scp set times with FSETSTAT, which stays unsupported), so its honoured path has not run on a device.
+
+Support added along the way: permission-only SETSTAT/FSETSTAT is answered OK when it asks for the mode already reported (decided with Lance as option 1), because scp sends one after every upload. Consequence: scp of a file whose mode is not 0644 reports failure by design.
+
+Transport lessons recorded in AGENTS.md: no blocking libssh calls from a callback (reply queue + non-blocking session), --wrap also catches calls made inside libc (opendir), wait for the channel close before dropping the transport, and every stat handed to libssh needs a time localtime_r accepts.
 <!-- SECTION:NOTES:END -->
