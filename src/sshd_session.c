@@ -1406,6 +1406,15 @@ int sh_session_pump(sh_session_t *s)
         s->finished = 1;
         return 1;
     }
+    if (s->sftp != NULL && s->finished) {
+        /* The client sent EOF or closed: nothing else ends an sftp session, and
+         * its ssh waits for our channel close before it exits. */
+        if (s->channel != NULL) {
+            ssh_channel_send_eof(s->channel);
+            ssh_channel_close(s->channel);
+        }
+        return 1;
+    }
     if (!s->pending_ready) {
         return 0;
     }
