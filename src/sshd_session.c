@@ -1172,7 +1172,17 @@ static int on_subsystem_request(ssh_session session, ssh_channel channel,
     /* Anything else is refused: nonzero makes libssh send the channel failure so
      * a client fails fast instead of hanging on an accepted subsystem. The
      * channel stays open for a later request. */
-    sh_eprintf(s, "%s: subsystem not supported\n", what);
+    /* Extended data, not the channel's data stream: a later request on this same
+     * channel (sftp, say) reads that stream from its first byte, and the refusal
+     * text would be taken for its first packet. */
+    {
+        char msg[96];
+        int n = snprintf(msg, sizeof(msg), "%s: subsystem not supported\n", what);
+
+        if (n > 0) {
+            ssh_channel_write_stderr(channel, msg, (uint32_t)(n < (int)sizeof(msg) ? n : (int)sizeof(msg) - 1));
+        }
+    }
     return 1;
 }
 
