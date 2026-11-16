@@ -1,3 +1,6 @@
+# ETC
+CLAUDE.md
+
 # Build tree: cmake's output. Only the .gitkeep the repo tracks stays visible.
 build/*
 

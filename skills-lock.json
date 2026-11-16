@@ -1,0 +1,17 @@
+{
+  "version": 2,
+  "skills": {
+    "clang": {
+      "source": "mohitmishra786/low-level-dev-skills",
+      "sourceType": "github",
+      "skillPath": "skills/compilers/clang/SKILL.md",
+      "computedHash": "ce8646f185a03b05b6349903a24de7e9d4ca40db8d4c481b76b94c238d24f845"
+    },
+    "zig-best-practices": {
+      "source": "alleneubank/claude-code",
+      "sourceType": "github",
+      "skillPath": ".claude/skills/zig-best-practices/SKILL.md",
+      "computedHash": "3951311c090064401c3bac00d1d06c15bc6d56e8c34c37d6b785aeb162d66574"
+    }
+  }
+}
