@@ -231,7 +231,7 @@ run_sftp() {
     # ServerAlive* is what ends a session whose server died mid-call; ConnectTimeout
     # only covers the TCP connect.
     local SSHO="-o BatchMode=yes -o ConnectTimeout=5 -o ServerAliveInterval=5 -o ServerAliveCountMax=3"
-    local REMOTE=/ux0/data/smoke-sftp-$$ LOCAL OUT RC BAD LNK LINES OTHER d
+    local REMOTE=/ux0/data/smoke-sftp-$$ LOCAL OUT RC BAD LNK LINES LEFT BGPID OTHER d
     PASS=0; FAIL=0; SKIP=0
     LOCAL=$(mktemp -d)
     trap 'rm -rf "$LOCAL"' EXIT
@@ -289,6 +289,37 @@ run_sftp() {
 
     OUT=$(sftp_run "ls -1 $REMOTE")
     case "$OUT" in *.part*) check "no .part file left after put" ok fail ;; *) check "no .part file left after put" ok ok ;; esac
+
+    # TASK-002.01 AC6: iteration on a device root and on an empty directory terminates.
+    OUT=$(sftp_run "ls -1 /ux0"); RC=$?
+    check "ls a device root terminates (-> 0)" 0 "$RC"
+    case "$OUT" in *data*) check "device root lists data" ok ok ;; *) check "device root lists data" ok fail ;; esac
+    sftp_run "mkdir $REMOTE/empty" >/dev/null
+    OUT=$(sftp_run "ls -1 $REMOTE/empty"); RC=$?
+    check "ls an empty directory terminates (-> 0)" 0 "$RC"
+    LEFT=$(printf '%s\n' "$OUT" | grep -v -e '^\.\{1,2\}$' -e '^$' -e '^sftp> ' | wc -l | tr -d ' ')
+    check "empty directory lists no entries" 0 "$LEFT"
+
+    # TASK-002.01 AC7: an upload cut off mid-transfer leaves nothing under the name or as .part.
+    head -c 67108864 /dev/urandom > "$LOCAL/huge.bin"
+    ( printf 'put %s %s/interrupted.bin\n' "$LOCAL/huge.bin" "$REMOTE" |
+        sftp -q $SSHO -P "$PORT" -b - "$HOST" >/dev/null 2>&1 ) &
+    BGPID=$!
+    disown "$BGPID" 2>/dev/null   # no "Killed" job message from the shell
+    sleep 1
+    # Without this the check below could pass because the upload never started.
+    OUT=$(sftp_run "ls -1 $REMOTE")
+    case "$OUT" in
+      *interrupted.bin.part*) check "upload in flight shows a .part file" ok ok ;;
+      *) check "upload in flight shows a .part file" ok "no .part file" ;;
+    esac
+    pkill -KILL -P "$BGPID" 2>/dev/null; kill -KILL "$BGPID" 2>/dev/null
+    sleep 4    # the server notices the closed connection and tears the session down
+    OUT=$(sftp_run "ls -1 $REMOTE")
+    case "$OUT" in
+      *interrupted.bin*) check "interrupted upload leaves no partial file" ok "left: $(printf '%s' "$OUT" | grep interrupted | tr '\n' ' ')" ;;
+      *) check "interrupted upload leaves no partial file" ok ok ;;
+    esac
 
     OUT=$(sftp_run "ls -1 /ux0/data/does-not-exist"); RC=$?
     check "ls missing dir (-> nonzero)" 1 "$(failed "$RC")"
@@ -367,6 +398,9 @@ rm $REMOTE/empty.txt
 -rm $REMOTE/scp1.txt
 -rm $REMOTE/scp2.txt
 -rm $REMOTE/renamed.txt
+-rm $REMOTE/interrupted.bin
+-rm $REMOTE/interrupted.bin.part
+rmdir $REMOTE/empty
 rmdir $REMOTE/d1
 rmdir $REMOTE/d2
 rmdir $REMOTE" >/dev/null
