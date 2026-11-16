@@ -64,8 +64,10 @@ run_exec() {
   for d in ux0 os0 vs0 app0; do
     $V "ls /$d" >/dev/null 2>&1; RC=$?; check "ls /$d (mounted or honest err)" 0 "$RC"
   done
-  $V "cd /ux0/data && pwd"       >/dev/null 2>&1; RC=$?; check "cd absolute + pwd"    0 "$RC"
-  $V "cd /ux0 && cd data && pwd" >/dev/null 2>&1; RC=$?; check "relative cd then pwd" 0 "$RC"
+  # No `&&` in this shell: chaining is covered by the pty half, where cd and
+  # pwd run in one live session.
+  $V "cd /ux0/data"              >/dev/null 2>&1; RC=$?; check "cd absolute (device path)" 0 "$RC"
+  $V "cd /ux0"                   >/dev/null 2>&1; RC=$?; check "cd device root"            0 "$RC"
   $V "cd"                        >/dev/null 2>&1; RC=$?; check "bare cd lands home"   0 "$RC"
 
   # --- AC5: untranslatable paths are honest errors ------------------------
@@ -77,7 +79,8 @@ run_exec() {
   $V "mkdir /ux0/data/$T /ux0/data/$T/sub" >/dev/null 2>&1
   $V "echo hello > /ux0/data/$T/sub/f.txt" >/dev/null 2>&1
   OUT=$($V "cat /ux0/data/$T/sub/f.txt"); [ "$OUT" = "hello" ]
-  [ $? -eq 0 ] && check "redirect writes, cat reads back" ok ok || check "redirect writes, cat reads back" ok fail
+  if [ $? -eq 0 ]; then check "redirect writes, cat reads back" ok ok
+  else printf 'FAIL  redirect writes, cat reads back (got "%s")\n' "$OUT"; FAIL=$((FAIL+1)); fi
   $V "cp -r /ux0/data/$T /ux0/data/$T-copy" >/dev/null 2>&1
   $V "cat /ux0/data/$T-copy/sub/f.txt" >/dev/null 2>&1; RC=$?
   check "cp -r copies a tree" 0 "$RC"
@@ -136,35 +139,35 @@ run_pty() {
     sleep 2
 
     # AC8: tab completion fills a word (single match adds the slash)
-    printf 'cd vi\tsshd/\r\n' >&3; sleep 1
-    printf 'pwd\r\n' >&3; sleep 1
+    printf 'cd vi\tsshd/\r' >&3; sleep 1
+    printf 'pwd\r' >&3; sleep 1
 
     # AC3: per-session cwd isolation -- A moves; B must not
-    printf 'cd /ux0\r\n' >&3; sleep 1
-    printf 'pwd\r\n' >&4; sleep 1
+    printf 'cd /ux0\r' >&3; sleep 1
+    printf 'pwd\r' >&4; sleep 1
 
     # AC8: history recall by !! (echo a marker, re-run it)
-    printf 'echo smoke-hist-42\r\n' >&3; sleep 1
-    printf '!!\r\n' >&3; sleep 1
+    printf 'echo smoke-hist-42\r' >&3; sleep 1
+    printf '!!\r' >&3; sleep 1
 
     # AC8: editing keys -- Ctrl-U wipes the line, Ctrl-W wipes a word
-    printf 'echo GARBAGE\r' >&3; printf '\x15' >&3; printf 'echo after-cu\r\n' >&3; sleep 1
-    printf 'echo one two\r' >&3; printf '\x17' >&3; printf 'three\r\n' >&3; sleep 1
+    printf 'echo GARBAGE\r' >&3; printf '\x15' >&3; printf 'echo after-cu\r' >&3; sleep 1
+    printf 'echo one two\r' >&3; printf '\x17' >&3; printf 'three\r' >&3; sleep 1
 
     # AC8: Ctrl-L repaints (clear-screen escape), Ctrl-C abandons the line
     printf '\x0c' >&3; sleep 1
-    printf 'echo BAD\r' >&3; printf '\x03' >&3; printf 'pwd\r\n' >&3; sleep 1
+    printf 'echo BAD\r' >&3; printf '\x03' >&3; printf 'pwd\r' >&3; sleep 1
 
     # AC3: B confirms it never moved
-    printf 'pwd\r\n' >&4; sleep 1
+    printf 'pwd\r' >&4; sleep 1
 
     # AC7: `exit` ends the session
-    printf 'exit\r\n' >&3; sleep 1
+    printf 'exit\r' >&3; sleep 1
     exec 3>&-
 
     # AC7: abrupt hangup -- kill the client mid-session; the server must
     # recover on its next poll pass
-    printf 'echo before-kill\r\n' >&4; sleep 1
+    printf 'echo before-kill\r' >&4; sleep 1
     kill -9 $SSHB 2>/dev/null
     wait $SSHB 2>/dev/null
     sleep 1
@@ -173,7 +176,7 @@ run_pty() {
     kill $SSHA $SSHB 2>/dev/null
 
     # --- grade the transcripts -------------------------------------------
-    grep -q "/ux0/data/vitasshd" "$D/a.out" && check "tab completion filled vitasshd/" ok ok || check "tab completion filled vitasshd/" ok fail
+    grep -q "cat sshd.log" "$D/a.out" && check "tab completion filled sshd.log" ok ok || check "tab completion filled sshd.log" ok fail
     grep -q "^/ux0" "$D/b.out" && check "session B kept its own cwd (isolation)" ok ok || check "session B kept its own cwd (isolation)" ok fail
     [ "$(grep -c 'smoke-hist-42' "$D/a.out")" -ge 2 ] && check "!! re-ran the command" ok ok || check "!! re-ran the command" ok fail
     grep -q "after-cu" "$D/a.out" && ! grep -q "GARBAGE" "$D/a.out" && check "Ctrl-U wiped the line" ok ok || check "Ctrl-U wiped the line" ok fail

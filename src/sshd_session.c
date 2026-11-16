@@ -777,6 +777,17 @@ static void finish_line(sh_session_t *s)
 {
     char expanded[SSHD_LINE_MAX];
 
+    /* A line ending \r\n delivers LF right after CR: the CR already queued
+     * the command, and this LF arrives before the pump consumes it -- without
+     * this guard it would overwrite the queued text with an empty line and
+     * the command would never run. Every output line of a scripted pty
+     * session would vanish; the user's own terminal sends \r only, which is
+     * why interactive sessions never showed it. Enter on an empty line means
+     * "nothing to do" anyway, so when a command is still queued, a bare LF is
+     * the tail of the one before it: swallow it. */
+    if (s->line[0] == '\0' && s->pending_ready) {
+        return;
+    }
     sh_printf(s, "\n");
     if (expand_history_ref((const char **)s->history, s->hist_len, s->line,
                            expanded, sizeof(expanded)) != 0) {
