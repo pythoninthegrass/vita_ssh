@@ -9,6 +9,9 @@
  *     complete packet at a time.
  *   - It calls libc with the client's POSIX path. The __wrap_ functions below
  *     (linked in with -Wl,--wrap) translate through sh_path.c first.
+ *
+ * The opcodes overridden here, and the status each one answers, are listed in
+ * AGENTS.md.
  */
 
 #include <dirent.h>
@@ -19,6 +22,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/statvfs.h>
 #include <sys/time.h>
 #include <unistd.h>
 
@@ -73,6 +77,9 @@ int __real_rmdir(const char *path);
 int __real_unlink(const char *path);
 int __real_chmod(const char *path, mode_t mode);
 int __real_utimes(const char *path, const struct timeval tv[2]);
+int __real_chown(const char *path, uid_t uid, gid_t gid);
+int __real_truncate(const char *path, off_t len);
+int __real_statvfs(const char *path, struct statvfs *st);
 
 /* ------------------------------------------------------------------ */
 /* path translation                                                   */
@@ -101,6 +108,22 @@ static void synth_dir_stat(struct stat *st, int writable)
 {
     memset(st, 0, sizeof(*st));
     st->st_mode = S_IFDIR | (writable ? 0755 : 0555);
+    st->st_nlink = 1;
+}
+
+/* The Vita has no owners, permission bits or links, so every entry reports one
+ * fixed owner and a plain file or directory mode. Whatever sceIo put in the
+ * stat is replaced, and lstat can never see a symlink. */
+static void normalise_stat(struct stat *st, int writable)
+{
+    if (S_ISDIR(st->st_mode)) {
+        st->st_mode = S_IFDIR | (writable ? 0755 : 0555);
+    } else {
+        st->st_mode = S_IFREG | (writable ? 0644 : 0444);
+    }
+    st->st_uid = 0;
+    st->st_gid = 0;
+    st->st_nlink = 1;
 }
 
 static int stat_common(const char *path, struct stat *st, int follow)
@@ -120,6 +143,9 @@ static int stat_common(const char *path, struct stat *st, int follow)
         /* sceIo cannot stat a bare "ux0:", but the device is a directory. */
         synth_dir_stat(st, t.dev->writable);
         return 0;
+    }
+    if (rc == 0) {
+        normalise_stat(st, t.dev->writable);
     }
     return rc;
 }
@@ -384,17 +410,57 @@ int __wrap_unlink(const char *path)
     return __real_unlink(t.sce);
 }
 
+/* No permission bits to set: answer OP_UNSUPPORTED rather than claim success. */
 int __wrap_chmod(const char *path, mode_t mode)
 {
-    sh_target_t t;
-
     if (active == NULL) {
         return __real_chmod(path, mode);
+    }
+    errno = ENOSYS;
+    return -1;
+}
+
+/* No owners to set: answer OP_UNSUPPORTED rather than claim success. */
+int __wrap_chown(const char *path, uid_t uid, gid_t gid)
+{
+    if (active == NULL) {
+        return __real_chown(path, uid, gid);
+    }
+    errno = ENOSYS;
+    return -1;
+}
+
+/* newlib's truncate is sceIoChstat with a size, which the device may accept
+ * without resizing, so the result is read back. */
+int __wrap_truncate(const char *path, off_t len)
+{
+    sh_target_t t;
+    struct stat st;
+
+    if (active == NULL) {
+        return __real_truncate(path, len);
     }
     if (writable_target(path, &t) != 0) {
         return -1;
     }
-    return __real_chmod(t.sce, mode);
+    if (__real_truncate(t.sce, len) != 0) {
+        return -1;
+    }
+    if (__real_stat(t.sce, &st) != 0 || st.st_size != len) {
+        errno = ENOSYS;
+        return -1;
+    }
+    return 0;
+}
+
+/* The Vita has no per-mount statvfs; free space is an sceIo devctl. */
+int __wrap_statvfs(const char *path, struct statvfs *st)
+{
+    if (active == NULL) {
+        return __real_statvfs(path, st);
+    }
+    errno = ENOSYS;
+    return -1;
 }
 
 int __wrap_utimes(const char *path, const struct timeval tv[2])
@@ -453,9 +519,169 @@ sh_sftp_t *sh_sftp_new(ssh_session session, ssh_channel channel)
     return s;
 }
 
+/* ------------------------------------------------------------------ */
+/* rename                                                             */
+/* ------------------------------------------------------------------ */
+
+#define POSIX_RENAME_EXT "posix-rename@openssh.com"
+
+typedef struct {
+    const uint8_t *p;
+    size_t left;
+} reader_t;
+
+static uint32_t be32(const uint8_t *p)
+{
+    return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
+           ((uint32_t)p[2] << 8) | (uint32_t)p[3];
+}
+
+/* Copies one length-prefixed SFTP string out, NUL-terminated. */
+static int read_string(reader_t *r, char *out, size_t cap)
+{
+    uint32_t n;
+
+    if (r->left < sizeof(uint32_t)) {
+        return -1;
+    }
+    n = be32(r->p);
+    r->p += sizeof(uint32_t);
+    r->left -= sizeof(uint32_t);
+    if (n >= cap || n > r->left) {
+        return -1;
+    }
+    memcpy(out, r->p, n);
+    out[n] = '\0';
+    r->p += n;
+    r->left -= n;
+    return 0;
+}
+
+static void reply_status(sh_sftp_t *s, uint32_t raw_id, uint32_t status,
+                         const char *text)
+{
+    struct sftp_client_message_struct msg;
+
+    memset(&msg, 0, sizeof(msg));
+    msg.sftp = s->sftp;
+    msg.id = raw_id;
+    sftp_reply_status(&msg, status, text);
+}
+
+/* Replies for a failed rename. The code is what clients show; EXDEV and EEXIST
+ * are SSH_FX_FAILURE on purpose, since OP_UNSUPPORTED invites a retry by some
+ * other route and the answer is a refusal, not a missing feature. */
+static void reply_rename_error(sh_sftp_t *s, uint32_t raw_id, int err)
+{
+    uint32_t status = SSH_FX_FAILURE;
+    const char *text = strerror(err);
+
+    switch (err) {
+    case ENOENT:
+        status = SSH_FX_NO_SUCH_FILE;
+        break;
+    case EPERM:
+    case EACCES:
+    case EROFS:
+        status = SSH_FX_PERMISSION_DENIED;
+        break;
+    case EXDEV:
+        text = "cross-device rename not supported";
+        break;
+    default:
+        break;
+    }
+    reply_status(s, raw_id, status, text);
+}
+
+/* sceIoRename will not replace an existing file, and SFTP v3 RENAME must not
+ * either; posix-rename@openssh.com must, so it unlinks a file target first.
+ * That window is not atomic. A directory target is never replaced. */
+static int rename_paths(const sh_fsctx_t *fs, const char *from, const char *to,
+                        int replace)
+{
+    sh_target_t src, dst;
+    struct stat sst, dstat;
+
+    if (sh_path_resolve(fs, from, &src) != 0 ||
+        sh_path_resolve(fs, to, &dst) != 0) {
+        return errno;
+    }
+    if (src.kind != SH_TARGET_PATH || dst.kind != SH_TARGET_PATH) {
+        return EPERM;
+    }
+    if (!src.dev->writable || !dst.dev->writable) {
+        return EROFS;
+    }
+    if (strcmp(src.dev->sce, dst.dev->sce) != 0) {
+        return EXDEV;
+    }
+    if (__real_stat(src.sce, &sst) != 0) {
+        return errno;
+    }
+    if (strcmp(src.sce, dst.sce) == 0) {
+        return 0;
+    }
+    if (__real_stat(dst.sce, &dstat) == 0) {
+        if (!replace || S_ISDIR(dstat.st_mode)) {
+            return EEXIST;
+        }
+        if (__real_unlink(dst.sce) != 0) {
+            return errno;
+        }
+    }
+    return rename(src.sce, dst.sce) == 0 ? 0 : errno;
+}
+
+/* Answers SSH_FXP_RENAME and posix-rename@openssh.com, which the stock server
+ * leaves unsupported. Returns 1 when the packet was handled here, 0 to leave it
+ * to the stock callback. packet is the whole length-prefixed SFTP packet. */
+static int handle_rename(sh_sftp_t *s, const sh_fsctx_t *fs,
+                         const uint8_t *packet, size_t len)
+{
+    char ext[sizeof(POSIX_RENAME_EXT) + 1];
+    char from[SH_POSIX_PATH_MAX];
+    char to[SH_POSIX_PATH_MAX];
+    reader_t r = { packet + 5, len - 5 };
+    uint32_t raw_id;
+    int replace = 0;
+    int err;
+
+    if (len < 9 || (packet[4] != SSH_FXP_RENAME && packet[4] != SSH_FXP_EXTENDED)) {
+        return 0;
+    }
+    memcpy(&raw_id, r.p, sizeof(raw_id));
+    r.p += sizeof(raw_id);
+    r.left -= sizeof(raw_id);
+    if (packet[4] == SSH_FXP_EXTENDED) {
+        if (read_string(&r, ext, sizeof(ext)) != 0 ||
+            strcmp(ext, POSIX_RENAME_EXT) != 0) {
+            return 0;
+        }
+        replace = 1;
+    }
+    if (read_string(&r, from, sizeof(from)) != 0 ||
+        read_string(&r, to, sizeof(to)) != 0) {
+        reply_status(s, raw_id, SSH_FX_BAD_MESSAGE, "malformed rename");
+        return 1;
+    }
+    err = rename_paths(fs, from, to, replace);
+    if (err != 0) {
+        sh_console_log("sftp: rename %s -> %s refused: %s", from, to,
+                       strerror(err));
+        reply_rename_error(s, raw_id, err);
+    } else {
+        reply_status(s, raw_id, SSH_FX_OK, "");
+    }
+    return 1;
+}
+
 static int feed_packet(sh_sftp_t *s, const sh_fsctx_t *fs, void *packet,
                        uint32_t len)
 {
+    if (handle_rename(s, fs, packet, len)) {
+        return 0;
+    }
     int rc;
 
     active = s;
@@ -465,12 +691,6 @@ static int feed_packet(sh_sftp_t *s, const sh_fsctx_t *fs, void *packet,
     active = NULL;
     active_fs = NULL;
     return rc < 0 ? -1 : 0;
-}
-
-static uint32_t be32(const uint8_t *p)
-{
-    return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
-           ((uint32_t)p[2] << 8) | (uint32_t)p[3];
 }
 
 int sh_sftp_data(sh_sftp_t *s, const sh_fsctx_t *fs, const void *data,

@@ -11,6 +11,9 @@
  * is running the wrappers send every path through sh_path.c first. Outside that
  * window they are pass-throughs, so the shell builtins are unaffected.
  *
+ * Opcodes the Vita cannot honour are overridden there too; AGENTS.md lists each
+ * one and the status it answers with.
+ *
  * Uploads are written to "<name>.part" and renamed over the target when the
  * client closes the handle, so an interrupted transfer never leaves a short
  * file under the real name.
