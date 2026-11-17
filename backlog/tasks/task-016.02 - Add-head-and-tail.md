@@ -48,6 +48,15 @@ Note that tail -f cannot exist: nothing may block in the poll loop, so a follow 
 - [ ] #2 Verified on a device over a real ssh session
 <!-- DOD:END -->
 
+Device run: `scripts/smoke_headtail.sh any@<vita-ip> [port]` (48 graded checks, one ssh
+exec session each, scratch under `/ux0/data/ht-$$` removed at the end). It needs a real
+terminal on the LAN -- the authoring agent's sandbox cannot reach the device, so this run
+is prepared and not yet executed. Install `build/ssh_server_vita.vpk` with `vpk install`
+first and read the `sftp: server code built` line in `sshd.log` to confirm which build is
+running. `tail -f` is graded by both its message and its exit status, and the check that
+follows proves the server still answers, which is the behaviour the refusal exists to
+protect.
+
 ## Notes
 
 Shape: the window logic is src/sh_headtail.c (include/sh_headtail.h) -- head_lines,
