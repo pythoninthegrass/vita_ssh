@@ -65,9 +65,7 @@ def pin_reference():
     """Checks the reference against real ghead/gtail: one call per case, under 20 total."""
     tools = {}
     for tool in ("ghead", "gtail"):
-        found = subprocess.run(
-            ["bash", "-c", f"command -v {tool}"], capture_output=True, text=True
-        )
+        found = subprocess.run(["bash", "-c", f"command -v {tool}"], capture_output=True, text=True)
         tools[tool] = found.stdout.strip()
     if not all(tools.values()):
         print("note: ghead/gtail absent, reference pinned by worked examples only")
@@ -82,15 +80,10 @@ def pin_reference():
                 fh.write(text)
             for n in (1, 2):
                 for tool, ref in ((tools["ghead"], ref_head), (tools["gtail"], ref_tail)):
-                    exp = subprocess.run(
-                        [tool, "-n", str(n), path], capture_output=True
-                    ).stdout
+                    exp = subprocess.run([tool, "-n", str(n), path], capture_output=True).stdout
                     got = ref(text, n)
                     if got != exp:
-                        print(
-                            f"FAIL reference {os.path.basename(tool)} -n{n} "
-                            f"in={text!r} got={got!r} exp={exp!r}"
-                        )
+                        print(f"FAIL reference {os.path.basename(tool)} -n{n} in={text!r} got={got!r} exp={exp!r}")
                         bad += 1
     return bad
 

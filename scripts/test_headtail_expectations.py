@@ -10,6 +10,7 @@ scripts/test_sh_headtail.py, one level up.
 
 Run: python3 -I scripts/test_headtail_expectations.py
 """
+
 import os
 import subprocess
 import sys
@@ -24,6 +25,7 @@ def gnu(tool, args, data):
             fh.write(data)
         proc = subprocess.run([tool] + args + [path], capture_output=True)
         return proc.returncode, proc.stdout
+
 
 L12 = ("\n".join(f"L{i}" for i in range(1, 13)) + "\n").encode()
 
@@ -72,8 +74,7 @@ def main():
     for tool, args, data, want, want_rc in CASES:
         rc, out = gnu(tool, args, data)
         if out != want or (want_rc is not None and rc != want_rc):
-            print(f"FAIL {tool} {' '.join(args)} {data!r} -> {out!r} rc={rc}; "
-                  f"expected {want!r} rc={want_rc}")
+            print(f"FAIL {tool} {' '.join(args)} {data!r} -> {out!r} rc={rc}; expected {want!r} rc={want_rc}")
             failures += 1
     if failures:
         print(f"FAIL: {failures} expectation(s) disagree with coreutils")
