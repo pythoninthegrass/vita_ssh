@@ -264,7 +264,7 @@ than to libc, and POSIX paths are mapped onto sceIo devices at the boundary.
 
 ```
 cat  cd  cp  date  devices  df  du  echo  env  exit  grep  head  help
-ls   mkdir  mv   pwd     rm   rmdir  sort  stat  tail  touch  uniq  uname  vcmd  vpk  wc  whoami
+ls   mkdir  mv   pwd     rm   rmdir  sort  stat  tail  touch  uname  uniq  vcmd  vpk  wc  whoami
 ```
 
 `vcmd HOST PORT [LINE]` sends one newline-terminated line to a TCP port and prints the
