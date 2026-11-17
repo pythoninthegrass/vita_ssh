@@ -4,6 +4,7 @@ title: Give the client's tile an SVG source
 status: To Do
 assignee: []
 created_date: '2026-11-16T00:00:00Z'
+updated_date: '2026-11-17 03:46'
 labels: []
 dependencies: []
 documentation:
@@ -12,7 +13,6 @@ documentation:
   - sce_sys/icon0.png
   - sce_sys/livearea/contents/bg0.png
   - AGENTS.md
-type: task
 ordinal: 16000
 ---
 
@@ -30,3 +30,9 @@ The server's tile and livearea background are rendered from assets/sshd-icon0.sv
 - [ ] #4 the tile claim in README.md and AGENTS.md is true for both apps
 - [ ] #5 task build produces both VPKs
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+2026-11-16: Archived at the user's direction. The client is not being developed further; the sshd server and its shell are the project's primary focus. What stays true and untracked: the client's sce_sys/icon0.png and sce_sys/livearea/contents/bg0.png are committed PNGs with no SVG source in the repo, so they cannot be regenerated or restyled, and the claim in README.md and AGENTS.md that tiles are rendered from SVGs in assets/ holds only for the sshd app. The server's assets/sshd-icon0.svg and assets/sshd-bg0.svg are unaffected.
+<!-- SECTION:NOTES:END -->

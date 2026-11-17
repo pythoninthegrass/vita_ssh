@@ -36,7 +36,7 @@ libssh2_userauth_password is the only authentication the client performs, so a c
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-2026-11-16: Returned to To Do and unassigned before any code was written. Lance is not taking client-side work right now — the sshd server only — so this task is not being executed. Nothing under src/ changed. The gap it was meant to close (a key reaching the Vita, and a public key reaching a server) is a server-side problem anyway: ssh-copy-id still does not work against sshd (README: it sends exec sh -c with ; and &&), so installing a key means VitaShell or USB. Tracked separately as server work.
+2026-11-16: Returned to To Do and unassigned before any code was written. The user is not taking client-side work right now — the sshd server only — so this task is not being executed. Nothing under src/ changed. The gap it was meant to close (a key reaching the Vita, and a public key reaching a server) is a server-side problem anyway: ssh-copy-id still does not work against sshd (README: it sends exec sh -c with ; and &&), so installing a key means VitaShell or USB. Tracked separately as server work.
 
-2026-11-16: Archived at Lance's direction. Client-side authentication is not on the roadmap; the server is the project's focus. No code was written for this task.
+2026-11-16: Archived at the user's direction. Client-side authentication is not on the roadmap; the server is the project's focus. No code was written for this task.
 <!-- SECTION:NOTES:END -->

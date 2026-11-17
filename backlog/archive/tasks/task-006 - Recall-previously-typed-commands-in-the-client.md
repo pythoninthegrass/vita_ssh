@@ -4,6 +4,7 @@ title: Recall previously typed commands in the client
 status: In Progress
 assignee: []
 created_date: '2026-11-16T00:00:00Z'
+updated_date: '2026-11-17 03:46'
 labels: []
 dependencies: []
 documentation:
@@ -11,8 +12,6 @@ documentation:
   - src/main.c
   - src/menu.c
   - include/sshd.h
-type: task
-ordinal: 13000
 modified_files:
   - README.md
   - include/input.h
@@ -22,6 +21,7 @@ modified_files:
   - src/main.c
   - src/menu.c
   - src/text.c
+ordinal: 13000
 ---
 
 ## Description
@@ -30,8 +30,19 @@ modified_files:
 The client keeps no record of what you typed. Single-command mode opens the IME on an empty field every time, so retyping the same path on a small on-screen keyboard is the daily cost of using the client at all, and the profiles file proves the app can already persist per-user state to ux0:data. The interactive pty path is different: shell.c forwards the shoulder buttons as raw arrow escapes, so history there belongs to the remote shell and should stay that way. The sshd app already keeps a 12-line per-session history (SSHD_HISTORY in include/sshd.h), which is the precedent for how much to keep.
 <!-- SECTION:DESCRIPTION:END -->
 
+## Acceptance Criteria
+<!-- AC:BEGIN -->
+- [ ] #1 single-command mode offers the previous command in the IME field and walks newest-first through earlier ones
+- [ ] #2 history survives disconnecting and relaunching the app, and is bounded to a fixed number of entries
+- [ ] #3 repeating a command and submitting a blank line do not add duplicate or empty entries
+- [ ] #4 passwords entered in the credential fields are never written to the history file
+- [ ] #5 the interactive shell is unchanged: arrows still reach the remote shell untouched
+- [x] #6 task build produces both VPKs
+<!-- AC:END -->
+
 ## Implementation Notes
 
+<!-- SECTION:NOTES:BEGIN -->
 `task build` is green from a wiped `build/` and `.task/` on the committed tree, run again after the
 commits landed: both `build/ssh_client_vita.vpk` and `build/ssh_server_vita.vpk` are produced, and
 `strings` on the client ELF confirms the history path and format strings are linked in. Only AC #6 is
@@ -94,12 +105,5 @@ exists, `ip` is declared at `include/ssh_client.h:6`, and `arm-vita-eabi-gcc -fs
 -Iinclude` compiles all five changed sources with exit 0. The host clangd has no Vita sysroot, so it
 cannot see the SDK. Trust `task build` and the cross-compiler here.
 
-## Acceptance Criteria
-<!-- AC:BEGIN -->
-- [ ] #1 single-command mode offers the previous command in the IME field and walks newest-first through earlier ones
-- [ ] #2 history survives disconnecting and relaunching the app, and is bounded to a fixed number of entries
-- [ ] #3 repeating a command and submitting a blank line do not add duplicate or empty entries
-- [ ] #4 passwords entered in the credential fields are never written to the history file
-- [ ] #5 the interactive shell is unchanged: arrows still reach the remote shell untouched
-- [x] #6 task build produces both VPKs
-<!-- AC:END -->
+2026-11-16: Archived at the user's direction. The client is not being developed further; the sshd server and its shell are the project's primary focus. This is the only archived client task with code written for it: the history work is committed (980bc77, src/menu.c, src/text.c, src/input.c, include/menu.h) and task build is green, but AC #1 to #5 were never verified on a device, so treat the client's history feature as implemented and unverified rather than absent. The server's own equivalent already exists as the per-session history in the sshd shell (SSHD_HISTORY in include/sshd.h).
+<!-- SECTION:NOTES:END -->

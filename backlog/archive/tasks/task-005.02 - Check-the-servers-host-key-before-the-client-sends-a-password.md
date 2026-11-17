@@ -33,7 +33,7 @@ ssh_client.c does libssh2_session_handshake and goes straight to authentication.
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-2026-11-16: Archived at Lance's direction with TASK-005 and TASK-005.01. Client-side work (host key verification, known_hosts) is not on the roadmap; the server is the project's focus.
+2026-11-16: Archived at the user's direction with TASK-005 and TASK-005.01. Client-side work (host key verification, known_hosts) is not on the roadmap; the server is the project's focus.
 <!-- SECTION:NOTES:END -->
 
 ## Status Updates

@@ -4,6 +4,7 @@ title: Render full-screen programs in the client's terminal
 status: To Do
 assignee: []
 created_date: '2026-11-16T00:00:00Z'
+updated_date: '2026-11-17 03:46'
 labels: []
 dependencies: []
 documentation:
@@ -11,7 +12,6 @@ documentation:
   - include/text.h
   - src/shell.c
   - include/display.h
-type: task
 ordinal: 14000
 ---
 
@@ -30,3 +30,9 @@ src/text.c implements CSI cursor movement, erase, SGR colours and save/restore c
 - [ ] #5 sequences that already work are unchanged: colours, cursor movement, erase, scrollback
 - [ ] #6 task build produces both VPKs
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+2026-11-16: Archived at the user's direction. The client is not being developed further; the sshd server and its shell are the project's primary focus. What stays true of the client and untracked: the renderer in src/text.c still drops the alternate-screen and scroll-region sequences, so a program that redraws in place smears and an unimplemented sequence prints as its parameters, and the README's warning about interactive programs still stands. Full-screen programs over SSH remain tracked where they matter, on the server side, in TASK-011.
+<!-- SECTION:NOTES:END -->

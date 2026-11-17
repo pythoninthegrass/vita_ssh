@@ -32,5 +32,5 @@ The client has one credential and no trust model. libssh2_userauth_password is t
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-2026-11-16: Archived at Lance's direction along with both subtasks. The client is not being developed further; the sshd server is the project's focus. What remains true of the client and untracked: password auth only, no host key verification.
+2026-11-16: Archived at the user's direction along with both subtasks. The client is not being developed further; the sshd server is the project's focus. What remains true of the client and untracked: password auth only, no host key verification.
 <!-- SECTION:NOTES:END -->
