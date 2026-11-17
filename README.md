@@ -262,13 +262,15 @@ than to libc, and POSIX paths are mapped onto sceIo devices at the boundary.
 
 ```
 cat  cd  cp  date  devices  df  du  echo  env  exit  help
-ls   mkdir  mv   pwd      rm   rmdir  stat  touch  uname  whoami
+ls   mkdir  mv   pwd      rm   rmdir  stat  touch  uname  vpk  whoami
 ```
 
 `/` lists the mounted devices and `/ux0` is the memory card; `devices` and `df` tell you
 what is actually there. Quoting (`'…'`, `"…"`, `\`) works, `*` and `?` expand in arguments
 unless quoted, and the line editor keeps 12 lines of history per session. `help` and
 `help COMMAND` are the reference on the device.
+
+`vpk list FILE` prints a package's title ID and the files it carries, and writes nothing. `vpk install FILE` installs a build of this app through the Vita's own package installer: it unpacks and checksums the package into `ux0:data/pkg`, refuses any title ID but its own, then hands the directory to the system, and finishes by telling you to quit and relaunch. A failure before the hand-off leaves the installed app untouched; a failure inside the system installer cannot be undone from the app, and the way back is reinstalling the VPK from VitaShell. The server is built as an unsafe app for this, which is also why it can bind port 22.
 
 One command per line. There are **no pipes and no `;`, `&&` or `||` chaining**; those characters are ordinary text to the tokenizer. Redirection exists in one form: `>` or `>>` as a separate, unquoted word followed by a file name (`echo hi > /ux0/data/x.txt`), and it redirects stdout only. `echo hi>x` is just text.
 
@@ -472,20 +474,20 @@ What it stands on:
   client's shape is where that started; the code has since diverged past recognition, and
   upstream is unmaintained.
 - Packaging and installation follow the conventions of
-  [VitaShell](https://github.com/TheOfficialFloW/VitaShell) by TheOfficialFloW.
+  [VitaShell](https://github.com/TheOfficialFloW/VitaShell) by TheOfficialFloW. The server's `vpk install` command installs a package the way VitaShell's installer does (unpack to `ux0:data/pkg`, write `sce_sys/package/head.bin`, call `scePromoterUtilityPromotePkgWithRif`), following VitaShell's `package_installer.c`. One file from VitaShell is vendored: `third_party/vitashell/head.bin`, the package-header template, under VitaShell's GPL-3.0 with its licence text beside it. The code that fills it in, `src/vpk_head.c`, is this repo's own.
 - The OpenSSL Vita port that `task setup` compiles is
   [SonicMastr/vita-openssl3](https://github.com/SonicMastr/vita-openssl3).
 - The libraries doing the real work — libssh2, libssh, vita2d, VitaSDK — are listed with
   their versions and licence terms under [Licence](#licence). None of them is vendored; the
-  recipes that build them into `$VITASDK` are in `libs/`.
+  recipes that build them into `$VITASDK` are in `libs/`. The only third-party file in the tree
+  is the VitaShell template above, in `third_party/`.
 
 ## Licence
 
-The sources in this repository are released into the public domain under the
+The sources written for this repository are released into the public domain under the
 [Unlicense](LICENSE.md). Do what you want with them, including selling them, without asking.
 
-That dedication covers only the files in this repo. It relicenses nothing anybody else wrote,
-and both apps ship statically linked third-party code, which stays under its own terms:
+That dedication does not cover other people's files, and it relicenses nothing anybody else wrote. The one such file in the tree is `third_party/vitashell/head.bin`, VitaShell's package-header template, which stays under VitaShell's GPL-3.0 (the licence text is beside it, with the upstream commit and checksum in `third_party/vitashell/README.md`). The server app embeds that file, so a server VPK carries it: check what GPL-3.0 asks of you before you redistribute one. Both apps also ship statically linked third-party code, which stays under its own terms:
 
 **libssh — LGPL-2.1.** The server app links
 [libssh](https://www.libssh.org) 0.12.2 statically (copyright Aris Adamantiadis and the libssh
@@ -508,6 +510,7 @@ The other libraries compiled into the VPKs, for completeness:
 | [OpenSSL Vita port](https://github.com/SonicMastr/vita-openssl3) | 1.1.1 | dual OpenSSL / SSLeay | both |
 | [vita2d](https://github.com/grapheneSystems/Vita2D) | SDK-provided | see upstream | both |
 | [VitaSDK](https://docs.vitasdk.org) toolchain and stubs | — | see upstream | both |
+| [VitaShell](https://github.com/TheOfficialFloW/VitaShell) `head.bin` | upstream commit `8120486` | GPL-3.0 | server |
 
 None of them is relicensed by this repo's dedication, and nothing above is legal advice — if you
 redistribute a VPK, carry the licence texts of the libraries inside it.

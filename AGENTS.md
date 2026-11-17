@@ -16,7 +16,7 @@
 - Order matters: `task setup` → `task build`. Setup builds the OpenSSL 1.1.1 Vita port, then libssh2 (the client's library), then libssh (the server's library) into `$VITASDK`. libssh2 and libssh both configure against that OpenSSL, so openssl first is required, not a preference.
 - Both tasks fingerprint inputs and skip when current. After editing a portlib recipe or lib source, force: `task --force build`, `task --force setup:openssl`, `task --force setup:libssh2`, `task --force setup:libssh`. Each portlib's version is pinned by `pkgver=` in its `libs/<name>/VITABUILD`, which the matching `setup:` task reads; libssh also pins `sha256sums=` there, and `setup:libssh` refuses a tarball that does not match it. A libssh version bump therefore means updating both lines, and then checking that `libs/libssh/vita.patch` still applies, because the recipe re-extracts and re-patches on every run.
 - Setup stages ~160 MB of OpenSSL/libssh2/libssh sources under `.task/portlibs` (gitignored). `task clean` wipes `build/` and `.task/` but leaves the libs installed in `$VITASDK`.
-- No tests, lint, or CI exist. A successful `task build` producing both
+- The host-runnable checks are `python3 -I scripts/test_vpk_zip.py` (zip fixtures against `src/vpk_zip.c`, pure C plus zlib) and `python3 -I scripts/test_vpk_head.py` (`src/vpk_head.c` against an independent Python transcription of VitaShell's `makeHeadBin`), both built with the host `cc`. Everything else has no tests, lint, or CI. A successful `task build` producing both
   `build/ssh_client_vita.vpk` and `build/ssh_server_vita.vpk` is the only verification.
   Output is arm-vita-eabi (cross-compiled); nothing here builds or runs on the host.
 - One cmake invocation builds both apps, and `task build` exits non-zero if either fails
@@ -66,7 +66,7 @@
 
 ## Source quirks
 
-- Two apps, two `add_executable` lists in `CMakeLists.txt`: the client (`ssh_client_vita`, entry `src/main.c`, links libssh2) and the server (`ssh_server_vita`, entry `src/sshd.c`, links libssh with `-DWITH_SERVER`). New `.c` files must be added to the right list by hand; nothing globs, and a file missing from both lists is never compiled and never reports an error. The client list is `main.c`, `input.c`, `network.c`, `ssh_client.c`, `shell.c`, `text.c`, `menu.c`. The server list is `sshd.c`, `sshd_session.c`, `sshd_builtins.c`, `sshd_hostkey.c`, `sftp_server.c`, `sh_path.c`, `vita_shims.c`, `network.c`. `src/network.c` is the one source in both.
+- Two apps, two `add_executable` lists in `CMakeLists.txt`: the client (`ssh_client_vita`, entry `src/main.c`, links libssh2) and the server (`ssh_server_vita`, entry `src/sshd.c`, links libssh with `-DWITH_SERVER`). New `.c` files must be added to the right list by hand; nothing globs, and a file missing from both lists is never compiled and never reports an error. The client list is `main.c`, `input.c`, `network.c`, `ssh_client.c`, `shell.c`, `text.c`, `menu.c`. The server list is `sshd.c`, `sshd_session.c`, `sshd_builtins.c`, `sshd_hostkey.c`, `sftp_server.c`, `sh_path.c`, `vita_shims.c`, `network.c`, `sshd_vpk.c`, `vpk_zip.c`, `vpk_head.c`, plus the generated `build/vpk_head_template.c`. `src/network.c` is the one source in both.
 - Headers live in `include/`, sources in `src/`.
 - Script filenames are snake_case — `render_tiles.sh`, `convert_png.py`, `gen_wordlist.py`,
   `smoke.sh`. No hyphenated filenames under `scripts/` or `assets/`: a new tool with a
@@ -184,3 +184,12 @@ You MUST read the overview resource to understand the complete workflow. The inf
 </CRITICAL_INSTRUCTION>
 
 <!-- BACKLOG.MD MCP GUIDELINES END -->
+
+## `vpk install` (the server's self-update)
+
+- The server is linked **UNSAFE** (`vita_create_self(... UNSAFE)`); a safe-mode app cannot see `ux0:app`, `ux0:patch` or the device info `df` reads. UNSAFE is also why the server now binds port 22 instead of falling back to 2222.
+- `ux0:app/<TITLEID>` is read-only to the app even when UNSAFE, and a copy placed in `ux0:patch/<TITLEID>` is not used at launch. Both were tried on a device. The only route that installs is `scePromoterUtilityPromotePkgWithRif` on an unpacked package, which is what `src/sshd_vpk.c` does; do not reintroduce a file-copy install.
+- The promoter needs `sce_sys/package/head.bin` in the package directory. Its template is `third_party/vitashell/head.bin` (VitaShell's, GPL-3.0, not covered by the repo's Unlicense), compiled in through `build/vpk_head_template.c`, which CMake generates at configure time. Do not edit the template, and keep its licence file next to it.
+- `opendir()` on a missing path answers `ENOTDIR`, not `ENOENT`: ask `stat()` whether something exists.
+- `sh_printf` does not understand `%zu`; cast to `unsigned` and use `%u`.
+- A rebuild needs a new `__DATE__ __TIME__` to be told apart on a device: `touch` is not enough because the task fingerprint ignores it, so `task --force build`, then read the `sftp: server code built` line in `sshd.log` (written when the first SFTP session starts).

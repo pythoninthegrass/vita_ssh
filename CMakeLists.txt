@@ -113,10 +113,26 @@ add_dependencies(${PROJECT_NAME}.vpk-vpk ${PROJECT_NAME}.self-self)
 # Shares only src/network.c (the sceNet bring-up) with the client; the client never
 # links libssh and the server never links libssh2. Like the client, nothing globs —
 # a new server .c file has to be listed here or no compiler ever sees it.
+# vpk_head_template.c is generated here from third_party/vitashell/head.bin (VitaShell's
+# GPLv3 package-header template, see third_party/vitashell/README.md) so the template is
+# compiled into the app without committing a second copy as a C array.
+set(VPK_HEAD_TEMPLATE_SRC ${CMAKE_BINARY_DIR}/vpk_head_template.c)
+file(READ ${CMAKE_CURRENT_SOURCE_DIR}/third_party/vitashell/head.bin VPK_HEAD_HEX HEX)
+string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," VPK_HEAD_ARRAY "${VPK_HEAD_HEX}")
+file(WRITE ${VPK_HEAD_TEMPLATE_SRC}
+  "const unsigned char vpk_head_template[] = {${VPK_HEAD_ARRAY}};\n"
+  "const unsigned long vpk_head_template_len = sizeof(vpk_head_template);\n")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+  ${CMAKE_CURRENT_SOURCE_DIR}/third_party/vitashell/head.bin)
+
 add_executable(${VITA_SERVER_NAME}
   src/sshd.c
   src/sshd_session.c
   src/sshd_builtins.c
+  src/sshd_vpk.c
+  src/vpk_zip.c
+  src/vpk_head.c
+  ${VPK_HEAD_TEMPLATE_SRC}
   src/sshd_hostkey.c
   src/sftp_server.c
   src/sh_path.c
@@ -127,7 +143,7 @@ add_executable(${VITA_SERVER_NAME}
 # libssh compiles its server and SFTP declarations out of the public headers unless
 # WITH_SERVER is defined, and it defines that only in its own private config.h. A
 # consumer that does not define it too gets no ssh_bind_* and no sftp_server_*.
-target_compile_definitions(${VITA_SERVER_NAME} PRIVATE WITH_SERVER)
+target_compile_definitions(${VITA_SERVER_NAME} PRIVATE WITH_SERVER SSHD_TITLEID="${VITA_SERVER_TITLEID}")
 
 # libssh's stock SFTP handlers call these libc functions with the client's POSIX path.
 # --wrap routes every reference, inside libssh.a too, to __wrap_<name> in
@@ -160,7 +176,7 @@ target_link_options(${VITA_SERVER_NAME} PRIVATE
 # never searched. SceAppMgr_stub and SceCommonDialog_stub are the non-obvious ones —
 # vita2d's sharedFB path references them, so omitting either breaks the link.
 # ScePower_stub is the idle-timer tick that keeps the device awake while the
-# server runs.
+# server runs. ScePromoterUtil_stub is the system package installer behind `vpk install`.
 target_link_libraries(${VITA_SERVER_NAME}
   vita2d
   ssh
@@ -180,11 +196,13 @@ target_link_libraries(${VITA_SERVER_NAME}
   SceCommonDialog_stub
   ScePgf_stub
   ScePower_stub
+  ScePromoterUtil_stub
   m
 )
 
 vita_reset_flags()
-vita_create_self(${VITA_SERVER_NAME}.self ${VITA_SERVER_NAME})
+# UNSAFE: a safe-mode app cannot see ux0:app or ux0:patch, which `vpk install` writes to.
+vita_create_self(${VITA_SERVER_NAME}.self ${VITA_SERVER_NAME} UNSAFE)
 
 # Its own tile: the client's blue padlock and the server's teal prompt are distinct apps on
 # the shelf, so they do not share art. The packed paths stay sce_sys/... — each VPK has its

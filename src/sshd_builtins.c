@@ -1629,6 +1629,25 @@ static int cmd_env(sh_session_t *s, int argc, char **argv)
     return 0;
 }
 
+static int cmd_vpk(sh_session_t *s, int argc, char **argv)
+{
+    sh_target_t t;
+
+    if (argc != 3 || (strcmp(argv[1], "list") != 0 && strcmp(argv[1], "install") != 0)) {
+        sh_eprintf(s, "usage: vpk list FILE | vpk install FILE\n");
+        return 2;
+    }
+    if (resolve_arg(s, "vpk", argv[2], &t) != 0) {
+        return 1;
+    }
+    if (t.kind == SH_TARGET_ROOT || t.dev == NULL) {
+        sh_eprintf(s, "vpk: %s: Not a file\n", argv[2]);
+        return 1;
+    }
+    return (argv[1][0] == 'l') ? sh_vpk_list(s, t.sce, argv[2])
+                               : sh_vpk_install(s, t.sce, argv[2]);
+}
+
 static int cmd_which(sh_session_t *s, int argc, char **argv)
 {
     int i, status = 0;
@@ -1800,6 +1819,7 @@ static const sh_builtin_t builtins[] = {
     {"stat", cmd_stat, "stat PATH... -- size, mode and modification time"},
     {"touch", cmd_touch, "touch FILE... -- create a file or update its time"},
     {"uname", cmd_uname, "uname [-a] -- system name"},
+    {"vpk", cmd_vpk, "vpk list FILE | vpk install FILE -- inspect or install a VPK over this app"},
     {"which", cmd_which, "which COMMAND... -- report whether COMMAND is one of these builtins"},
     {"whoami", cmd_whoami, "whoami -- the name you logged in as"},
 };
