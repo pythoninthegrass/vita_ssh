@@ -1,12 +1,6 @@
-/* The window logic behind head and tail: which part of a stream to print, and how to get it
- * without reading the whole file. No Vita APIs, no stdout and no paths, so the host check
- * in scripts/test_sh_headtail.c runs the same code the server links. Bounds come back as
- * errno and the builtin reports them in the command's own voice. */
+/* Window logic for head and tail, no Vita APIs; notes in docs/shell-text-tools.md. */
 
-/* A line ends at a newline byte, or at end of file when the last line has no newline. The
- * empty file has no lines and "\n" has one empty line. head prints the first want lines
- * and tail the last want, each keeping its own newline, and both print the bytes of those
- * lines exactly as the file holds them, so a blank line prints as a blank line. */
+/* A line ends at a newline or at EOF; head and tail print whole lines verbatim. */
 #include "sh_headtail.h"
 
 #include <errno.h>
@@ -23,9 +17,7 @@ static ssize_t pull(sh_ht_seek_read_fn read_at, void *ctx, char *p, size_t n,
     return read_at(ctx, p, n, off);
 }
 
-/* Fills p with as much of [off, off+len) as the source gives, never asking for more than
- * SH_HT_CHUNK bytes at a time. Stops early at end of source and returns what arrived,
- * which is what a file that shrank under the read should print. */
+/* Fills p from [off, off+len) in reads of at most SH_HT_CHUNK bytes; stops early at EOF. */
 static ssize_t pull_chunked(sh_ht_seek_read_fn read_at, void *ctx, char *p, size_t off,
                             size_t len)
 {
@@ -46,14 +38,7 @@ static ssize_t pull_chunked(sh_ht_seek_read_fn read_at, void *ctx, char *p, size
     return (ssize_t)got;
 }
 
-/* Moves an answer of len bytes starting at off, either into out (bounded by out_cap and
- * refused before the first read when it cannot fit) or to the sink a chunk at a time, so
- * out needs only SH_HT_CHUNK bytes and the caller never has to promise an answer's size
- * to the heap. The sink is there because a tail -n 1000000 answer can be megabytes and
- * the server has one thread with every other session waiting on it. check_line watches
- * the SH_HT_LINE_MAX run as the bytes arrive rather than afterwards: a chunk handed to
- * the sink cannot be withdrawn, so a line over the bound has to be caught before the
- * chunk carrying it goes out. Returns the bytes produced, or -1 with errno set. */
+/* Moves len bytes from off into out or the sink in chunks, checking the line bound en route. */
 static ssize_t deliver(sh_ht_seek_read_fn read_at, void *ctx, size_t off, size_t len,
                        char *out, size_t out_cap, sh_ht_sink_fn sink, void *sink_ctx,
                        int check_line)
@@ -72,9 +57,7 @@ static ssize_t deliver(sh_ht_seek_read_fn read_at, void *ctx, size_t off, size_t
         if (got < 0) {
             return -1;
         }
-        /* Nothing has left the buffer yet, so the bound is checked on the answer as a
-         * whole here; the sink path below has to check it a chunk earlier for exactly
-         * that reason. */
+        /* Nothing has left the buffer yet, so the bound is checked on the whole answer here. */
         if (check_line) {
             for (j = 0; j < (size_t)got; j++) {
                 if (out[j] == '\n') {
@@ -126,9 +109,7 @@ static ssize_t deliver(sh_ht_seek_read_fn read_at, void *ctx, size_t off, size_t
     return (ssize_t)done;
 }
 
-/* The -c answer for either tool: want bytes taken from off, capped by the buffer rather
- * than refused, because a byte window is verbatim and a short one is an honest answer
- * rather than a wrong one. head asks from 0 and tail from the end of the file. */
+/* The -c answer for head and tail: want bytes from off, capped by the buffer, not refused. */
 static ssize_t byte_window(sh_ht_seek_read_fn read_at, void *ctx, size_t off,
                            size_t want, char *out, size_t out_cap)
 {
@@ -163,10 +144,7 @@ ssize_t sh_head_lines(sh_ht_seek_read_fn read_at, void *ctx, size_t want,
     if (want == 0) {
         return 0;
     }
-    /* Walks forward a byte at a time and stops just past the want'th newline, because
-     * head prints bytes [0, i] for the index i of that newline; with fewer newlines than
-     * were asked for the whole stream is the answer. off only grows and the source ends,
-     * so the walk finishes at the latest at end of source. */
+    /* Walks forward to just past the want'th newline; with fewer newlines, all of it. */
     for (;;) {
         char c;
         ssize_t n = pull(read_at, ctx, &c, 1, off);
@@ -180,8 +158,7 @@ ssize_t sh_head_lines(sh_ht_seek_read_fn read_at, void *ctx, size_t want,
         off++;
         if (c != '\n') {
             if (++run > SH_HT_LINE_MAX) {
-                /* Drained to its newline first, so a caller that reads on starts on a
-                 * clean line rather than mid-line of the one it was refused. */
+                /* Drain to the newline first so a caller that reads on starts on a clean line. */
                 do {
                     n = pull(read_at, ctx, &c, 1, off);
                     if (n < 0) {
@@ -200,8 +177,7 @@ ssize_t sh_head_lines(sh_ht_seek_read_fn read_at, void *ctx, size_t want,
             break;
         }
     }
-    /* The answer is the bytes read: a blank line is a newline in the output, and an
-     * unterminated last line prints without one. */
+    /* The answer is the bytes read: a blank line is a newline, a last line may lack one. */
     got = deliver(read_at, ctx, 0, off, out, out_cap, sink, sink_ctx, 1);
     if (got < 0) {
         return -1;
@@ -230,17 +206,9 @@ ssize_t sh_tail_bytes(sh_ht_seek_read_fn read_at, void *ctx, size_t file_size,
 
 /* Finds where tail's answer begins, by counting newlines backwards from end. */
 
-/* end is file_size, or file_size - 1 when the last byte is a newline, because that newline
- * ends the last line rather than opening a blank one. The walk goes from end - 1 down to 0
- * and the answer starts one byte after the want'th newline it meets, running to file_size so
- * the answer keeps its own trailing newline. With fewer than want newlines there, every line
- * the file has is the answer and the start stays 0. */
+/* end skips a final newline, which ends the last line; answer starts after want'th newline. */
 
-/* Bytes are fetched in chunks rather than one by one, which changes only where a byte comes
- * from. pos is the first byte not yet read and starts at end, so each chunk is [from, pos)
- * with from < pos, and pos becomes from at the end of every pass. pos therefore strictly
- * decreases and the walk cannot repeat a byte or spin: it ends at the want'th newline, or at
- * pos == 0 once the whole range has been counted. */
+/* Reads backwards in chunks; pos strictly decreases, so the walk ends at want newlines or 0. */
 static int tail_scan(sh_ht_seek_read_fn read_at, void *ctx, size_t file_size,
                      size_t want, char *chunk, size_t *start)
 {
@@ -299,14 +267,12 @@ ssize_t sh_tail_lines(sh_ht_seek_read_fn read_at, void *ctx, size_t file_size,
     if (start_out != NULL) {
         *start_out = 0;
     }
-    /* Both bounds are argument checks, so an over-long file or an impossible buffer is
-     * refused before the first read rather than after the whole walk. */
+    /* Both bounds are argument checks, refused before the first read rather than after the walk. */
     if (file_size > SH_HT_SIZE_MAX || out_cap > SH_HT_SIZE_MAX) {
         errno = ERANGE;
         return -1;
     }
-    /* tail -n 0 prints nothing: an empty window at the end of the file, not a window
-     * over all of it, which is what a start of 0 would otherwise read as. */
+    /* tail -n 0 prints nothing: an empty window at the end of the file, not one over all of it. */
     if (want == 0) {
         if (start_out != NULL) {
             *start_out = file_size;

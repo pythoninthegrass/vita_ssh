@@ -1,11 +1,4 @@
-/* Host test for src/sh_headtail.c; driven by scripts/test_sh_headtail.py.
- *
- * The reference is a naive line splitter written from the specification, not from the
- * implementation, so agreement between the two says something. The Python wrapper pins
- * that reference against a handful of real ghead/gtail calls before running this, so a
- * wrong reference is caught rather than copied. Everything here is in memory and runs in
- * seconds; the whole file is built with ASan and UBSan and run under a timeout, because
- * a backwards walk that repeats a byte spins rather than failing. */
+/* Host test for src/sh_headtail.c, driven by test_sh_headtail.py, against a naive reference. */
 #include "sh_headtail.h"
 
 #include <errno.h>
@@ -51,9 +44,7 @@ static ssize_t mem_read_at(void *vctx, void *p, size_t n, size_t off)
     return (ssize_t)n;
 }
 
-/* Fails every read at or past a set offset, which is how a mid-file I/O error is faked.
- * The file is a mem_file_t so the reads that survive go down the same path as every
- * other case; embedding it rather than casting keeps the two types apart. */
+/* Fails every read at or past a set offset to fake a mid-file I/O error; embeds a mem_file_t. */
 typedef struct {
     mem_file_t file;
     size_t fail_at;
@@ -70,12 +61,7 @@ static ssize_t sick_read_at(void *vctx, void *p, size_t n, size_t off)
     return mem_read_at(&f->file, p, n, off);
 }
 
-/* The naive reference, from the specification.
- *
- * A line ends at a newline byte, or at end of file when the last line has no newline;
- * the empty file has no lines and "\n" has one empty line. head returns the first want
- * lines and tail the last want, each keeping its own newline, so a trailing newline in
- * the answer belongs to the line it ends and is never a blank line of its own. */
+/* Naive reference from the specification: head takes the first want lines, tail the last want. */
 static size_t ref_head(const char *b, size_t len, size_t want, char *out)
 {
     size_t i;
@@ -124,10 +110,7 @@ static size_t ref_tail(const char *b, size_t len, size_t want, char *out)
     return len;
 }
 
-/* Scratch buffers at file scope, each as wide as the widest answer any case can ask for:
- * a whole chunk-boundary file, or one line at SH_HT_LINE_MAX. ASan keeps small frames,
- * so an array of this size inside a function is the stack overflow, not a fault in the
- * code under test, and separate buffers keep one call's answer from hiding another's. */
+/* File-scope scratch buffers sized for the widest answer; ASan frames are small, so no stack. */
 #define SCRATCH (SH_HT_LINE_MAX + 4 * SH_HT_CHUNK)
 static char case_file[SCRATCH];
 static char case_got[SCRATCH];
@@ -295,15 +278,12 @@ static void test_worked_examples(void)
     }
 }
 
-/* Builds one chunk-boundary file: kind 0 ends in a newline, kind 1 leaves the last line
- * unterminated with a newline at a chunk edge, and kind 2 is all newlines. */
+/* Builds a chunk-boundary file: kind 0 ends in a newline, 1 is unterminated, 2 is all newlines. */
 static void fill_chunk_case(size_t len, int kind, size_t edge)
 {
     size_t k;
 
-    /* Plain bytes make one line, and a line wider than SH_HT_LINE_MAX is refused on its
-     * own; these files are about the chunk edges, so no run between newlines is allowed
-     * to reach the bound. The stride keeps every run short in every kind. */
+    /* Plain bytes make one line; the stride keeps every run under SH_HT_LINE_MAX. */
     for (k = 0; k < len; k++) {
         case_file[k] = ((k % 64) == 63) ? '\n' : 'a';
     }
@@ -332,9 +312,7 @@ static void check_chunk_case(size_t len)
     for (k = 0; k < sizeof(byts) / sizeof(byts[0]); k++) {
         check_bytes_case(b, len, byts[k]);
     }
-    /* More lines than the file holds is the walk's other exit, and the one that used to
-     * spin. With room for the answer it returns the whole file after reading a chunk at
-     * a time; without room it refuses rather than printing half of it. */
+    /* More lines than the file holds is the walk's other exit: whole file or refused. */
     {
         mem_file_t walk = {b, len, 0, 0};
         size_t st = (size_t)-1;
@@ -343,8 +321,7 @@ static void check_chunk_case(size_t len)
 
         CHECK(g == (ssize_t)len);
         CHECK(st == 0);
-        /* The walk never asks for more than a chunk, which is what keeps a tail of a
-         * huge file from pulling the whole file into memory. */
+        /* The walk never asks for more than a chunk, so a huge file is never pulled into memory. */
         CHECK(walk.max_once <= SH_HT_CHUNK);
         if (g == (ssize_t)len) {
             CHECK(memcmp(case_got, b, len) == 0);
@@ -377,8 +354,7 @@ static void test_chunk_boundaries(void)
     }
 }
 
-/* The sink path: the answer leaves a chunk at a time, so the caller's buffer stays one
- * chunk and no answer size is ever promised to the heap. */
+/* The sink path: the answer leaves a chunk at a time, so the caller's buffer stays one chunk. */
 static char sink_got[SCRATCH];
 static size_t sink_len;
 static size_t sink_calls;
@@ -444,8 +420,7 @@ static void test_sink(void)
 {
     size_t i;
 
-    /* The same cases as everywhere else, plus files several chunks long where the sink
-     * is the only way the answer fits at all. */
+    /* The same cases as elsewhere, plus multi-chunk files that only fit via the sink. */
     for (i = 0; i < 3; i++) {
         size_t len = (i == 0) ? 1 : (i == 1 ? SH_HT_CHUNK : 3 * SH_HT_CHUNK + 7);
         size_t w;
@@ -456,8 +431,7 @@ static void test_sink(void)
         }
         check_sink_case(case_file, len, 1000000);
     }
-    /* A sink that stops mid-answer fails the call rather than reporting success: a
-     * half-printed tail presented as the whole thing is the wrong answer. */
+    /* A sink that stops mid-answer fails the call rather than reporting success. */
     {
         size_t len = 3 * SH_HT_CHUNK + 7;
         mem_file_t f = {NULL, len, 0, 0};
@@ -474,8 +448,7 @@ static void test_sink(void)
         CHECK(g == -1);
         CHECK(errno == ENOMEM);
     }
-    /* A line over the bound is refused before the chunk carrying it is handed over, so
-     * nothing of it reaches the user. */
+    /* A line over the bound is refused before the chunk carrying it is handed over. */
     {
         static char wide[SH_HT_LINE_MAX + SH_HT_CHUNK + 8];
         mem_file_t f;
@@ -582,8 +555,7 @@ static void test_bounds_and_errors(void)
         CHECK(sh_tail_lines(mem_read_at, &f, f.len, 1, case_got, 11, NULL, NULL, NULL) == 11);
         CHECK(memcmp(case_got, "bbbbbbbbbb\n", 11) == 0);
     }
-    /* The walk stops as soon as the answer is complete: a 300 KB file asked for two
-     * lines is read in chunks and never whole. */
+    /* The walk stops once the answer is done: a 300 KB file asked for 2 lines is not read whole. */
     {
         static char big[300 * 1024];
         static char win[8 * SH_HT_CHUNK];
