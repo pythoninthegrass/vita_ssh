@@ -41,11 +41,7 @@ typedef struct {
   int removable;
 } sh_device_t;
 
-/* The shell's synthetic pseudo-files: read-only names under a first component
- * that is not a device. /etc/os-release is one, and the shell's own surfaces --
- * cat, ls, stat, redirection -- all ask this table rather than comparing names
- * themselves, so they cannot disagree about what exists, or about how many bytes
- * the file has. */
+/* The shell's read-only pseudo-files under a non-device first component, e.g. /etc/os-release; cat, ls, stat and redirection all ask this table. */
 typedef struct {
   const char *dir;   /* POSIX directory it lives in, "/etc" */
   const char *name;  /* "os-release" */
@@ -54,21 +50,17 @@ typedef struct {
   int mode;          /* the permission bits stat and ls report */
 } sh_pseudo_t;
 
-/* The pseudo-file exactly named by a normalized POSIX path, or NULL. Nothing
- * else under its directory exists: /etc/shadow is ENOENT like any other name. */
+/* The pseudo-file named by a normalized POSIX path, or NULL; any other name under its directory is ENOENT. */
 const sh_pseudo_t *sh_pseudo_lookup(const char *posix);
 
-/* The names to list for `ls /etc`, in table order, which is alphabetical; returns
- * the count. */
+/* The names `ls /etc` lists, in table order (alphabetical); returns the count. */
 size_t sh_pseudo_list(const char *dir, const char *names[], size_t max);
 
 typedef enum {
   SH_TARGET_ROOT = 0,  /* "/", the synthetic listing of the device table */
   SH_TARGET_DEVICE,    /* "/ux0" and "/ux0/" are the same thing */
   SH_TARGET_PATH,      /* "/ux0/vita/save/x.dat" */
-  /* A pseudo-file: no sce spelling, because no sceIo call can reach it. Only the
-   * shell knows these exist -- sh_path_sce() fails for them, which is what keeps
-   * them out of SFTP and out of every libc call. */
+  /* A pseudo-file: no sce spelling, so sh_path_sce() fails for it, which keeps it out of SFTP and libc. */
   SH_TARGET_PSEUDO
 } sh_target_kind_t;
 

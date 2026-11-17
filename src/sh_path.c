@@ -292,8 +292,7 @@ int sh_path_resolve(const sh_fsctx_t *fs, const char *path, sh_target_t *out)
         path = fs->cwd;
     }
 
-    /* Make the path absolute first, prepending exactly one component: the device
-     * the caller named, or the one the cwd or home sits on. */
+    /* Make the path absolute first, prepending exactly one component: the device of the cwd or home. */
     if (path[0] == '~') {
         if (path[1] != '/' && path[1] != '\0') {
             errno = EINVAL; /* ~user: this box has no other users */

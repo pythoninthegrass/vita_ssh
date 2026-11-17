@@ -55,7 +55,7 @@ Machine-local identifiers must not be baked into any field or into this task: en
 - [x] #4 `cat /etc/os-release` prints os-release formatted KEY=value lines covering at least NAME, ID, PRETTY_NAME, VERSION_ID, HOME_URL and SUPPORT_URL, with VERSION_ID matching `uname -a`.
 - [x] #5 The os-release output is machine-parseable: one assignment per line, valid identifiers, no spaces around `=`, so `grep '^VERSION_ID='` and shell sourcing both work.
 - [x] #6 `cat /etc/os-release` includes exactly SUPPORT_URL="https://github.com/pythoninthegrass/vita_ssh" and HOME_URL="https://www.reddit.com/r/vitahacks", written as literals in the code rather than derived from the device.
-- [x] #7 `ls /etc` lists os-release, `stat /etc/os-release` reports a regular file with the size actually printed, and `ls /` still lists the device table exactly as before.
+- [ ] #7 `ls /etc` lists os-release, `stat /etc/os-release` reports a regular file with the size actually printed, and `ls /` still lists the device table exactly as before.
 - [ ] #8 `/etc` is shell-only: SFTP for /etc/os-release fails as any unknown path does, and any other name under /etc (for example /etc/shadow) fails ENOENT with the message in the command's own voice.
 - [ ] #9 `cat /etc/os-release > /ux0/data/x` puts the same bytes in the file that `cat` printed to the terminal, and `>>` appends them.
 - [x] #10 If the firmware query fails, both surfaces print an honest unknown value rather than a made-up version, and the commands still exit 0.
@@ -173,6 +173,7 @@ only a device can show it. None are ticked.
   reads 3.60). The formatter is proven for both words off-device; the kernel call is not.
   Compare against Settings -> System -> PS Vita System Software Version, and note the
   spoofed-firmware case returns the spoofed value by design.
+- **AC #7** - `ls /etc` listing os-release and `stat /etc/os-release` reporting a regular file with the size `cat` prints. The builtins cannot be driven by the host check, so this rests on code reading until a device run. `ls /` is byte-identical to the base per the host harness.
 - **AC #8** - the SFTP/scp half. `sh_path_sce()` returns `ENOTSUP` for `/etc/os-release`
   and `ENOENT` for `/etc`, `/etc/shadow`, `/etc/passwd`, and sftp_server's `resolve()`
   maps a pseudo target to `ENOENT`, so libssh's stock handlers should never see `/etc`.
