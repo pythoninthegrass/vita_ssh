@@ -1801,31 +1801,18 @@ static int cmd_wc(sh_session_t *s, int argc, char **argv)
         total_b += counts[k].bytes;
     }
 
-    /* The columns share one width: the widest count across every row printed, so the
-     * digits line up under the total. Width is in digits, not the seven of a bare wc. */
+    /* GNU's width: the digits of the summed byte size, and none for one column of one input. */
     {
-        unsigned int maxc = 1;
-        unsigned int digits;
+        unsigned long v = total_b;
 
-        for (k = 0; k < files; k++) {
-            if (!have[k]) {
-                continue;
-            }
-            for (digits = 0; digits < 3; digits++) {
-                unsigned long v = digits == 0 ? counts[k].lines
-                                : digits == 1 ? counts[k].words
-                                              : counts[k].bytes;
-                unsigned int d = 1;
-                while (v >= 10) {
-                    v /= 10;
-                    d++;
-                }
-                if (d > maxc) {
-                    maxc = d;
-                }
-            }
+        width = 1;
+        while (v >= 10) {
+            v /= 10;
+            width++;
         }
-        width = maxc;
+        if (files == 1 && want_l + want_w + want_b == 1) {
+            width = 1;
+        }
     }
 
     for (k = 0; k < files; k++) {
