@@ -137,6 +137,11 @@ int sh_session_history(sh_session_t *s, const char **entries, int max);
  * commands (rm -r, cp -r, du) check it so a stuck walk is not a hung device. */
 int sh_session_interrupted(const sh_session_t *s);
 
+/* Called per entry by a long walk: runs a poll slice at most every 100 ms so
+ * other sessions can connect and be read, and only from a command run by
+ * sh_session_pump(); from anywhere else it does nothing. */
+void sh_session_yield(sh_session_t *s);
+
 /* Runs one command line: tokenizing, quoting, wildcard expansion, dispatch.
  * Returns the exit status to report. */
 int sh_execute_line(sh_session_t *s, const char *line);

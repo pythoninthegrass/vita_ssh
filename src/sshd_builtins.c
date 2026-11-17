@@ -2259,6 +2259,7 @@ static int remove_tree(sh_session_t *s, const char *cmd, const sh_target_t *t,
     while ((ent = readdir(dir)) != NULL) {
         struct stat st;
 
+        sh_session_yield(s);
         if (sh_session_interrupted(s)) {
             break;
         }
@@ -2473,6 +2474,7 @@ static int copy_file(sh_session_t *s, const char *cmd, const char *src,
     while ((got = read(in, buf, SSHD_COPY_BUFSIZE)) > 0) {
         ssize_t put = 0;
 
+        sh_session_yield(s);
         while (put < got) {
             ssize_t one = write(out, buf + put, (size_t)(got - put));
 
@@ -2518,6 +2520,7 @@ static int copy_tree(sh_session_t *s, const char *cmd, const sh_target_t *src,
     while ((ent = readdir(dir)) != NULL) {
         struct stat st;
 
+        sh_session_yield(s);
         if (sh_session_interrupted(s)) {
             break;
         }
@@ -2886,6 +2889,7 @@ static long long du_tree(sh_session_t *s, const sh_target_t *t, int depth,
     while ((ent = readdir(dir)) != NULL) {
         struct stat st;
 
+        sh_session_yield(s);
         if (sh_session_interrupted(s) || depth > MAX_DEPTH) {
             break;
         }

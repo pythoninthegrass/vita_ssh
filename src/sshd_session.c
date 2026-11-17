@@ -31,6 +31,8 @@
 #include <sys/stat.h>
 #include <time.h>
 
+#include <psp2/kernel/processmgr.h>
+
 /* callbacks.h declares ssh_server_callbacks_struct, ssh_channel_callbacks_struct,
  * ssh_callbacks_init() and the two setters below. server.h does not pull it in,
  * and without it both callback structs come back incomplete. */
@@ -49,6 +51,8 @@
 #define WINDOW_STALL_S 30
 /* Length of one poll slice while waiting for the window to reopen. */
 #define WINDOW_POLL_MS 50
+/* Minimum gap between the poll slices a long walk runs for the other sessions. */
+#define YIELD_INTERVAL_US (100 * 1000)
 
 /* This newlib ships no NAME_MAX (sshd_builtins.c defines the same value); 255
  * is the POSIX minimum and FAT's own limit for long names. */
@@ -105,6 +109,7 @@ struct sh_session {
     const char *end_reason; /* why the session ended, first cause wins; NULL until it does */
     int in_pump; /* set while sh_session_pump() runs a command: only then may a write wait on the poll loop */
     time_t sftp_closing; /* when the sftp channel close was started, 0 before */
+    unsigned long long last_yield_us; /* system time of the last sh_session_yield() slice */
 
     /* Set by the editor on Enter, consumed by sh_session_pump(). */
     int pending_ready;
@@ -489,6 +494,21 @@ int sh_session_interrupted(const sh_session_t *s)
 {
     /* See the file header: this cannot see a Ctrl-C that arrives mid-command. */
     return s == NULL || s->exit_requested || s->finished;
+}
+
+void sh_session_yield(sh_session_t *s)
+{
+    unsigned long long now;
+
+    if (s == NULL || !s->in_pump) {
+        return;
+    }
+    now = (unsigned long long)sceKernelGetSystemTimeWide();
+    if (now - s->last_yield_us < YIELD_INTERVAL_US) {
+        return;
+    }
+    s->last_yield_us = now;
+    sh_server_poll_slice(0);
 }
 
 int sh_session_finished(const sh_session_t *s)
