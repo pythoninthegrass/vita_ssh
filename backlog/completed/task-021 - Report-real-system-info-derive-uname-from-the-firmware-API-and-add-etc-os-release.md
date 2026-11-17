@@ -3,10 +3,10 @@ id: TASK-021
 title: >-
   Report real system info: derive uname from the firmware API and add
   /etc/os-release
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-11-17 04:18'
-updated_date: '2026-11-17 04:20'
+updated_date: '2026-11-17 07:29'
 labels:
   - shell
   - builtins
