@@ -2,7 +2,7 @@
 # TASK-001.04 and TASK-002 smoke tests for the Vita sshd, all three halves in one file.
 #
 # Usage:
-#   scripts/smoke.sh [MODE] user@host [port]     (MODE defaults to all, port to 2222)
+#   scripts/smoke.sh [MODE] user@host [port]     (MODE defaults to all, port to 22)
 #
 #   MODE all   everything: exec, pty, then sftp checks
 #   MODE exec  exec-mode checks only   (ACs 2, 3, 4, 5, 6)
@@ -44,7 +44,7 @@ case "${1:-}" in
   *) usage; exit 2 ;;         # no host, or a typo'd mode
 esac
 HOST=$1
-PORT=${2:-2222}
+PORT=${2:-22}
 PASS=0; FAIL=0
 
 # One grader for both halves: equal strings pass. The exec half passes real

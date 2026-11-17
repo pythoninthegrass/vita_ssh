@@ -19,7 +19,7 @@ Output uses the same PASS/FAIL lines as scripts/smoke.sh, which runs this script
 part of its sftp half, and the exit status is nonzero when any check fails.
 
 Usage:
-    scripts/sftp_probe.py user@host [port]     (port defaults to 2222)
+    scripts/sftp_probe.py user@host [port]     (port defaults to 22)
 
 Args:
     user@host: Account and address of the Vita; key auth only, from the agent or ~/.ssh.
@@ -130,7 +130,7 @@ def main() -> int:
         print(__doc__, file=sys.stderr)
         return 2
     target = sys.argv[1]
-    port = int(sys.argv[2]) if len(sys.argv) > 2 else 2222
+    port = int(sys.argv[2]) if len(sys.argv) > 2 else 22
     user, _, host = target.rpartition("@")
 
     client = paramiko.SSHClient()

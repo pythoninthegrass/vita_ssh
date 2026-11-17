@@ -207,10 +207,10 @@ ssh -p 2222 -i ~/.ssh/id_ed25519 vita@192.168.1.50
 The server speaks SFTP, so `sftp` works as usual and `scp` works through its SFTP mode.
 
 ```sh
-sftp -P 2222 -i ~/.ssh/id_ed25519 vita@192.168.1.50
+sftp -i ~/.ssh/id_ed25519 vita@192.168.1.50
 
-scp -s -P 2222 -i ~/.ssh/id_ed25519 game.vpk vita@192.168.1.50:/ux0/data/
-scp -s -P 2222 -i ~/.ssh/id_ed25519 vita@192.168.1.50:/ux0/data/vitasshd/sshd.log .
+scp -s -i ~/.ssh/id_ed25519 game.vpk vita@192.168.1.50:/ux0/data/
+scp -s -i ~/.ssh/id_ed25519 vita@192.168.1.50:/ux0/data/vitasshd/sshd.log .
 ```
 
 Paths are the same POSIX paths the shell uses: `/` lists the devices, `/ux0` is the memory card, and a session starts in `ux0:data/vitasshd`. `-s` selects scp's SFTP mode, which needs OpenSSH 8.7 or later and is the default from 9.0 (an older client has no `-s`, so use `sftp`); the legacy scp protocol (`scp -O`) is not supported, because the shell has no `scp` command to run.

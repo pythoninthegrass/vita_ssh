@@ -2,7 +2,7 @@
 # TASK-002.03.03 throughput baseline for the Vita sshd. See docs/throughput.md.
 #
 # Usage:
-#   scripts/throughput.sh [MODE] user@host [port]     (MODE defaults to bench, port to 2222)
+#   scripts/throughput.sh [MODE] user@host [port]     (MODE defaults to bench, port to 22)
 #
 #   MODE bench  RUNS rounds of scp up, scp down, sftp put, sftp get on a 12 MB file;
 #               one THROUGHPUT line per transfer, then median/min/max per direction
@@ -35,7 +35,7 @@ case "${1:-}" in
   *) usage; exit 2 ;;
 esac
 HOST=$1
-PORT=${2:-2222}
+PORT=${2:-22}
 RUNS=${RUNS:-5}
 SIZE=12582912
 SSHO="-o BatchMode=yes -o ConnectTimeout=5 -o ServerAliveInterval=5 -o ServerAliveCountMax=3"

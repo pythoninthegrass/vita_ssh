@@ -20,7 +20,7 @@ Nothing here runs on the host: the apps are cross-compiled for the Vita, so ever
 
 5. Press Circle on the Vita to cancel the USB mount.
 6. In VitaShell, open `ux0:downloads/` and install the VPK.
-7. Press the PS button to leave VitaShell, then open the vitasshd app. The server prints `ready: ssh any@<ip> -p 2222` on its console once it is listening.
+7. Press the PS button to leave VitaShell, then open the vitasshd app. The server prints `ready: ssh any@<ip>` (with `-p <port>` when it fell back to 2222) on its console once it is listening.
 8. Test with ssh and sftp (scp support is still to come):
 
    ```bash
@@ -38,13 +38,13 @@ Nothing here runs on the host: the apps are cross-compiled for the Vita, so ever
 The server writes `ux0:/data/vitasshd/sshd.log`. Read it from a shell session on the Vita itself:
 
 ```bash
-ssh -p 2222 any@<ip> "cat sshd.log"
+ssh any@<ip> "cat sshd.log"
 ```
 
 To paste the log into a bug report or a chat, copy it to the macOS clipboard instead:
 
 ```bash
-ssh -p 2222 any@<ip> cat sshd.log | pbcopy
+ssh any@<ip> cat sshd.log | pbcopy
 ```
 
 The shell has no `tail`, so the whole file comes back and the newest lines are at the bottom. A `=== VitaSSHd starting` line in the middle of the log means the app restarted, which after a `subsystem "sftp"` line usually means it crashed. The file is also reachable over the USB mount at `data/vitasshd/sshd.log`.
@@ -86,7 +86,7 @@ A call to the bare libc name from inside `process_setstat` or `process_extended_
 Run the client by hand with verbose output and note which command stalls or kills the server:
 
 ```bash
-sftp -vv -P 2222 any@<ip>
+sftp -vv any@<ip>
 ```
 
 Then compare against `sshd.log`. A single command per client invocation (`sftp -b - <<< "ls /"`) separates a handler bug from an interaction between requests.
