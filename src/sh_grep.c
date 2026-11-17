@@ -1,5 +1,4 @@
-/* A bounded POSIX basic regex matcher with no Vita APIs: the SDK declares regcomp in
- * <regex.h> but no library in its sysroot defines it. */
+/* Bounded POSIX BRE matcher, no Vita APIs; notes in docs/shell-text-tools.md. */
 #include "sh_grep.h"
 
 #include <errno.h>
@@ -38,12 +37,8 @@ typedef struct grep_node {
     short a, b; /* operand nodes, -1 when unused */
     short next[EDGE_MAX];
     unsigned char copy_edge[EDGE_MAX];
-    /* Marks the parallel entry in next[] as "one more copy of the enclosing repeat is
-     * finished", which is the only way the walk can charge a repeat whose body is a
-     * CAT or a group: its last state is several nodes below the repeat's operand. */
-    /* Where control goes once this node's own text is consumed. A list, not one slot,
-     * because the same node can finish in more than one place: a repeat's body ends
-     * both back at the repeat and at whatever follows the repeat. */
+    /* Marks the parallel next[] entry as finishing one copy of the enclosing repeat. */
+    /* Where control goes once this node's text is consumed; a list, as one node can end twice. */
     int nnext;
     grep_range_t cls[CLASS_RANGES];
 } node_t;
@@ -61,9 +56,7 @@ struct sh_grep_re {
     char *text; /* the pattern as typed, for the error line */
 };
 
-/* Why the last compile failed. Static because there is one server thread running one
- * command at a time, and a failed compile has to name its cause without making every
- * caller thread a context through. */
+/* Why the last compile failed; static since one server thread runs one command at a time. */
 #define WHY_OK 0
 #define WHY_BRACK 1  /* [ without a closing ] */
 #define WHY_RANGE 2  /* [z-a], or more ranges than CLASS_RANGES */
@@ -88,16 +81,7 @@ char sh_grep_fold(int c)
     return (char)c;
 }
 
-/*
- * Reads one line through a byte callback, so the bounded line rule lives with the
- * matcher rather than in whichever builtin is reading. fill() copies up to want bytes
- * into p and returns how many it took, or 0 at end of input; grep, and later wc and
- * sed, supply a file descriptor or the session's stdin behind it. A line is returned
- * without its newline. The return is the length, 0 at end of input, or -1 for a line
- * longer than cap -- which is drained to the next newline first, so the following read
- * starts clean and the caller gets exactly one overlong verdict per long line. Truncating
- * instead would match a prefix the caller never asked about.
- */
+/* Reads one line through a byte callback: length, 0 at EOF, or -1 (line drained) if over cap. */
 int sh_grep_read_line(sh_grep_fill_fn fill, void *ctx, char *line, size_t cap,
                       int *eof)
 {
@@ -127,10 +111,7 @@ int sh_grep_read_line(sh_grep_fill_fn fill, void *ctx, char *line, size_t cap,
         line[len++] = c;
     }
     if (len == 0) {
-        /* Nothing read and no newline: this is end of input, not a blank line. A blank
-         * line arrives through the newline branch above with len 0 and eof clear, so
-         * the caller's loop keeps going across blank lines instead of stopping at the
-         * first one. */
+        /* No bytes and no newline is end of input; a blank line comes through above with len 0. */
         if (eof != NULL) {
             *eof = 1;
         }
@@ -140,9 +121,7 @@ int sh_grep_read_line(sh_grep_fill_fn fill, void *ctx, char *line, size_t cap,
     return (int)len;
 }
 
-/* Folded equality. icase folds ASCII only, so a byte >= 0x80 compares as itself; there
- * is no locale table here, and consulting one would make -i answer differently for the
- * same bytes on a different host. */
+/* Folded equality; icase folds ASCII only so bytes >= 0x80 compare as themselves, locale-free. */
 static int byte_eq(unsigned char x, unsigned char y, int icase)
 {
     if (x == y) {
@@ -156,10 +135,7 @@ static int byte_eq(unsigned char x, unsigned char y, int icase)
 /* the substring search                                                 */
 /* ------------------------------------------------------------------ */
 
-/* Naive scan, not KMP. A line is bounded by SH_GREP_LINE_MAX and a needle by
- * SH_GREP_PATTERN_MAX, so the worst case is a bounded number of byte comparisons in a
- * buffer that already lives in cache; a failure table would cost more than the
- * comparisons it saves at this size. */
+/* Naive scan, not KMP: line and needle are bounded, so a failure table would cost more. */
 const char *sh_grep_find(const char *haystack, const char *needle, size_t needle_len,
                          int icase)
 {
@@ -199,14 +175,10 @@ static int class_add(node_t *n, unsigned char lo, unsigned char hi)
     return 0;
 }
 
-/* Adds ch and, when case is folded away, its counterpart, so [a-z] under -i also takes
- * A-Z. The counterpart is its own range rather than a widened one, because widening
- * would swallow the punctuation between the two halves of ASCII. */
+/* Adds ch and its case counterpart as its own range, so [a-z] under -i also takes A-Z. */
 static int class_add_char(node_t *n, int ch, int icase)
 {
-    /* Only the byte as written is stored; class_hit folds at match time, which covers
-     * both cases without a second range for each one. icase is unused here and kept in
-     * the signature so every range goes through one function. */
+    /* Only the byte as written is stored; class_hit folds at match time. */
     (void)icase;
     return class_add(n, (unsigned char)ch, (unsigned char)ch);
 }
@@ -215,11 +187,7 @@ static int class_hit(const node_t *n, unsigned char ch)
 {
     int i, in = 0;
 
-    /* With -i the test is done on folded bytes rather than by storing each range
-     * twice: a range typed in either case then matches the other, and a negated set
-     * stays the complement of exactly the set that was written. The folded endpoints
-     * bound a small extra span of punctuation, so both a byte and its counterpart are
-     * tested explicitly and only those two are ever accepted. */
+    /* With -i the test runs on folded bytes, accepting only a byte and its counterpart. */
     unsigned char f = n->icase ? (unsigned char)sh_grep_fold((int)ch) : ch;
 
     for (i = 0; i < n->ncls; i++) {
@@ -267,9 +235,7 @@ static int class_parse(compiler_t *c, int idx)
     const char *p = c->pat + c->pos;
     int first = 1;
 
-    /* POSIX BRE spells a complemented set [^abc]; the shell-style [!abc] is accepted
-     * too, since people reach for it and answering a different question than the one
-     * typed is worse than being generous about it. */
+    /* POSIX BRE spells a complemented set [^abc]; the shell-style [!abc] is accepted too. */
     if (*p == '^' || *p == '!') {
         n->negated = 1;
         p++;
@@ -314,15 +280,8 @@ static int class_parse(compiler_t *c, int idx)
 
 static int parse_re(compiler_t *c, int *out);
 
-/* Says that once `node` has finished, control may pass to `next`, recursing into the
- * operands that can themselves be the end of a larger construct. This is the only place
- * that knows what "finished" means for each node kind, so the walk never has to ask who
- * called it -- which is what makes a state reached by two routes one state, explored
- * once. -1 means the end of the whole pattern, i.e. a match. */
-/* Threads the inside of a repeat's body. Identical to thread_tail except that a
- * consume node landing on `owner` -- the repeat -- is recorded as a copy boundary, which
- * is the only way the walk can tell "this copy is finished" from "about to start the
- * first one". */
+/* Says control may pass from `node` to `next`; defines "finished" per node kind; -1 is a match. */
+/* Like thread_tail, but a consume node landing on `owner` is recorded as a copy boundary. */
 static void thread_body(compiler_t *c, int node, int owner);
 
 static void thread_tail(compiler_t *c, int node, int next)
@@ -353,8 +312,7 @@ static void thread_tail(compiler_t *c, int node, int next)
         break;
     case OP_BOL:
     case OP_EOL:
-        /* An anchor consumes nothing, so control simply continues into its operand.
-         * It carries no continuation list of its own. */
+        /* An anchor consumes nothing, so control continues into its operand. */
         thread_tail(c, n->a, next);
         thread_tail(c, n->b, next);
         break;
@@ -371,11 +329,7 @@ static void thread_tail(compiler_t *c, int node, int next)
             }
             n->next[n->nnext++] = (short)next;
         }
-        /* One more copy re-enters the body, and the body's own end comes back to this
-         * repeat. Threading it with `node` as the continuation marks the edges that
-         * complete a copy, which is what the walk charges; an edge into this repeat
-         * from a preceding sibling is threaded by the CAT case above and stays
-         * uncharged, so `ab\?c` does not credit the `a` as a copy of `b`. */
+        /* One more copy re-enters the body; `node` as continuation marks the copy-ending edges. */
         thread_body(c, n->a, node);
         break;
     case OP_CAT:
@@ -395,8 +349,7 @@ static void thread_tail(compiler_t *c, int node, int next)
     }
 }
 
-/* Reads decimal digits into val. Returns 0 for none, 1 for a usable bound, -1 for a
- * value too large to be a repeat count. */
+/* Reads decimal digits into val: 0 for none, 1 for a usable bound, -1 for too large a count. */
 static int scan_count(const char *p, unsigned long *val, const char **end)
 {
     const char *q = p;
@@ -444,8 +397,7 @@ static int parse_atom(compiler_t *c, int *out)
         return 0;
     }
     if (*p == '*') {
-        /* Nothing to quantify. Reading it as a literal star would answer a different
-         * question than the one that was asked. */
+        /* Nothing to quantify; a literal star would answer a different question than was typed. */
         g_why = WHY_BADRPT;
         return -1;
     }
@@ -464,10 +416,7 @@ static int parse_atom(compiler_t *c, int *out)
             }
             c->depth++;
             if (parse_re(c, &body) != 0) {
-                /* A group that never closes reports the parenthesis, not whatever the
-                 * empty remainder happened to look like: `grep a\(` is a mistyped
-                 * group, and "nothing to repeat" sends the reader looking for a
-                 * quantifier that is not there. */
+                /* A group that never closes reports the parenthesis, not "nothing to repeat". */
                 if (c->pat[c->pos] == '\0') {
                     g_why = WHY_PAREN;
                 }
@@ -479,9 +428,7 @@ static int parse_atom(compiler_t *c, int *out)
                 return -1;
             }
             c->pos += 2;
-            /* A group brackets its body, which is what makes it a unit a quantifier
-             * can be hung off. It captures nothing and \1 is no backreference: grep
-             * asks only whether a line matches, so there is nothing to hand back. */
+            /* A group brackets its body so a quantifier can attach; it captures nothing, no \1. */
             grp = c->nnodes;
             if (node_new(c, OP_GRP) == NULL) {
                 return -1;
@@ -513,10 +460,7 @@ static int parse_atom(compiler_t *c, int *out)
         *out = idx;
         return 0;
     }
-    /* ^ and $ away from the ends of the pattern are ordinary bytes, which is how BRE
-     * defines them. sh_grep_compile has already taken the ends: it strips a leading ^
-     * and a trailing $ from the text the parser sees, so neither reaches here as an
-     * anchor. */
+    /* ^ and $ away from the pattern ends are ordinary bytes; the ends were already stripped. */
     c->pos++;
     idx = c->nnodes;
     if (node_new(c, OP_LIT) == NULL) {
@@ -570,10 +514,7 @@ static int parse_piece(compiler_t *c, int *out)
             /* The closing brace is escaped too, so \{2\} ends at "\\}". */
             if (bad || got_lo == 0 || strncmp(q, "\\}", 2) != 0 ||
                 (comma && got_hi && hi < lo)) {
-                /* In BRE a \{ that cannot be read as an interval is a literal brace, but
-                 * a mistyped \{2,1\} that quietly searches for braces instead of
-                 * reporting the bounds is the wrong answer to the question that was
-                 * asked. */
+                /* An unreadable \{ interval is an error, not a search for literal braces. */
                 g_why = bad ? WHY_BADBR : WHY_BRACE;
                 return -1;
             }
@@ -625,9 +566,7 @@ static int parse_branch(compiler_t *c, int *out)
         }
         c->node[cat].a = (short)first;
         c->node[cat].b = (short)tail;
-        /* The left operand's tail is the right operand, and the right operand's tail is
-         * whatever this CAT's own tail turns out to be; the walk reads b for the first
-         * and accept for the second, so the chain is complete without a patch pass. */
+        /* The left operand's tail is the right operand; the right's tail is this CAT's own tail. */
         first = cat;
     }
     *out = first;
@@ -663,9 +602,7 @@ static int parse_re(compiler_t *c, int *out)
     return 0;
 }
 
-/* A pattern with no metacharacters at all: substring search and the tree agree
- * exactly, so the caller may take the cheaper path. An escape rules it out, because
- * then the bytes the matcher sees are not the bytes that were typed. */
+/* A pattern with no metacharacters or escapes can take the cheaper substring path. */
 static int literal_setup(sh_grep_t *re, const char *pattern)
 {
     const char *p;
@@ -722,14 +659,12 @@ sh_grep_t *sh_grep_compile(const char *pattern, int flags)
     re->icase = (flags & SH_GREP_ICASE) ? 1 : 0;
 
     if (plen == 0 || strcmp(pattern, "^") == 0 || strcmp(pattern, "$") == 0) {
-        /* The empty pattern matches every line, and so do the two degenerate anchors:
-         * every line has a start and an end. */
+        /* The empty pattern and the two degenerate anchors match every line. */
         re->matches_all = 1;
         return re;
     }
 
-    /* Strip the anchors the compiler owns so the parser never sees them as bytes:
-     * a leading ^ becomes the anchored flag and a trailing $ the EOL node below. */
+    /* Strip the anchors the compiler owns: leading ^ sets anchored, trailing $ becomes EOL. */
     char stripped[SH_GREP_PATTERN_MAX + 1];
     size_t slen = plen;
 
@@ -758,8 +693,7 @@ sh_grep_t *sh_grep_compile(const char *pattern, int flags)
         return NULL;
     }
 
-    /* A leading ^ constrains where a match may begin; a trailing $ becomes an EOL node
-     * the walk may pass only at the line's end. Elsewhere both are ordinary bytes. */
+    /* A leading ^ fixes where a match begins; a trailing $ is an EOL node passable at line end. */
     re->anchored = (pattern[0] == '^');
     c.pos = re->anchored ? 1 : 0;
     if (parse_re(&c, &body) != 0) {
@@ -823,9 +757,7 @@ sh_grep_t *sh_grep_compile(const char *pattern, int flags)
     }
 
     if (root < 0) {
-        /* Nothing left to match: every line has a start, so this matches all. The
-         * caller still owns the object, so only the scratch program is released --
-         * freeing re here would hand the caller a dangling handle to match against. */
+        /* Nothing left to match so this matches all; only scratch is freed, the caller owns re. */
         re->matches_all = 1;
         re->node = NULL;
         re->nnodes = 0;
@@ -924,8 +856,7 @@ static void thread_body(compiler_t *c, int node, int owner)
         n->nnext++;
         break;
     case OP_CAT:
-        /* Inside a body the left operand still ends at the right one, uncharged; only
-         * the body's true end reaches the repeat. */
+        /* Inside a body the left ends at the right uncharged; only the body's end charges. */
         thread_tail(c, n->a, n->b);
         thread_body(c, n->b, owner);
         break;
@@ -959,30 +890,10 @@ static void thread_body(compiler_t *c, int node, int owner)
 /* matching                                                             */
 /* ------------------------------------------------------------------ */
 
-/* Thompson's algorithm over the compiled tree. At each byte the matcher holds the set
- * of (node, position-in-a-repeat) pairs the pattern could be in, and advances them
- * together. A pair reached twice is added once, so no alternative is explored twice and
- * the cost is the line times the nodes reachable at a position -- bounded by the
- * program, never by the shape of the pattern. That is the property this needs: the
- * matcher runs in the server's one poll loop, where a pattern whose cost depends on its
- * own shape, such as \(a*\)*b over a few hundred bytes, would hold every session's
- * socket the way a stalled socket write does.
- *
- * Walking the tree instead of a pre-flattened state graph is what keeps the compiler
- * honest: a node's continuation is passed in when it is reached, so a CAT, a group and
- * a repeat can each say where their tail goes without a patch-up pass that could leave
- * a hole. The budget in SH_GREP_STEP_LIMIT is the backstop, charged once per node
- * visited; a pattern that somehow outgrows it answers EAGAIN rather than guessing "no
- * match", because an admitted failure is information and a wrong answer is not.
- *
- * The walk is iterative over an explicit pending list, not recursive, because it runs
- * on the server thread whose stack is the fixed SERVER_STACK handed to
- * sceKernelCreateThread. */
+/* Thompson simulation over the compiled tree: the live set is deduplicated, so cost is bounded. */
 
 #define SET_SLOTS 2048  /* open-addressed live-set slots: a power of two, > 2 * PROGRAM_MAX */
-#define LIVE_PAIRS 1024 /* states that can be live at one position: PROGRAM_MAX nodes,
-                         * each reachable at a handful of repeat counts before the step
-                         * budget ends the attempt anyway */
+#define LIVE_PAIRS 1024 /* live states at one position: PROGRAM_MAX nodes x a few counts */
 
 typedef struct {
     const sh_grep_t *re;
@@ -1000,13 +911,7 @@ typedef struct {
     int hit;
 } matcher_t;
 
-/* A live state is a node plus how far through a repeat it is, tagged with the position
- * so that advancing is one increment rather than a clear. The three fields are laid out
- * so that no two distinct states can share a key, and 0 alone means "slot unused" -- a
- * bias into the count's low bit would make copies 0 and 1 of a repeat indistinguishable,
- * which is exactly how a\{2\} comes to accept a single character. PROGRAM_MAX nodes and
- * counts to 255 take 10 and 8 bits; the node index starts at bit 9 so that count 0 with
- * node 0 still leaves the whole word zero. */
+/* A live state is node, repeat count and position packed in one key; 0 alone means unused. */
 #define STAMP_WRAP (1u << 13)
 
 static unsigned int state_key(int node, int count, unsigned int stamp)
@@ -1055,8 +960,7 @@ static void push_state(matcher_t *m, int node, int count)
     fprintf(stderr, "push node=%d cnt=%d stamp=%u\n", node, count, m->stamp);
 #endif
     if (node < 0) {
-        /* Nothing left to match: the whole pattern has been consumed, which is the
-         * answer. */
+        /* Nothing left to match: the whole pattern has been consumed, which is the answer. */
         m->hit = 1;
         return;
     }
@@ -1067,13 +971,7 @@ static void push_state(matcher_t *m, int node, int count)
     if (node >= 0) {
         const node_t *rn = &m->re->node[node];
 
-        /* A count is a property of a repeat, and it rides through the nodes between
-         * the repeat and the byte that ends a copy -- so a consume node must keep the
-         * count it is handed, not lose it, or `a\{2\}` can never finish its second
-         * copy. Only an unbounded repeat's own count is reduced: past its minimum one
-         * copy and a hundred are the same state, and clamping there is what keeps a
-         * nested pair of stars (\(a*\)*) from holding a live state per copy count and
-         * exhausting the budget on a no-match every real grep answers at once. */
+        /* A consume node keeps its count; only an unbounded repeat's count clamps at its min. */
         if (rn->op == OP_REP && rn->max == 255 && count > (int)rn->min) {
             count = (int)rn->min;
         }
@@ -1096,10 +994,7 @@ static void push_state(matcher_t *m, int node, int count)
     }
 }
 
-/* True when node can match the empty string, which is what decides whether a CAT's
- * right operand is already live at the left's position. Recursive over the tree, whose
- * depth is bounded by GROUP_MAX and the pattern length, and memo-free because a pattern
- * is short; correctness first, and the walk's own step budget bounds the cost. */
+/* True when node can match the empty string, so a CAT's right operand is live at the left's end. */
 static int node_can_be_empty(const sh_grep_t *re, int node)
 {
     const node_t *n;
@@ -1125,8 +1020,7 @@ static int node_can_be_empty(const sh_grep_t *re, int node)
     }
 }
 
-/* Seeds node and closes over every edge that costs no byte. `at` is the byte position,
- * which the anchors need and nothing else does. */
+/* Seeds node and closes over every edge that costs no byte; `at` is needed only by anchors. */
 static void closure(matcher_t *m, int node, int count, size_t at)
 {
     push_state(m, node, count);
@@ -1137,12 +1031,7 @@ static void closure(matcher_t *m, int node, int count, size_t at)
 
         switch (n->op) {
         case OP_CAT:
-            /* The left operand is what the pattern is trying now. The right one is
-             * also live whenever the left can match nothing -- which is exactly when
-             * the left's subtree contains a repeat whose minimum is zero -- because
-             * then the pattern is already at the right operand at this same position.
-             * Seeding only the left is the classic mistake that makes `se*` refuse
-             * `e`: the s matches zero bytes, so the pattern is at `e*` immediately. */
+            /* The left is live; so is the right when the left can match nothing (`se*` takes e). */
             push_state(m, n->a, cnt);
             if (node_can_be_empty(m->re, n->a)) {
                 push_state(m, n->b, cnt);
@@ -1153,29 +1042,15 @@ static void closure(matcher_t *m, int node, int count, size_t at)
             push_state(m, n->b, cnt);
             break;
         case OP_GRP:
-            /* A group is a bracket only: the copy count of an enclosing repeat passes
-             * through it, because the group's body is the repeat's body and its last
-             * consume state is what charges the copy. Resetting here would make
-             * \(a\)\{2\} never finish a second copy. */
+            /* A group is a bracket only: an enclosing repeat's copy count passes through it. */
             push_state(m, n->a, cnt);
             break;
         case OP_REP: {
             int left = cnt < (int)n->min;
 
-            /* Entering the repeat enters the body. A copy that has consumed its body
-             * arrives here again through the body's accept, which is the repeat
-             * itself, so cnt is the copy already finished. */
+            /* Entering the repeat enters the body; a finished copy returns here with cnt set. */
             if (n->max == 255 || cnt < (int)n->max) {
-                /* Starting another copy: the count stays where it is, because this
-                 * copy is in progress rather than finished. It is the body's own
-                 * tail, arriving back here, that charges the copy.
-                 *
-                 * An unbounded repeat's count only has to reach its minimum: past
-                 * that, one copy and a hundred are the same state, so the count is
-                 * clamped to min. Without this a nested pair of stars -- \(a*\)* --
-                 * keeps a live state per (inner, outer) count pair, which is quadratic
-                 * in the line and exhausts the budget on a no-match that every real
-                 * grep answers at once. */
+                /* Starting another copy keeps the count; an unbounded repeat clamps it to min. */
                 int ncnt = (n->max == 255 && cnt > (int)n->min) ? (int)n->min
                                                                  : cnt;
 
@@ -1197,9 +1072,7 @@ static void closure(matcher_t *m, int node, int count, size_t at)
             }
             break;
         case OP_EOL:
-            /* $ is satisfied only at the end of the line, and passing it goes onward
-             * through its operand -- the EOL node is placed after the body by
-             * sh_grep_compile, so its operand is the pattern's tail. */
+            /* $ passes only at end of line, then continues into its operand, the pattern's tail. */
             if (at == m->len) {
                 push_state(m, n->a, 0);
                 push_state(m, n->b, 0);
@@ -1255,11 +1128,7 @@ static int walk(const sh_grep_t *re, const char *line, size_t len, unsigned int 
         int seed[2 * LIVE_PAIRS];
         int nseed = 0;
 
-        /* Walk the states that are actually live, not every (node, count) pair: a
-         * pattern with a repeat has 256 possible counts per node and only a few are
-         * ever reachable, so scanning them all would make the cost grow with the
-         * pattern's counts instead of with its reachable states -- the superlinear
-         * behaviour that made a few hundred bytes of `a` exhaust the step budget. */
+        /* Walk only live states, not every (node, count) pair, so cost follows reachable states. */
         for (i = 0; i + 1 < m.nlive; i += 2) {
             int node = m.live[i];
             int cnt = m.live[i + 1];
@@ -1278,13 +1147,7 @@ static int walk(const sh_grep_t *re, const char *line, size_t len, unsigned int 
                 int j;
 
                 for (j = 0; j < n->nnext; j++) {
-                    /* Reaching the enclosing repeat ends a copy, so that edge charges
-                     * the count. Every other edge -- into the next byte of the same
-                     * copy, or onward past a finished repeat -- keeps the count the
-                     * state already had, because nothing has been completed or begun
-                     * afresh. A charged count past an unbounded repeat's minimum is
-                     * the same state as the minimum, so it is clamped: this is what
-                     * stops \(a*\)* from holding a live state per copy count. */
+                    /* Reaching the enclosing repeat charges the count; other edges keep it. */
                     int ncnt = n->copy_edge[j] ? cnt + 1 : cnt;
 
                     if (nseed + 1 < 2 * LIVE_PAIRS) {
@@ -1295,11 +1158,7 @@ static int walk(const sh_grep_t *re, const char *line, size_t len, unsigned int 
             }
         }
         if (!re->anchored) {
-            /* A search may begin at any byte, so the pattern's entry is live at every
-             * position, not only at 0; a leading ^ is what takes this away. Appended
-             * to the same seed list so the whole position is closed at once -- closing
-             * the byte-consumed seeds first and the restart second lets a repeat's
-             * body be reached by both routes and consume the same byte twice. */
+            /* A search may begin at any byte, so the entry is seeded at every position unless ^. */
             if (nseed + 1 < 2 * LIVE_PAIRS) {
                 seed[nseed++] = re->root;
                 seed[nseed++] = 0;
@@ -1310,9 +1169,7 @@ static int walk(const sh_grep_t *re, const char *line, size_t len, unsigned int 
             memset(m.slots, 0, (size_t)SET_SLOTS * sizeof(*m.slots));
             m.stamp = 1;
         }
-        /* The set answers only about the current byte, so it is emptied here: keys carry
-         * the position too, but stale keys still hold slots and the table would fill
-         * after a few hundred bytes. */
+        /* The set covers only the current byte, so it is emptied or stale keys fill the table. */
         memset(m.slots, 0, (size_t)SET_SLOTS * sizeof(*m.slots));
         m.npending = 0;
         m.nlive = 0;

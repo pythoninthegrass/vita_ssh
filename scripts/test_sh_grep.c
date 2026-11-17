@@ -16,8 +16,7 @@ static int failures;
         }                                                                           \
     } while (0)
 
-/* Compiles, matches one line, frees. Returns the decision, or -2 when the pattern
- * does not compile -- which is itself a result some cases assert on. */
+/* Compiles, matches one line, frees; returns the decision, or -2 if the pattern is invalid. */
 static int run(const char *pattern, int flags, const char *line, int invert)
 {
     sh_grep_t *re = sh_grep_compile(pattern, flags);
@@ -115,8 +114,7 @@ static void test_bre_classes_and_alternation(void)
 
 static void test_bre_literals(void)
 {
-    /* BRE takes + ? ( ) { } | as bytes unless escaped -- the difference between a
-     * basic and an extended engine, and the one a user hits first. */
+    /* BRE takes + ? ( ) { } | as bytes unless escaped, unlike an extended engine. */
     CHECK(run("a+b", 0, "a+b", 0) == 1);
     CHECK(run("a+b", 0, "aab", 0) == 0);
     CHECK(run("(ab)c", 0, "(ab)c", 0) == 1);
@@ -139,8 +137,7 @@ static void test_icase(void)
     CHECK(run("AbC", SH_GREP_ICASE, "xabcx", 0) == 1);
     CHECK(run("[a-z]BC", SH_GREP_ICASE, "ABC", 0) == 1);
     CHECK(run("[a-z]BC", 0, "ABC", 0) == 0);
-    /* Folding is ASCII only: a byte >= 0x80 is compared as itself, so -i cannot
-     * answer differently for the same bytes depending on a locale. */
+    /* Folding is ASCII only: a byte >= 0x80 is compared as itself, independent of locale. */
     CHECK(run("\xc4", SH_GREP_ICASE, "\xc4", 0) == 1);
     CHECK(run("\xc4", SH_GREP_ICASE, "\xc5", 0) == 0);
 }
@@ -172,8 +169,7 @@ static void test_bad_patterns(void)
     CHECK(sh_grep_compile("a\\(", 0) == NULL);
     CHECK(strcmp(sh_grep_compile_error(err, sizeof(err)), "") != 0);
     CHECK(sh_grep_compile(NULL, 0) == NULL);
-    /* A pattern past the bound is refused rather than truncated into a different
-     * pattern that would answer a different question. */
+    /* A pattern past the bound is refused rather than truncated into a different pattern. */
     {
         char *big = malloc(SH_GREP_PATTERN_MAX + 2);
 
@@ -185,13 +181,7 @@ static void test_bad_patterns(void)
     }
 }
 
-/* The patterns that make a backtracker exponential. This engine keeps no choice points
- * to replay -- a state is a node with a copy count, and at each byte every reachable
- * state is expanded once -- so the cost is the line times the states the pattern keeps
- * live, and the scaled budget in SH_GREP_STEP_LIMIT bounds it. What that still allows
- * through is a shape whose live set grows faster than the allowance, which answers
- * SH_GREP_STEP_MAX rather than parking the server's one poll loop: a stalled match is
- * the same outage as a stalled socket write. */
+/* Patterns that make a backtracker exponential must answer SH_GREP_STEP_MAX, not park the loop. */
 static void test_no_exponential_blowup(void)
 {
     char line[600];
@@ -228,13 +218,11 @@ static void test_no_exponential_blowup(void)
 
 static void test_bounds_stated(void)
 {
-    /* The line bound is grep's contract with the user, so it has to be a number the
-     * tool can actually hold and the help can name. */
+    /* The line bound is grep's contract with the user, so it must be a holdable number. */
     CHECK(SH_GREP_LINE_MAX >= 256);
     CHECK(SH_GREP_PATTERN_MAX >= 16);
     CHECK(SH_GREP_SYNTAX[0] != '\0');
-    /* The syntax string has to claim the engine that shipped, since a reader learns
-     * the truth about the engine only from it. */
+    /* The syntax string has to claim the engine that shipped. */
     CHECK(strstr(SH_GREP_SYNTAX, "basic") != NULL);
 }
 
@@ -258,8 +246,7 @@ static void test_literal_search(void)
     CHECK(sh_grep_fold('\xc1') == '\xc1');
 }
 
-/* A literal pattern takes the substring path and a metacharacter pattern the graph;
- * both must give the same answer for the lines where both apply. */
+/* A literal pattern takes the substring path and a metacharacter one the graph; both must agree. */
 static void test_literal_and_engine_agree(void)
 {
     static const char *const lines[] = {
@@ -278,8 +265,7 @@ static void test_literal_and_engine_agree(void)
                 continue;
             }
             via_engine = sh_grep_match(re, lines[j], 0);
-            /* Recompile-free second call: the scratch set is reused per line, so a
-             * stale state from the previous line would show up as a wrong answer. */
+            /* Second call reuses the scratch set per line; stale state would misanswer. */
             CHECK(sh_grep_match(re, lines[j], 0) == via_engine);
             sh_grep_free(re);
         }
@@ -303,8 +289,7 @@ static size_t mem_fill(void *ctx, char *p, size_t want)
     return n;
 }
 
-/* The bounded line reader: newline split, end of input, a final line with no newline,
- * and the overlong line that must be reported rather than matched truncated. */
+/* The bounded line reader: newline split, end of input, no final newline, and the overlong line. */
 static void test_read_line(void)
 {
     char line[8];
@@ -330,8 +315,7 @@ static void test_read_line(void)
     CHECK(sh_grep_read_line(mem_fill, &m, line, sizeof(line), &eof) == 0);
     CHECK(eof);
 
-    /* A line that reaches the cap is refused (-1), not truncated -- and the rest of it
-     * is drained so the next read starts on the following line, not mid-word. */
+    /* A line that reaches the cap is refused (-1), not truncated, and drained to the next line. */
     m.p = "1234567890\nok\n";
     m.left = 13;
     eof = 0;
