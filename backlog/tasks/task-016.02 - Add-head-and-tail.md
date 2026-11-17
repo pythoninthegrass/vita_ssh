@@ -1,10 +1,10 @@
 ---
 id: TASK-016.02
 title: Add head and tail
-status: In Progress
+status: Done
 assignee: []
 created_date: '2026-11-17 03:29'
-updated_date: '2026-11-17 05:45'
+updated_date: '2026-11-17 07:00'
 labels:
   - shell
   - coreutils
@@ -45,7 +45,7 @@ Note that tail -f cannot exist: nothing may block in the poll loop, so a follow 
 ## Definition of Done
 <!-- DOD:BEGIN -->
 - [x] #1 task build produces both VPKs
-- [ ] #2 Verified on a device over a real ssh session
+- [x] #2 Verified on a device over a real ssh session
 <!-- DOD:END -->
 
 Device run: `scripts/smoke_headtail.sh any@<vita-ip> [port]` (48 graded checks, one ssh
@@ -137,3 +137,15 @@ is refused rather than answered shortly. And a `tail -n` answer larger than one 
 out as it is read, so an over-long line discovered in a later chunk is refused after the
 earlier chunks were already sent -- the sink-less path the host tests use checks the whole
 answer first and prints nothing, and the builtin uses the sink path, which cannot.
+
+## Device run
+
+Run on the home Vita over real ssh exec sessions, server built 2026-11-17 06:25 from the branch tip that contains the stdin, header and bound-message fixes below. Each case ran the same command on the Vita and through ghead/gtail on the host and compared stdout bytes and exit status.
+
+Matched GNU: head and tail with no option, `-n 1/3/5/20`, `-n20`, `-c 1/7/4096/4097/100000`, over an empty file, a file with no trailing newline, a blank-lines file, a 208 KB file, files whose newest newline sits at byte 4095/4096/4097 and two chunk-boundary shapes. Multi-file output with the blank-line separators and `==>` headers (several files, empty and no-newline files among them). A missing file prints `head: FILE: No such file or directory`, the other files still print, exit 1. `tail -f` is refused with `following a file is not supported`, exit 1, and the server answers afterwards. stdin through `<` for `head`/`tail` with `-n` and `-c`, a file with no trailing newline, and an empty file. Unknown flag `head -z` exits 2, `-n abc` and `-n -1` exit 2 with a readable message. A 17 MB file: `tail -n 1` is refused naming the 16777216 limit, `head -n 1`, `head -c` and `tail -c` work. Large outputs of 685547 and 700000 bytes came back complete.
+
+Deviations from GNU, all deliberate and in README: `-n 0` and `-c 0` exit 0 where GNU exits 1; a count above 16777216 is refused naming the limit; a line over 4096 bytes is refused with `line too long (limit 4096 bytes)` and `tail` may already have written up to 4096 bytes of that line; a negative count is refused.
+
+Defects the device run found, fixed in this task: `tail` and the `-c` forms returned nothing from stdin because the byte length was only set for real files; multi-file output had no blank line between sections and printed a header before a file that then failed to open; the too-large count and file errors did not name their limit (AC #7 asks for the bound).
+
+Reliability, not resolved. First comparison: 263 of 336 cases matched; the 73 mismatches were the deviations above plus one `Connection reset by peer`. After the fixes: 235 of 240 matched and the other 5 were `Connection reset by peer` with no output, none a wrong answer. A control of 240 sequential `cat` calls had no failure. A targeted stress of 60 calls per group: `head -c 4096 big.txt` 59 ok and one 40 s timeout, `head -c 4097` 59 ok and one 40 s timeout, `tail -n20 noeol.txt` 60 ok, and the `cat` controls of the same output sizes 59 ok and one reset, 60 ok, 60 ok. Taken together head/tail failed in about 9 of 760 calls and `cat` in 1 of 420, a difference too small to attribute. The server log says: every logged head/tail exec was followed by `closed: exec command done`; the one `cat` reset never reached exec and logged `handshake failed ... disconnected` with a 10 s poll-loop stall; the poll loop logged stalls of 3 to 10 s during the runs. One earlier `tail -n 1000` ssh session hung about 4.5 minutes with no server log entry at all and was killed by me, and the next two calls (an empty output and a same-size output with different bytes) overlapped a background loop of mine that was still running; neither reproduced in 33 repeat runs. Two large-output reads logged `transport closed while output waited for room` with a 31 s poll-loop stall and a 40 s stall; the first of those returned a truncated `tail -n 9000` of the server log to the client. The cause of the stalls, resets and hangs is not established, and nothing here shows it is specific to head or tail. A follow-up task would be the way to chase it.
