@@ -914,11 +914,7 @@ static int cmd_cat(sh_session_t *s, int argc, char **argv)
 /* grep                                                                 */
 /* ------------------------------------------------------------------ */
 
-/*
- * grep is the first tool that reads its input a line at a time. A source is either a
- * file descriptor or the session's stdin, and both are pulled through one byte callback
- * so the SH_GREP_LINE_MAX bound and the newline split live once, in sh_grep_read_line.
- */
+/* grep reads fd or stdin through one byte callback so SH_GREP_LINE_MAX is enforced in one place. */
 typedef struct {
     sh_session_t *s;
     int fd;            /* >= 0 for a file, -1 for stdin */
@@ -1135,10 +1131,7 @@ static int cmd_grep(sh_session_t *s, int argc, char **argv)
         return matched_any ? 0 : 1;
     }
 
-    /* Several files: -l names each with a match; with more than one, a match prints
-     * file: ahead of the line. An unreadable file is exit 2 no matter what another
-     * file matches -- an error outranks a match, because a partial result the user
-     * cannot tell is incomplete from a complete one would be the worse answer. */
+    /* Several files: -l names matches, a match gets a file: prefix, an unreadable file is exit 2 */
     status = 1;
     had_error = 0;
     for (i = 0; i < files; i++) {
@@ -1245,25 +1238,16 @@ static int cmd_grep(sh_session_t *s, int argc, char **argv)
 /* head and tail                                                        */
 /* ------------------------------------------------------------------ */
 
-/* Both tools hand their answer out a chunk at a time through a sink, so a command never
- * holds more than SH_HT_CHUNK bytes while every other session waits on this thread. The
- * window logic, the bounds and the backwards walk are all in src/sh_headtail.c; nothing
- * here reimplements them and scripts/test_sh_headtail.c drives that file directly. */
+/* head and tail stream through a sink in SH_HT_CHUNK pieces; window logic is in sh_headtail.c. */
 
-/* Reads a source at an absolute offset, which is what a backwards walk needs and what
- * sh_target_read (a sequential fd) cannot give. The fd is re-seeked per call so a pseudo
- * file, which has no real seek of its own, is served by the restart-and-skip path it uses
- * everywhere else. With no fd the source is the session's stdin, which cannot be seeked,
- * so it is pulled into a bounded buffer first and the walk runs on that copy. */
+/* Reads a source at an absolute offset for the backwards walk; stdin is buffered, not seeked. */
 typedef struct {
     int fd;           /* >= 0 for a file, -1 for stdin */
     char *stream;     /* stdin's bytes, once pulled */
     size_t streamed;  /* how many of them */
 } ht_src_t;
 
-/* A stream has no size to ask, so it is held only up to here: generous next to a
- * terminal's patience, and bounded because an unbounded pull would eat the heap that
- * every other session needs. */
+/* Cap on a buffered stream, since an unbounded pull would eat the heap every session shares. */
 #define HT_STREAM_MAX (4 * 1024 * 1024)
 
 static ssize_t ht_read_at(void *vctx, void *p, size_t n, size_t off)
@@ -1298,9 +1282,7 @@ static ssize_t ht_read_at(void *vctx, void *p, size_t n, size_t off)
     return (ssize_t)have;
 }
 
-/* Parses head/tail's count operand, which has to be a non-negative decimal number. An
- * operand that is not one is a usage error rather than a silent zero, because a count
- * that prints nothing looks exactly like an empty file and a typo would be invisible. */
+/* Parses head/tail's count as a non-negative decimal; anything else is a usage error, not zero. */
 static int ht_parse_count(sh_session_t *s, const char *cmd, const char *text,
                           size_t *out)
 {
@@ -1328,8 +1310,7 @@ static int ht_parse_count(sh_session_t *s, const char *cmd, const char *text,
     return 0;
 }
 
-/* Reports one tool failure in the tool's own voice. The cause is the tool's errno, and
- * the wording is per cause rather than strerror's, which cannot name a sceNet code. */
+/* Reports one tool failure in the tool's own voice, per errno as strerror lacks sceNet codes. */
 static void ht_report_error(sh_session_t *s, const char *cmd, const char *name)
 {
     if (errno == E2BIG) {
@@ -1348,18 +1329,14 @@ static void ht_report_error(sh_session_t *s, const char *cmd, const char *name)
     }
 }
 
-/* The sink: the answer goes out through sh_write as it is produced. sh_write has no
- * failure to report -- a channel that went away is noticed by the session and the rest of
- * the answer is dropped -- so it always accepts what it is given. */
+/* The sink: writes the answer out through sh_write, which always accepts what it is given. */
 static int ht_emit(void *ctx, const char *data, size_t len)
 {
     sh_write((sh_session_t *)ctx, data, len);
     return 0;
 }
 
-/* Pulls the session's stdin into one bounded buffer, because the tools need random access
- * and the stdin queue offers none. Over the bound the input is refused rather than
- * truncated: a silently short head is a wrong answer, not a partial one. */
+/* Pulls stdin into one bounded buffer for random access; over the bound it is refused. */
 static int ht_slurp_stdin(sh_session_t *s, const char *cmd, ht_src_t *src)
 {
     size_t used = 0;
@@ -1423,9 +1400,7 @@ static int ht_run(sh_session_t *s, const char *cmd, int is_tail, int by_bytes,
     }
 
     if (by_bytes) {
-        /* A byte window is verbatim, so it is copied out a chunk at a time and never
-         * held whole; there is no line bound to honour and nothing to refuse. tail -c
-         * reads the same shape from the other end. */
+        /* A byte window is copied out a chunk at a time, never held whole. */
         size_t left = (want < len) ? want : len;
         size_t off = is_tail ? (len - left) : 0;
 
@@ -1461,9 +1436,7 @@ static int ht_run(sh_session_t *s, const char *cmd, int is_tail, int by_bytes,
     return status;
 }
 
-/* Shared driver for the two commands: same operands, same file list, same answer when no
- * file is given (the session's stdin, so ls | head works once pipes exist). is_tail
- * selects the tool, and -f is the one option tail has that head does not. */
+/* Shared driver for head and tail: same operands, stdin when no file; -f is tail only. */
 static int ht_command(sh_session_t *s, const char *cmd, int is_tail, int argc,
                       char **argv)
 {
@@ -1475,9 +1448,7 @@ static int ht_command(sh_session_t *s, const char *cmd, int is_tail, int argc,
         const char *f = argv[i];
 
         if (is_tail && i == 1 && f[0] == '+') {
-            /* tail +N is the legacy spelling POSIX still accepts, and here it is the
-             * same count operand written without the -n. Only as the first argument:
-             * after a file name a leading + is part of a file name. */
+            /* tail +N is the legacy spelling of the count operand, only as the first argument. */
             if (ht_parse_count(s, cmd, f + 1, &want) != 0) {
                 return 2;
             }
@@ -1536,12 +1507,7 @@ static int ht_command(sh_session_t *s, const char *cmd, int is_tail, int argc,
         int status = 0;
         int k, headed = 0;
 
-        /* Each file is streamed in turn and none is held while the next is read, which
-         * is why several names cost no more memory than one. With more than one, the
-         * coreutils header goes ahead of each answer; with one it would only be noise.
-         * A file that cannot be opened is reported and the rest are still printed, and
-         * the run is then an error -- a partial answer the user cannot tell is partial
-         * would be the worse result. */
+        /* Each file streams in turn, headed when several; an unopenable one fails the run. */
         for (k = 0; k < files; k++) {
             sh_target_t t;
             struct stat st;
@@ -1571,9 +1537,7 @@ static int ht_command(sh_session_t *s, const char *cmd, int is_tail, int argc,
                 sh_printf(s, "%s==> %s <==\n", headed++ ? "\n" : "", targets[k]);
             }
             if (follow) {
-                /* -f waits for the file to grow, and waiting for a file is the one thing
-                 * a command in this server's single poll loop cannot do: the sleep would
-                 * park every other session with it. Saying so beats pretending. */
+                /* -f would park the single poll loop and every other session, so it is refused. */
                 sh_eprintf(s, "%s: %s: following a file is not supported\n", cmd,
                            targets[k]);
                 sh_target_close(fd);
@@ -1603,15 +1567,9 @@ static int cmd_tail(sh_session_t *s, int argc, char **argv)
 /* wc, sort, uniq                                                       */
 /* ------------------------------------------------------------------ */
 
-/* The counting, ordering and collapsing live in src/sh_textops.c and are driven directly
- * by scripts/test_sh_textops.c on the host; nothing here reimplements them. What is here
- * is the byte source, the answer sink and the columns, all of which are session concerns.
- * Like head and tail, an input is held whole before the tool runs: a walk may not park the
- * poll loop reading the socket a byte at a time, and both bounds are enforced by the tool,
- * which refuses an oversized input rather than answering short. */
+/* Counting, ordering and collapsing live in sh_textops.c; this file holds source, sink, columns. */
 
-/* A source is either one already-open file (fd) or the session's stdin pulled into a
- * bounded buffer, because sort and uniq need random access the stdin queue cannot give. */
+/* A source is one open file (fd) or stdin pulled into a bounded buffer for random access. */
 typedef struct {
     int fd;         /* >= 0 for a file, -1 for the buffer */
     char *buf;      /* the bytes: stdin's copy, or a file read into this */
@@ -1636,8 +1594,7 @@ static ssize_t to_fill(void *vctx, char *p, size_t want)
     return (ssize_t)want;
 }
 
-/* Reads a whole file into a fresh buffer, refusing anything past the bound rather than
- * handing the tool a truncated input it would then report as if it were the truth. */
+/* Reads a whole file into a fresh buffer, refusing anything past the bound, not truncating. */
 static int to_load_fd(int fd, char **out, size_t *out_len)
 {
     char *b;
@@ -1673,8 +1630,7 @@ static int to_load_fd(int fd, char **out, size_t *out_len)
     return 0;
 }
 
-/* Pulls the session's stdin into a fresh buffer, bounded and interruptible the way head
- * and tail pull it. Over the bound the input is refused, not silently cut short. */
+/* Pulls stdin into a fresh buffer, bounded and interruptible like head and tail. */
 static int to_load_stdin(sh_session_t *s, const char *cmd, to_src_t *src)
 {
     src->fd = -1;
@@ -1704,9 +1660,7 @@ static int to_load_stdin(sh_session_t *s, const char *cmd, to_src_t *src)
     return 0;
 }
 
-/* Names the tool's verdict in the tool's own voice. The cause is the tool's errno, and the
- * wording is per cause rather than strerror's, which cannot name a sceNet code and gives
- * nothing useful for the bounds the tools enforce themselves. */
+/* Names the tool's verdict in its own voice, per errno as strerror lacks sceNet codes. */
 static void to_report_error(sh_session_t *s, const char *cmd, const char *name)
 {
     if (errno == E2BIG) {
@@ -1932,8 +1886,7 @@ static int cmd_wc(sh_session_t *s, int argc, char **argv)
     return status;
 }
 
-/* One tool over one source, in the sort/uniq shape: pull the bytes, then hand lines to the
- * sink. A file that cannot be read is reported and the run is an error. */
+/* Runs one tool over one source: pull the bytes, hand lines to the sink; unreadable is an error. */
 static int to_run(sh_session_t *s, const char *cmd, int is_sort, int numeric, int reverse,
                   int uniq_or_count, int dups, int singles, to_src_t *src,
                   const char *name)

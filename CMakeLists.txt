@@ -163,13 +163,7 @@ add_executable(${VITA_SERVER_NAME}
   src/network.c
 )
 
-# The server sits at the ceiling vita-elf-create enforces: segment 0 has no room left for
-# its SCE data tail, and going over dies with "Cannot allocate N bytes for SCE data at end
-# of segment 0; segment 1 overlaps" -- an abort, not a linker error, and not a message that
-# points at size. head and tail cost 3404 bytes of text and the slack measured 3284, so the
-# file holding the builtins -- the part of the server that keeps growing -- is compiled for
-# size. Only code layout changes, and it buys back more than a new command costs, leaving
-# room again for the next one.
+# -Os for the builtins file only: the server is at the vita-elf-create size ceiling (see AGENTS.md).
 set_source_files_properties(src/sshd_builtins.c PROPERTIES COMPILE_OPTIONS "-Os")
 
 # libssh compiles its server and SFTP declarations out of the public headers unless
