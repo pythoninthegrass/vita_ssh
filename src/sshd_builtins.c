@@ -15,6 +15,7 @@
  */
 #include "sshd.h"
 #include "sh_grep.h"
+#include "sh_headtail.h"
 
 #include <dirent.h>
 #include <errno.h>
@@ -1165,6 +1166,347 @@ static int cmd_grep(sh_session_t *s, int argc, char **argv)
         return 2;
     }
     return status;
+}
+
+/* ------------------------------------------------------------------ */
+/* head and tail                                                        */
+/* ------------------------------------------------------------------ */
+
+/* Both tools hand their answer out a chunk at a time through a sink, so a command never
+ * holds more than SH_HT_CHUNK bytes while every other session waits on this thread. The
+ * window logic, the bounds and the backwards walk are all in src/sh_headtail.c; nothing
+ * here reimplements them and scripts/test_sh_headtail.c drives that file directly. */
+
+/* Reads a source at an absolute offset, which is what a backwards walk needs and what
+ * sh_target_read (a sequential fd) cannot give. The fd is re-seeked per call so a pseudo
+ * file, which has no real seek of its own, is served by the restart-and-skip path it uses
+ * everywhere else. With no fd the source is the session's stdin, which cannot be seeked,
+ * so it is pulled into a bounded buffer first and the walk runs on that copy. */
+typedef struct {
+    int fd;           /* >= 0 for a file, -1 for stdin */
+    char *stream;     /* stdin's bytes, once pulled */
+    size_t streamed;  /* how many of them */
+} ht_src_t;
+
+/* A stream has no size to ask, so it is held only up to here: generous next to a
+ * terminal's patience, and bounded because an unbounded pull would eat the heap that
+ * every other session needs. */
+#define HT_STREAM_MAX (4 * 1024 * 1024)
+
+static ssize_t ht_read_at(void *vctx, void *p, size_t n, size_t off)
+{
+    ht_src_t *src = vctx;
+    size_t have = 0;
+
+    if (src->fd < 0) {
+        size_t left;
+
+        if (off >= src->streamed) {
+            return 0;
+        }
+        left = src->streamed - off;
+        if (n > left) {
+            n = left;
+        }
+        memcpy(p, src->stream + off, n);
+        return (ssize_t)n;
+    }
+    if (lseek(src->fd, (off_t)off, SEEK_SET) == (off_t)-1) {
+        return -1;
+    }
+    while (have < n) {
+        ssize_t got = sh_target_read(src->fd, (char *)p + have, n - have);
+
+        if (got <= 0) {
+            break;
+        }
+        have += (size_t)got;
+    }
+    return (ssize_t)have;
+}
+
+/* Parses head/tail's count operand, which has to be a non-negative decimal number. An
+ * operand that is not one is a usage error rather than a silent zero, because a count
+ * that prints nothing looks exactly like an empty file and a typo would be invisible. */
+static int ht_parse_count(sh_session_t *s, const char *cmd, const char *text,
+                          size_t *out)
+{
+    unsigned long v = 0;
+    const char *p;
+    int digits = 0;
+
+    for (p = text; *p != '\0'; p++) {
+        if (*p < '0' || *p > '9') {
+            sh_eprintf(s, "%s: %s: expected a non-negative integer\n", cmd, text);
+            return -1;
+        }
+        if (v > (unsigned long)(SH_HT_SIZE_MAX / 10)) {
+            sh_eprintf(s, "%s: %s: value too large\n", cmd, text);
+            return -1;
+        }
+        v = v * 10UL + (unsigned long)(*p - '0');
+        digits = 1;
+    }
+    if (!digits) {
+        sh_eprintf(s, "%s: %s: expected a non-negative integer\n", cmd, text);
+        return -1;
+    }
+    *out = (size_t)v;
+    return 0;
+}
+
+/* Reports one tool failure in the tool's own voice. The cause is the tool's errno, and
+ * the wording is per cause rather than strerror's, which cannot name a sceNet code. */
+static void ht_report_error(sh_session_t *s, const char *cmd, const char *name)
+{
+    if (errno == E2BIG) {
+        sh_eprintf(s, "%s: %s: line too long (limit %d bytes)\n", cmd, name,
+                   SH_HT_LINE_MAX);
+    } else if (errno == ENAMETOOLONG) {
+        sh_eprintf(s, "%s: %s: result too large to print\n", cmd, name);
+    } else if (errno == ERANGE) {
+        sh_eprintf(s, "%s: %s: file too large\n", cmd, name);
+    } else if (errno == ENOMEM) {
+        sh_eprintf(s, "%s: %s: out of memory\n", cmd, name);
+    } else if (errno == EIO) {
+        sh_eprintf(s, "%s: %s: Input/output error\n", cmd, name);
+    } else {
+        sh_eprintf(s, "%s: %s: %s\n", cmd, name, strerror(errno));
+    }
+}
+
+/* The sink: the answer goes out through sh_write as it is produced. sh_write has no
+ * failure to report -- a channel that went away is noticed by the session and the rest of
+ * the answer is dropped -- so it always accepts what it is given. */
+static int ht_emit(void *ctx, const char *data, size_t len)
+{
+    sh_write((sh_session_t *)ctx, data, len);
+    return 0;
+}
+
+/* Pulls the session's stdin into one bounded buffer, because the tools need random access
+ * and the stdin queue offers none. Over the bound the input is refused rather than
+ * truncated: a silently short head is a wrong answer, not a partial one. */
+static int ht_slurp_stdin(sh_session_t *s, const char *cmd, ht_src_t *src)
+{
+    size_t used = 0;
+
+    src->stream = malloc(HT_STREAM_MAX);
+    if (src->stream == NULL) {
+        sh_eprintf(s, "%s: out of memory\n", cmd);
+        return -1;
+    }
+    while (!sh_session_interrupted(s)) {
+        size_t n = sh_session_stdin_read(s, src->stream + used, HT_STREAM_MAX - used);
+
+        if (n == 0) {
+            break;
+        }
+        used += n;
+        if (used == HT_STREAM_MAX) {
+            sh_eprintf(s, "%s: %s: input larger than %d bytes\n", cmd,
+                       "(standard input)", HT_STREAM_MAX);
+            return -1;
+        }
+    }
+    src->streamed = used;
+    return 0;
+}
+
+/* One source through one of the tools, printed as it is produced. */
+static int ht_run(sh_session_t *s, const char *cmd, int is_tail, int by_bytes,
+                  size_t want, int fd, const char *name)
+{
+    ht_src_t src;
+    char *buf;
+    size_t len = 0;
+    ssize_t got;
+    int status = 0;
+
+    buf = malloc(SH_HT_CHUNK);
+    if (buf == NULL) {
+        sh_eprintf(s, "%s: out of memory\n", cmd);
+        return 1;
+    }
+    src.fd = fd;
+    src.stream = NULL;
+    src.streamed = 0;
+
+    if (fd >= 0) {
+        struct stat st;
+
+        if (fstat(fd, &st) != 0) {
+            sh_eprintf(s, "%s: %s: %s\n", cmd, name, strerror(errno));
+            free(buf);
+            return 1;
+        }
+        len = (size_t)st.st_size;
+    } else if (ht_slurp_stdin(s, cmd, &src) != 0) {
+        free(src.stream);
+        free(buf);
+        return 1;
+    }
+
+    if (by_bytes) {
+        /* A byte window is verbatim, so it is copied out a chunk at a time and never
+         * held whole; there is no line bound to honour and nothing to refuse. tail -c
+         * reads the same shape from the other end. */
+        size_t left = (want < len) ? want : len;
+        size_t off = is_tail ? (len - left) : 0;
+
+        while (left > 0) {
+            size_t take = (left > SH_HT_CHUNK) ? SH_HT_CHUNK : left;
+            ssize_t r = ht_read_at(&src, buf, take, off);
+
+            if (r <= 0) {
+                break;
+            }
+            sh_write(s, buf, (size_t)r);
+            off += (size_t)r;
+            left -= (size_t)r;
+        }
+        free(src.stream);
+        free(buf);
+        return 0;
+    }
+
+    got = is_tail ? sh_tail_lines(ht_read_at, &src, len, want, buf, SH_HT_CHUNK,
+                                  ht_emit, s, NULL)
+                  : sh_head_lines(ht_read_at, &src, want, buf, SH_HT_CHUNK, ht_emit, s,
+                                  NULL, NULL);
+    if (got < 0) {
+        ht_report_error(s, cmd, name);
+        status = 1;
+    }
+    free(src.stream);
+    free(buf);
+    return status;
+    free(src.stream);
+    free(buf);
+    return status;
+}
+
+/* Shared driver for the two commands: same operands, same file list, same answer when no
+ * file is given (the session's stdin, so ls | head works once pipes exist). is_tail
+ * selects the tool, and -f is the one option tail has that head does not. */
+static int ht_command(sh_session_t *s, const char *cmd, int is_tail, int argc,
+                      char **argv)
+{
+    size_t want = 10;  /* both tools default to ten lines */
+    int by_bytes = 0, follow = 0, i, bad = 0, files = 0;
+    const char *targets[MAX_ARGS];
+
+    for (i = 1; i < argc; i++) {
+        const char *f = argv[i];
+
+        if (is_tail && i == 1 && f[0] == '+') {
+            /* tail +N is the legacy spelling POSIX still accepts, and here it is the
+             * same count operand written without the -n. Only as the first argument:
+             * after a file name a leading + is part of a file name. */
+            if (ht_parse_count(s, cmd, f + 1, &want) != 0) {
+                return 2;
+            }
+            continue;
+        }
+        if (f[0] != '-' || f[1] == '\0') {
+            break;
+        }
+        if (strcmp(f, "--") == 0) {
+            i++;
+            break;
+        }
+        for (f = f + 1; *f != '\0'; f++) {
+            const char *num;
+
+            if (*f == 'f' && is_tail) {
+                follow = 1;
+                continue;
+            }
+            if (*f != 'n' && *f != 'c') {
+                bad = *f;
+                break;
+            }
+            by_bytes = (*f == 'c');
+            /* -n10 and -c10 carry the count in the same argument; -n 10 takes the next. */
+            num = (f[1] != '\0') ? f + 1 : ((++i < argc) ? argv[i] : NULL);
+            if (num == NULL || ht_parse_count(s, cmd, num, &want) != 0) {
+                if (num == NULL) {
+                    sh_eprintf(s, "%s: option requires an argument -- '%c'\n", cmd, *f);
+                }
+                return 2;
+            }
+            if (f[1] != '\0') {
+                f += strlen(f) - 1;
+            }
+        }
+        if (bad != 0) {
+            sh_eprintf(s, "%s: illegal option -- %c\n", cmd, bad);
+            return 2;
+        }
+    }
+    for (; i < argc && files < MAX_ARGS; i++) {
+        targets[files++] = argv[i];
+    }
+    if (files > 1) {
+        /* Several files at once would need each answer held while the next is produced,
+         * and a tool that quietly printed only the first is worse than one that says no.
+         * A loop over names belongs with the pipes in TASK-015.02. */
+        sh_eprintf(s, "%s: only one file is read at a time\n", cmd);
+        return 2;
+    }
+
+    if (files == 0) {
+        if (follow) {
+            sh_eprintf(s, "%s: %s: cannot follow standard input\n", cmd,
+                       "(standard input)");
+            return 1;
+        }
+        return ht_run(s, cmd, is_tail, by_bytes, want, -1, "(standard input)");
+    }
+
+    {
+        sh_target_t t;
+        struct stat st;
+        int fd, r;
+
+        if (resolve_arg(s, cmd, targets[0], &t) != 0) {
+            return 1;
+        }
+        if (t.kind == SH_TARGET_ROOT || t.kind == SH_TARGET_PSEUDO_DIR) {
+            sh_eprintf(s, "%s: %s: Is a directory\n", cmd, targets[0]);
+            return 1;
+        }
+        if (stat_target(&t, &st) == 0 && S_ISDIR(st.st_mode)) {
+            sh_eprintf(s, "%s: %s: Is a directory\n", cmd, targets[0]);
+            return 1;
+        }
+        fd = sh_target_open(&t);
+        if (fd == -1) {
+            sh_eprintf(s, "%s: %s: %s\n", cmd, targets[0], strerror(errno));
+            return 1;
+        }
+        r = ht_run(s, cmd, is_tail, by_bytes, want, fd, targets[0]);
+        sh_target_close(fd);
+        if (follow) {
+            /* -f waits for the file to grow, and waiting for a file is the one thing a
+             * command in this server's single poll loop cannot do: the sleep would park
+             * every other session with it. Saying so beats pretending to follow. */
+            sh_eprintf(s, "%s: %s: following a file is not supported\n", cmd,
+                       targets[0]);
+            return 1;
+        }
+        return r;
+    }
+}
+
+static int cmd_head(sh_session_t *s, int argc, char **argv)
+{
+    return ht_command(s, "head", 0, argc, argv);
+}
+
+static int cmd_tail(sh_session_t *s, int argc, char **argv)
+{
+    return ht_command(s, "tail", 1, argc, argv);
 }
 
 static int cmd_echo(sh_session_t *s, int argc, char **argv)
@@ -2556,6 +2898,8 @@ static const sh_builtin_t builtins[] = {
     {"exit", cmd_exit, "exit -- end this session"},
     {"grep", cmd_grep,
      "grep [-ivnclq] PATTERN [FILE...] -- lines matching a POSIX basic regex"},
+    {"head", cmd_head,
+     "head [-n N | -c N] [FILE] -- first N lines (10) or N bytes of a file or stdin"},
     {"help", cmd_help, "help [COMMAND] -- usage"},
     {"history", cmd_history, "history [COUNT] -- show numbered command history (!n re-runs line n)"},
     {"ls", cmd_ls, "ls [-l] [-a] [PATH] -- list a directory (no argument: .)"},
@@ -2565,6 +2909,8 @@ static const sh_builtin_t builtins[] = {
     {"rm", cmd_rm, "rm [-r] [-f] PATH... -- delete; -r for directories"},
     {"rmdir", cmd_rmdir, "rmdir DIR... -- remove an empty directory"},
     {"stat", cmd_stat, "stat PATH... -- size, mode and modification time"},
+    {"tail", cmd_tail,
+     "tail [-n N | -c N] [FILE] -- last N lines (10) or N bytes of a file or stdin"},
     {"touch", cmd_touch, "touch FILE... -- create a file or update its time"},
     {"uname", cmd_uname,
      "uname [-a] -- system name; -a adds the firmware the device reports"},
