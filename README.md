@@ -308,8 +308,7 @@ asked for rather than a failure.
 so `tail -n 20` of a 12 MB log costs twenty lines of reading and not the file; `head` stops
 at the Nth newline. Options are `-n` for lines and `-c` for bytes, written `-n20` or
 `-n 20`, and `tail +20` is accepted as the older spelling of `tail -n +20`. A line over
-**4096 bytes** is reported as too long rather than printed as the prefix that fits, which
-keeps `head -n 5` from quietly becoming `head -c 4096`. `-f` is refused with a plain
+**4096 bytes** is reported as too long (`head: FILE: line too long (limit 4096 bytes)`, exit 1) instead of being cut to the prefix that fits. Both commands stream, so the lines before it have already been written, and `tail` may also have written up to 4096 bytes of the long line before it reports the error; `head` writes none of it. `-f` is refused with a plain
 "following a file is not supported": waiting for a file to grow means sleeping, and a
 sleeping command parks every other session in this server's one poll loop. Exit status is
 **0** on success and **1** on a failure such as an unreadable file or a line over the
