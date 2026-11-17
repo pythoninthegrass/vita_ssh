@@ -18,6 +18,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -26,6 +27,10 @@
 #include <sys/time.h>
 #include <time.h>
 #include <unistd.h>
+
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
 
 #include <psp2/io/devctl.h>
 
@@ -1793,6 +1798,281 @@ static int cmd_exit(sh_session_t *s, int argc, char **argv)
 }
 
 /* ------------------------------------------------------------------ */
+/* vcmd: one line to a TCP port, the reply to stdout                  */
+/* ------------------------------------------------------------------ */
+
+/* Whole-exchange budget. A builtin runs inside the server's single poll loop,
+ * so this is not politeness: every other session, the console and the pad are
+ * frozen while it counts down. Five seconds covers a LAN round-trip and keeps a
+ * dead peer to a hitch rather than the eleven-minute stall a bare blocking
+ * connect() to an unanswered address has already cost this server once. */
+#define NET_DEADLINE_S  5
+#define NET_POLL_MS     50
+#define NET_LINE_MAX    1024       /* what we send                    */
+#define NET_REPLY_MAX   (64 * 1024) /* what we are willing to read back */
+
+/* Waits for fd to satisfy events, running the server's poll loop meanwhile so
+ * every other session's socket keeps being read. This is why the command is
+ * written this way and not as a plain connect/send/recv: a builtin may never sit
+ * in a blocking socket call, because there is no thread to spare and no Ctrl-C
+ * to notice -- seeing the keystroke would need the very socket being blocked on.
+ * So each step is non-blocking and re-checked here, in the same discipline
+ * wait_for_room() uses for the client's window. 0 when ready, -1 on timeout or
+ * error with errno set. */
+static int net_wait(sh_session_t *s, int fd, short events, time_t deadline)
+{
+    struct pollfd pfd;
+
+    pfd.fd = fd;
+    pfd.events = events;
+    pfd.revents = 0;
+    for (;;) {
+        int ready = poll(&pfd, 1, 0);
+
+        if (ready > 0) {
+            if ((pfd.revents & (POLLERR | POLLNVAL)) != 0) {
+                errno = EIO;
+                return -1;
+            }
+            return 0; /* POLLHUP falls through: the read below sees the EOF */
+        }
+        if (ready < 0 && errno != EINTR) {
+            return -1;
+        }
+        if (sh_session_interrupted(s)) {
+            errno = EINTR;
+            return -1;
+        }
+        if (time(NULL) >= deadline) {
+            errno = ETIMEDOUT;
+            return -1;
+        }
+        sh_server_poll_slice(NET_POLL_MS);
+    }
+}
+
+/* Sends one newline-terminated request and prints what comes back. Named for the
+ * plugin's own tools/bench/vcmd.py client, which this replaces for anyone already
+ * sitting in an ssh session; the command itself is generic, not Wi-Fi Turbo's --
+ * any newline-request/response port will do, the debug socket on :1339 or the
+ * vitacompanion command port on :1338. It is deliberately not called netcat: that
+ * name promises a bidirectional pipe this is not, and the real nc on a host can
+ * do things a builtin in a single-threaded poll loop must not attempt.
+ *
+ * Loopback matters here and it is asymmetric: 127.0.0.1:1339 answers fine,
+ * because that listener lives on the plugin's own thread and keeps running while
+ * this command waits. 127.0.0.1:22 cannot work -- that is this server, whose
+ * poll loop is the one being held -- so it just spends the deadline and gives up.
+ * Bounded, but worth knowing before reaching for it as a self-test. */
+static int cmd_vcmd(sh_session_t *s, int argc, char **argv)
+{
+    struct sockaddr_in sa;
+    char *buf;
+    char *out;
+    size_t used = 0;
+    time_t deadline;
+    int fd, port, i, off, status = 0;
+    int why, soerr;
+
+    if (argc < 3) {
+        sh_eprintf(s, "vcmd: usage: vcmd HOST PORT [LINE]\n");
+        return 1;
+    }
+    memset(&sa, 0, sizeof(sa));
+    sa.sin_family = AF_INET;
+    if (inet_pton(AF_INET, argv[1], &sa.sin_addr) != 1) {
+        /* Names are refused rather than resolved: gethostbyname() would block
+         * this thread for however long the resolver takes, with no bound to put
+         * on it, which is the one thing a builtin may not do. Ask for the
+         * address and say so plainly instead of half-supporting hostnames. */
+        sh_eprintf(s, "vcmd: %s: not an IPv4 address (names are not resolved)\n",
+                   argv[1]);
+        return 1;
+    }
+    errno = 0;
+    port = (int)strtol(argv[2], NULL, 10);
+    if (errno != 0 || port <= 0 || port > 65535) {
+        sh_eprintf(s, "vcmd: %s: bad port\n", argv[2]);
+        return 1;
+    }
+    sa.sin_port = htons((unsigned short)port);
+
+    out = malloc(NET_LINE_MAX);
+    buf = malloc(NET_REPLY_MAX);
+    if (out == NULL || buf == NULL) {
+        free(out);
+        free(buf);
+        sh_eprintf(s, "vcmd: out of memory\n");
+        return 1;
+    }
+
+    /* The request: remaining arguments space-separated, one line. With none, a
+     * bare newline, which is enough to poke a server that needs no argument. */
+    out[0] = '\0';
+    for (i = 3; i < argc; i++) {
+        int put = snprintf(out + used, NET_LINE_MAX - used, "%s%s",
+                           used == 0 ? "" : " ", argv[i]);
+
+        if (put < 0 || (size_t)put >= NET_LINE_MAX - used) {
+            free(out);
+            free(buf);
+            sh_eprintf(s, "vcmd: request too long\n");
+            return 1;
+        }
+        used += (size_t)put;
+    }
+    if (used + 1 >= NET_LINE_MAX) {
+        free(out);
+        free(buf);
+        sh_eprintf(s, "vcmd: request too long\n");
+        return 1;
+    }
+    out[used++] = '\n';
+
+    fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) {
+        sh_eprintf(s, "vcmd: socket: %s\n", strerror(errno));
+        free(out);
+        free(buf);
+        return 1;
+    }
+    if (fcntl(fd, F_SETFL, O_NONBLOCK) != 0) {
+        sh_eprintf(s, "vcmd: %s: %s\n", argv[1], strerror(errno));
+        close(fd);
+        free(out);
+        free(buf);
+        return 1;
+    }
+    deadline = time(NULL) + NET_DEADLINE_S;
+
+    if (connect(fd, (struct sockaddr *)&sa, sizeof(sa)) != 0 && errno != EINPROGRESS) {
+        sh_eprintf(s, "vcmd: %s:%d: %s\n", argv[1], port, strerror(errno));
+        close(fd);
+        free(out);
+        free(buf);
+        return 1;
+    }
+    /* A refused connection completes as writability, with the cause visible only
+     * through SO_ERROR, so even a successful wait has to be interrogated. Skip
+     * that and a closed port on loopback surfaces as EPIPE from the send below
+     * and reads as "Broken pipe" -- the one misdiagnosis worth avoiding here,
+     * because "refused" and "timed out" are different answers and telling them
+     * apart is the whole reason this command exists. */
+    why = 0;
+    soerr = 0;
+    if (net_wait(s, fd, POLLOUT, deadline) != 0) {
+        why = errno;
+    }
+    {
+        int err = 0;
+        socklen_t len = sizeof(err);
+
+        if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &len) == 0 && err != 0) {
+            why = err; /* beats a bare ETIMEDOUT: it names the actual cause */
+            soerr = err;
+        }
+    }
+    if (why != 0) {
+        /* sceNet hands back 0x80...... codes newlib's strerror() cannot name, so
+         * the text alone can print "No data" for what is really a refused port.
+         * Print the number beside it: refused-versus-timed-out is the distinction
+         * that matters here and it must survive the wrong label. */
+        if (soerr != 0) {
+            sh_eprintf(s, "vcmd: %s:%d: connect failed: %s (socket error 0x%08x)\n",
+                       argv[1], port, strerror(why), (unsigned)soerr);
+        } else {
+            sh_eprintf(s, "vcmd: %s:%d: %s\n", argv[1], port, strerror(why));
+        }
+        close(fd);
+        free(out);
+        free(buf);
+        return 1;
+    }
+
+    off = 0;
+    while (off < (int)used && status == 0) {
+        ssize_t put;
+
+        if (net_wait(s, fd, POLLOUT, deadline) != 0) {
+            sh_eprintf(s, "vcmd: %s:%d: %s while sending\n", argv[1], port,
+                       strerror(errno));
+            status = 1;
+            break;
+        }
+        put = send(fd, out + off, used - (size_t)off, 0);
+        if (put == 0) {
+            /* Nothing accepted and no error: the peer is gone. Treating it as
+             * progress would spin here at full CPU with the poll loop held, so
+             * stop rather than spend the deadline burning the device. */
+            sh_eprintf(s, "vcmd: %s:%d: connection closed while sending\n",
+                       argv[1], port);
+            status = 1;
+            break;
+        }
+        if (put < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+                sh_server_poll_slice(NET_POLL_MS);
+                continue;
+            }
+            sh_eprintf(s, "vcmd: %s:%d: %s while sending\n", argv[1], port,
+                       strerror(errno));
+            status = 1;
+            break;
+        }
+        off += (int)put;
+    }
+
+    if (status == 0) {
+        size_t total = 0;
+
+        for (;;) {
+            ssize_t got;
+
+            if (net_wait(s, fd, POLLIN, deadline) != 0) {
+                /* A peer that answers and holds the socket open never sends EOF,
+                 * so the deadline is what ends the read. Got bytes already means
+                 * the reply is good; a timeout with nothing at all is a failure. */
+                if (errno != ETIMEDOUT || total == 0) {
+                    sh_eprintf(s, "vcmd: %s:%d: %s while reading\n", argv[1], port,
+                               strerror(errno));
+                    status = 1;
+                }
+                break;
+            }
+            got = recv(fd, buf, NET_REPLY_MAX - total, 0);
+            if (got < 0) {
+                if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+                    sh_server_poll_slice(NET_POLL_MS);
+                    continue;
+                }
+                sh_eprintf(s, "vcmd: %s:%d: %s while reading\n", argv[1], port,
+                           strerror(errno));
+                status = 1;
+                break;
+            }
+            if (got == 0) {
+                break; /* peer half-closed: the reply is complete */
+            }
+            /* sh_write, not sh_printf: a reply is arbitrary bytes and must never
+             * be read as a format string, and this is the one output call that
+             * also honours `vcmd ... > /ux0/data/x`. */
+            sh_write(s, buf, (size_t)got);
+            total += (size_t)got;
+            if (total >= NET_REPLY_MAX) {
+                sh_eprintf(s, "vcmd: reply truncated at %u bytes\n",
+                           (unsigned)total);
+                break;
+            }
+        }
+    }
+
+    close(fd);
+    free(out);
+    free(buf);
+    return status;
+}
+
+/* ------------------------------------------------------------------ */
 /* the table                                                            */
 /* ------------------------------------------------------------------ */
 
@@ -1819,6 +2099,7 @@ static const sh_builtin_t builtins[] = {
     {"stat", cmd_stat, "stat PATH... -- size, mode and modification time"},
     {"touch", cmd_touch, "touch FILE... -- create a file or update its time"},
     {"uname", cmd_uname, "uname [-a] -- system name"},
+    {"vcmd", cmd_vcmd, "vcmd HOST PORT [LINE] -- send one line to a TCP port and print the reply"},
     {"vpk", cmd_vpk, "vpk list FILE | vpk install FILE -- inspect or install a VPK over this app"},
     {"which", cmd_which, "which COMMAND... -- report whether COMMAND is one of these builtins"},
     {"whoami", cmd_whoami, "whoami -- the name you logged in as"},

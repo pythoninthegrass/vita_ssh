@@ -264,8 +264,26 @@ than to libc, and POSIX paths are mapped onto sceIo devices at the boundary.
 
 ```
 cat  cd  cp  date  devices  df  du  echo  env  exit  help
-ls   mkdir  mv   pwd      rm   rmdir  stat  touch  uname  vpk  whoami
+ls   mkdir  mv   pwd     rm   rmdir  stat  touch  uname  vcmd  vpk  whoami
 ```
+
+`vcmd HOST PORT [LINE]` sends one newline-terminated line to a TCP port and prints the
+reply, which is how you drive a plugin's debug socket from a session you are already
+sitting in -- `vcmd 127.0.0.1 1339 status` for the Wi-Fi Turbo remote control, `1338`
+for the vitacompanion command port. It stands in for that plugin's `tools/bench/vcmd.py`
+client, so you do not have to leave the terminal to talk to the device; the command
+itself is generic and any request/response port will take it. It is not called `netcat`
+because it is not one: one line out, the reply in, then the socket is closed.
+
+Two limits worth knowing. It takes a numeric IPv4 address only -- a name would need
+`gethostbyname()`, and a builtin may not block the server's one poll loop on an unbounded
+resolver lookup. And the whole exchange gets five seconds, served non-blocking so other
+sessions keep running while it waits. Loopback is asymmetric: `:1339` answers because it
+lives on the plugin's own thread, but `127.0.0.1:22` is this server waiting on itself, so
+it just spends the deadline.
+
+[`docs/vcmd.md`](docs/vcmd.md) has the arguments, the error strings, and the command
+surfaces both plugins expose on those ports.
 
 `/` lists the mounted devices and `/ux0` is the memory card; `devices` and `df` tell you
 what is actually there. Quoting (`'…'`, `"…"`, `\`) works, `*` and `?` expand in arguments

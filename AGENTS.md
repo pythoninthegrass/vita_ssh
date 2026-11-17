@@ -146,6 +146,7 @@ The layering, bottom to top, is `sh_path.c` (POSIX path to device path), `sshd_b
 3. Output goes through `sh_printf()`, errors through `sh_eprintf()` in the form `<name>: <arg>: <strerror(errno)>`. No `printf`, no `chdir()`, no hand-built `ux0:` strings. A long walk checks `sh_session_interrupted()` and respects `MAX_DEPTH`.
 4. Add a row to the `builtins[]` table at the bottom of the file, in alphabetical order (`help` prints the table in order). The row is `{"name", cmd_name, "usage -- one-line description"}`. Nothing else registers it, and `src/sshd_builtins.c` is already in the server's `add_executable` list.
 5. Run `task build`, or `cmake --build build --target ssh_server_vita` for the server alone (see Build above). Compile and link is the only check available here; behaviour is verified on a device.
+6. If the command needs the network, read [`docs/vcmd.md`](docs/vcmd.md) first. `vcmd` is the only builtin that opens a socket and is the working example of doing it without freezing the poll loop: copy its `net_wait()` shape (zero-timeout `poll()` plus `sh_server_poll_slice()`, a hard deadline, non-blocking connect/send/receive, `getsockopt(SO_ERROR)` after a *successful* writability wait) rather than writing a bare `connect()`/`recv()`. That file also lists its error strings, saying which were confirmed on a device and which are source-only, and documents the plugin command surfaces it drives on ports 1338/1339.
 
 ## Context7 Libraries
 
