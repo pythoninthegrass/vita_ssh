@@ -1148,7 +1148,10 @@ static int cmd_grep(sh_session_t *s, int argc, char **argv)
             continue;
         }
         if (counting) {
-            sh_printf(s, "%s:%ld\n", targets[i], count);
+            if (files > 1) {
+                sh_printf(s, "%s:", targets[i]);
+            }
+            sh_printf(s, "%ld\n", count);
         } else if (only_files && file_hit) {
             sh_printf(s, "%s\n", targets[i]);
         }
