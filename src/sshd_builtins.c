@@ -923,7 +923,11 @@ typedef struct {
     sh_session_t *s;
     int fd;            /* >= 0 for a file, -1 for stdin */
     int file_eof;      /* the file has been drained */
+    char *rbuf;        /* read-ahead for a file, NULL to read straight through */
+    size_t rpos, rlen;
 } grep_src_t;
+
+#define GREP_RBUF 4096
 
 /* Pulls up to n bytes from a file or stdin into p. Returns the count, or 0 at end. */
 static size_t grep_fill(void *vsrc, char *p, size_t n)
@@ -936,14 +940,78 @@ static size_t grep_fill(void *vsrc, char *p, size_t n)
         if (src->file_eof) {
             return 0;
         }
-        got = sh_target_read(src->fd, p, n);
-        if (got <= 0) {
-            src->file_eof = 1;
-            return 0;
+        if (src->rbuf == NULL) {
+            got = sh_target_read(src->fd, p, n);
+            if (got <= 0) {
+                src->file_eof = 1;
+                return 0;
+            }
+            return (size_t)got;
         }
-        return (size_t)got;
+        if (src->rpos == src->rlen) {
+            got = sh_target_read(src->fd, src->rbuf, GREP_RBUF);
+            if (got <= 0) {
+                src->file_eof = 1;
+                return 0;
+            }
+            src->rlen = (size_t)got;
+            src->rpos = 0;
+        }
+        if (n > src->rlen - src->rpos) {
+            n = src->rlen - src->rpos;
+        }
+        memcpy(p, src->rbuf + src->rpos, n);
+        src->rpos += n;
+        return n;
     }
     return sh_session_stdin_read(src->s, p, n);
+}
+
+/* Lines are batched into one buffer so a 20000-line answer is a few writes, not 60000. */
+typedef struct {
+    sh_session_t *s;
+    int with_count; /* uniq -c: prefix the seven-wide run count */
+    size_t used;
+    char buf[2048];
+} to_sink_t;
+
+static void to_flush(to_sink_t *sink)
+{
+    if (sink->used > 0) {
+        sh_write(sink->s, sink->buf, sink->used);
+        sink->used = 0;
+    }
+}
+
+static void to_put(to_sink_t *sink, const char *data, size_t len)
+{
+    if (len > sizeof(sink->buf) - sink->used) {
+        to_flush(sink);
+    }
+    if (len > sizeof(sink->buf)) {
+        sh_write(sink->s, data, len);
+        return;
+    }
+    memcpy(sink->buf + sink->used, data, len);
+    sink->used += len;
+}
+
+/* One match line into the batch: [file:][lineno:]line, newline-terminated. */
+static void grep_put(to_sink_t *gs, const char *file, int numbering, long lineno,
+                     const char *line)
+{
+    if (file != NULL) {
+        to_put(gs, file, strlen(file));
+        to_put(gs, ":", 1);
+    }
+    if (numbering) {
+        char num[24];
+        int n = snprintf(num, sizeof(num), "%ld:", lineno);
+
+        to_put(gs, num, (size_t)n);
+    }
+    to_put(gs, line, strlen(line));
+    to_put(gs, "\n", 1);
 }
 
 static int cmd_grep(sh_session_t *s, int argc, char **argv)
@@ -955,6 +1023,11 @@ static int cmd_grep(sh_session_t *s, int argc, char **argv)
     char *line;
     sh_grep_t *re;
     char why[96];
+    to_sink_t gs;
+
+    gs.s = s;
+    gs.with_count = 0;
+    gs.used = 0;
 
     for (i = 1; i < argc; i++) {
         const char *f;
@@ -1012,6 +1085,7 @@ static int cmd_grep(sh_session_t *s, int argc, char **argv)
         src.s = s;
         src.fd = -1;
         src.file_eof = 0;
+        src.rbuf = NULL;
         while (!sh_session_interrupted(s)) {
             int hit;
 
@@ -1021,6 +1095,7 @@ static int cmd_grep(sh_session_t *s, int argc, char **argv)
             }
             lineno++;
             if (n < 0) {
+                to_flush(&gs);
                 sh_eprintf(s, "grep: (standard input): line %ld: too long (limit %d bytes)\n",
                            lineno, SH_GREP_LINE_MAX);
                 err = 1;
@@ -1028,6 +1103,7 @@ static int cmd_grep(sh_session_t *s, int argc, char **argv)
             }
             hit = sh_grep_match(re, line, invert);
             if (hit < 0) {
+                to_flush(&gs);
                 sh_eprintf(s, "grep: %s: pattern too expensive to match\n", pattern);
                 err = 1;
                 break;
@@ -1040,14 +1116,11 @@ static int cmd_grep(sh_session_t *s, int argc, char **argv)
                     break;
                 }
                 if (!counting && !only_files) {
-                    if (numbering) {
-                        sh_printf(s, "%ld:%s\n", lineno, line);
-                    } else {
-                        sh_printf(s, "%s\n", line);
-                    }
+                    grep_put(&gs, NULL, numbering, lineno, line);
                 }
             }
         }
+        to_flush(&gs);
         if (counting && !quiet) {
             sh_printf(s, "%ld\n", count);
         }
@@ -1100,6 +1173,8 @@ static int cmd_grep(sh_session_t *s, int argc, char **argv)
         src.s = s;
         src.fd = fd;
         src.file_eof = 0;
+        src.rbuf = malloc(GREP_RBUF);
+        src.rpos = src.rlen = 0;
         while (!sh_session_interrupted(s)) {
             int hit;
 
@@ -1109,6 +1184,7 @@ static int cmd_grep(sh_session_t *s, int argc, char **argv)
             }
             lineno++;
             if (n < 0) {
+                to_flush(&gs);
                 sh_eprintf(s, "grep: %s: line %ld: too long (limit %d bytes)\n",
                            targets[i], lineno, SH_GREP_LINE_MAX);
                 had_error = 1;
@@ -1116,6 +1192,7 @@ static int cmd_grep(sh_session_t *s, int argc, char **argv)
             }
             hit = sh_grep_match(re, line, invert);
             if (hit < 0) {
+                to_flush(&gs);
                 sh_eprintf(s, "grep: %s: pattern too expensive to match\n", pattern);
                 had_error = 1;
                 break;
@@ -1129,17 +1206,12 @@ static int cmd_grep(sh_session_t *s, int argc, char **argv)
                     break;  /* -q: the first hit is the only answer it wants */
                 }
                 if (!counting && !only_files) {
-                    if (files > 1) {
-                        sh_printf(s, "%s:", targets[i]);
-                    }
-                    if (numbering) {
-                        sh_printf(s, "%ld:%s\n", lineno, line);
-                    } else {
-                        sh_printf(s, "%s\n", line);
-                    }
+                    grep_put(&gs, files > 1 ? targets[i] : NULL, numbering, lineno, line);
                 }
             }
         }
+        to_flush(&gs);
+        free(src.rbuf);
         sh_target_close(fd);
         if (quiet) {
             if (file_hit) {
@@ -1655,14 +1727,6 @@ static void to_report_error(sh_session_t *s, const char *cmd, const char *name)
     }
 }
 
-/* The lines sink: each line goes straight to the channel, terminated, with the run count
- * prefixed the way uniq -c prints it. sh_write has no failure to report, so it always
- * accepts what it is given; a channel that went away is noticed by the session. */
-typedef struct {
-    sh_session_t *s;
-    int with_count; /* uniq -c: prefix the seven-wide run count */
-} to_sink_t;
-
 static int to_line(void *vctx, const char *line, size_t len, unsigned long count)
 {
     to_sink_t *sink = vctx;
@@ -1672,11 +1736,11 @@ static int to_line(void *vctx, const char *line, size_t len, unsigned long count
         int n = snprintf(head, sizeof(head), "%7lu ", count);
 
         if (n > 0) {
-            sh_write(sink->s, head, (size_t)n);
+            to_put(sink, head, (size_t)n);
         }
     }
-    sh_write(sink->s, line, len);
-    sh_write(sink->s, "\n", 1);
+    to_put(sink, line, len);
+    to_put(sink, "\n", 1);
     return 0;
 }
 
@@ -1864,12 +1928,14 @@ static int to_run(sh_session_t *s, const char *cmd, int is_sort, int numeric, in
 
     sink.s = s;
     sink.with_count = is_sort ? 0 : uniq_or_count;
+    sink.used = 0;
     src->off = 0;
     if (is_sort) {
         r = sh_sort(to_fill, src, src->len, numeric, reverse, uniq_or_count, to_line, &sink);
     } else {
         r = sh_uniq(to_fill, src, src->len, uniq_or_count, dups, singles, to_line, &sink);
     }
+    to_flush(&sink);
     if (r != 0) {
         to_report_error(s, cmd, name);
         return 1;
