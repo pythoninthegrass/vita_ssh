@@ -152,6 +152,7 @@ add_executable(${VITA_SERVER_NAME}
   src/vpk_head.c
   ${VPK_HEAD_TEMPLATE_SRC}
   src/sshd_hostkey.c
+  src/sshd_sysinfo.c
   src/sftp_server.c
   src/sh_path.c
   src/vita_shims.c
@@ -196,6 +197,8 @@ target_link_options(${VITA_SERVER_NAME} PRIVATE
 # vita2d's sharedFB path references them, so omitting either breaks the link.
 # ScePower_stub is the idle-timer tick that keeps the device awake while the
 # server runs. ScePromoterUtil_stub is the system package installer behind `vpk install`.
+# SceKernelModulemgr_stub is where sceKernelGetSystemSwVersion lives — it is not in the
+# SceLibKernel_stub already listed, and without it `uname -a` has no firmware to report.
 target_link_libraries(${VITA_SERVER_NAME}
   vita2d
   ssh
@@ -209,6 +212,7 @@ target_link_libraries(${VITA_SERVER_NAME}
   SceNet_stub
   SceNetCtl_stub
   SceLibKernel_stub
+  SceKernelModulemgr_stub
   SceGxm_stub
   SceSysmem_stub
   SceAppMgr_stub

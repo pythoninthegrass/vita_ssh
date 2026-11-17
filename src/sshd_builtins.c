@@ -34,6 +34,8 @@
 
 #include <psp2/io/devctl.h>
 
+#include "sshd_sysinfo.h"
+
 #ifndef NAME_MAX
 #define NAME_MAX 255
 #endif
@@ -90,6 +92,11 @@ static int resolve_arg(sh_session_t *s, const char *cmd, const char *arg,
 static int check_writable(sh_session_t *s, const char *cmd, const char *arg,
                           const sh_target_t *t)
 {
+    if (t->kind == SH_TARGET_PSEUDO) {
+        /* Synthetic files report the firmware; a real file beside them would persist. */
+        sh_eprintf(s, "%s: %s: Permission denied\n", cmd, arg ? arg : ".");
+        return -1;
+    }
     if (t->kind == SH_TARGET_ROOT || t->dev == NULL || !t->dev->writable) {
         sh_eprintf(s, "%s: %s: Read-only file system\n", cmd, arg ? arg : ".");
         return -1;
@@ -99,7 +106,89 @@ static int check_writable(sh_session_t *s, const char *cmd, const char *arg,
 
 static int stat_target(const sh_target_t *t, struct stat *st)
 {
+    if (t->kind == SH_TARGET_PSEUDO) {
+        /* A synthetic regular file; no mtime, since the clock says nothing about it. */
+        memset(st, 0, sizeof(*st));
+        st->st_mode = (mode_t)(S_IFREG | t->pseudo->mode);
+        st->st_size = (off_t)t->pseudo->size;
+        return 0;
+    }
     return stat(t->sce, st);
+}
+
+/* Pseudo-file fds: slots over a buffer, since a libc fd cannot name one. */
+#define PSEUDO_SLOTS 8
+
+typedef struct {
+    const sh_pseudo_t *file;
+    size_t off;
+} pseudo_slot_t;
+
+static pseudo_slot_t pseudo_slots[PSEUDO_SLOTS];
+
+static int pseudo_open(const sh_pseudo_t *file)
+{
+    int i;
+
+    for (i = 0; i < PSEUDO_SLOTS; i++) {
+        if (pseudo_slots[i].file == NULL) {
+            pseudo_slots[i].file = file;
+            pseudo_slots[i].off = 0;
+            return -(i + 1); /* negative: never confusable with a libc fd */
+        }
+    }
+    errno = EMFILE;
+    return -1;
+}
+
+static int pseudo_close(int fd)
+{
+    int i = -fd - 1;
+
+    if (fd >= 0 || i >= PSEUDO_SLOTS) {
+        errno = EBADF;
+        return -1;
+    }
+    pseudo_slots[i].file = NULL;
+    return 0;
+}
+
+static ssize_t pseudo_read(int fd, void *buf, size_t len)
+{
+    pseudo_slot_t *slot;
+    size_t left, n;
+
+    if (fd >= 0) {
+        errno = EBADF;
+        return -1;
+    }
+    slot = &pseudo_slots[-fd - 1];
+    if (slot->file == NULL) {
+        errno = EBADF;
+        return -1;
+    }
+    left = slot->file->size - slot->off;
+    n = (len < left) ? len : left;
+    memcpy(buf, slot->file->contents + slot->off, n);
+    slot->off += n;
+    return (ssize_t)n;
+}
+
+/* open/read/close routed by target kind; a negative fd is a pseudo-file slot. */
+static int sh_target_open(const sh_target_t *t)
+{
+    return (t->kind == SH_TARGET_PSEUDO) ? pseudo_open(t->pseudo)
+                                         : open(t->sce, O_RDONLY);
+}
+
+static ssize_t sh_target_read(int fd, void *buf, size_t len)
+{
+    return (fd < 0) ? pseudo_read(fd, buf, len) : read(fd, buf, len);
+}
+
+static int sh_target_close(int fd)
+{
+    return (fd < 0) ? pseudo_close(fd) : close(fd);
 }
 
 static void human_size(char *dst, size_t dstlen, long long bytes)
@@ -277,6 +366,7 @@ static int expand_glob(const sh_fsctx_t *fs, const char *word, char **out,
             return 0;
         }
     } else {
+        sh_target_t parent;
         size_t dirlen = (size_t)(slash - word);
 
         pattern = slash + 1;
@@ -288,13 +378,18 @@ static int expand_glob(const sh_fsctx_t *fs, const char *word, char **out,
         }
         memcpy(dirpart, word, dirlen);
         dirpart[dirlen] = '\0';
-        if (strcmp(dirpart, "/") == 0) {
-            return 0; /* never expand against the synthetic root */
-        }
-        base = dirpart;
-        if (sh_path_sce(fs, dirpart, sce_dir, sizeof(sce_dir)) != 0) {
+        if (sh_path_resolve(fs, dirpart, &parent) != 0) {
             return 0;
         }
+        /* No directory stream behind either name, so `*` expands to nothing. */
+        if (parent.kind == SH_TARGET_ROOT || parent.kind == SH_TARGET_PSEUDO) {
+            return 0;
+        }
+        base = dirpart;
+        if (strlen(parent.sce) + 1 > sizeof(sce_dir)) {
+            return 0;
+        }
+        memcpy(sce_dir, parent.sce, strlen(parent.sce) + 1);
     }
 
     dir = opendir(sce_dir);
@@ -473,20 +568,28 @@ static int cmd_cd(sh_session_t *s, int argc, char **argv)
 /* ls                                                                   */
 /* ------------------------------------------------------------------ */
 
+/* One ls -l line; sce_path is NULL for a pseudo-file, which carries its own mode. */
 static void print_long(sh_session_t *s, const char *sce_path,
-                       const char *display, const sh_device_t *dev)
+                       const char *display, const sh_device_t *dev,
+                       const sh_pseudo_t *pseudo)
 {
     struct stat st;
     char perms[11], when[32], size[16];
+    mode_t mode;
 
-    if (stat(sce_path, &st) != 0) {
+    if (pseudo != NULL) {
+        memset(&st, 0, sizeof(st));
+        st.st_mode = (mode_t)(S_IFREG | pseudo->mode);
+        st.st_size = (off_t)pseudo->size;
+    } else if (stat(sce_path, &st) != 0) {
         sh_printf(s, "?  %s\n", display);
         return;
     }
+    mode = (pseudo != NULL) ? st.st_mode : synth_mode(&st, dev);
     format_time(when, sizeof(when), st.st_mtime, "%b %e %H:%M");
     human_size(size, sizeof(size), (long long)st.st_size);
     sh_printf(s, "%s %6s %s  %s%s\n",
-              mode_string(synth_mode(&st, dev), perms), size, when,
+              mode_string(mode, perms), size, when,
               display, S_ISDIR(st.st_mode) ? "/" : "");
 }
 
@@ -504,15 +607,15 @@ static int list_one(sh_session_t *s, const char *cmd, const sh_target_t *t,
     DIR *dir;
     struct dirent *ent;
 
-    dir = opendir(t->sce);
-    if (dir == NULL) {
-        sh_eprintf(s, "%s: %s: %s\n", cmd, t->posix, strerror(errno));
-        return 1;
-    }
     names = malloc((size_t)MAX_LIST * (NAME_MAX + 1));
     if (names == NULL) {
-        closedir(dir);
         sh_eprintf(s, "%s: out of memory\n", cmd);
+        return 1;
+    }
+    dir = opendir(t->sce);
+    if (dir == NULL) {
+        free(names);
+        sh_eprintf(s, "%s: %s: %s\n", cmd, t->posix, strerror(errno));
         return 1;
     }
     while ((ent = readdir(dir)) != NULL && n < MAX_LIST) {
@@ -536,7 +639,7 @@ static int list_one(sh_session_t *s, const char *cmd, const sh_target_t *t,
                 rc = 1;
                 continue;
             }
-            print_long(s, sce, names[i], t->dev);
+            print_long(s, sce, names[i], t->dev, NULL);
         }
         free(names);
         return rc;
@@ -574,6 +677,69 @@ static int list_root(sh_session_t *s)
                   devices[i].writable ? "" : "read-only");
     }
     return 0;
+}
+
+/* Lists the pseudo-file table for `ls /etc`, in table order. */
+static int list_pseudo_dir(sh_session_t *s, const char *dir, int long_format)
+{
+    const char *names[MAX_LIST];
+    int col = 0, width = 0, cols = sh_session_cols(s), rc = 0;
+    size_t got, count;
+    int per_row;
+
+    count = sh_pseudo_list(dir, names, (size_t)MAX_LIST);
+    for (got = 0; got < count; got++) {
+        if ((int)strlen(names[got]) > width) {
+            width = (int)strlen(names[got]);
+        }
+    }
+    if (long_format) {
+        for (got = 0; got < count; got++) {
+            char full[SH_POSIX_PATH_MAX];
+            const sh_pseudo_t *file;
+
+            if (sh_join(full, sizeof(full), dir, names[got]) != 0) {
+                rc = 1;
+                continue;
+            }
+            file = sh_pseudo_lookup(full);
+            if (file == NULL) {
+                rc = 1;
+                continue;
+            }
+            print_long(s, NULL, names[got], NULL, file);
+        }
+        return rc;
+    }
+    per_row = (cols > width + 2) ? (cols / (width + 2)) : 1;
+    for (got = 0; got < count; got++) {
+        sh_printf(s, "%-*s", width + 2, names[got]);
+        if (++col >= per_row) {
+            sh_printf(s, "\n");
+            col = 0;
+        }
+    }
+    if (col != 0) {
+        sh_printf(s, "\n");
+    }
+    return rc;
+}
+
+/* ls of one argument: device table for "/", pseudo-file table, or a dir stream. */
+static int list_any(sh_session_t *s, const char *cmd, const sh_target_t *t,
+                    int long_format, int show_hidden)
+{
+    if (t->kind == SH_TARGET_ROOT) {
+        return list_root(s);
+    }
+    if (t->kind == SH_TARGET_PSEUDO) {
+        return list_pseudo_dir(s, t->pseudo->dir, long_format);
+    }
+    if (t->dev == NULL) {
+        sh_eprintf(s, "%s: %s: %s\n", cmd, t->posix, strerror(ENOENT));
+        return 1;
+    }
+    return list_one(s, cmd, t, long_format, show_hidden);
 }
 
 static int cmd_ls(sh_session_t *s, int argc, char **argv)
@@ -616,9 +782,7 @@ static int cmd_ls(sh_session_t *s, int argc, char **argv)
         if (resolve_arg(s, "ls", NULL, &t) != 0) {
             return 1;
         }
-        return (t.kind == SH_TARGET_ROOT)
-                   ? list_root(s)
-                   : list_one(s, "ls", &t, long_format, show_hidden);
+        return list_any(s, "ls", &t, long_format, show_hidden);
     }
     for (i = 0; i < paths; i++) {
         sh_target_t t;
@@ -628,11 +792,16 @@ static int cmd_ls(sh_session_t *s, int argc, char **argv)
             status = 1;
             continue;
         }
-        if (t.kind == SH_TARGET_ROOT) {
+        /* A pseudo-file prints as one line, never as its directory's listing. */
+        if (t.kind == SH_TARGET_PSEUDO) {
             if (paths > 1) {
                 sh_printf(s, "%s:\n", targets[i]);
             }
-            list_root(s);
+            if (long_format) {
+                print_long(s, NULL, sh_basename(t.posix), NULL, t.pseudo);
+            } else {
+                sh_printf(s, "%s\n", sh_basename(t.posix));
+            }
             continue;
         }
         if (stat_target(&t, &st) != 0) {
@@ -644,7 +813,7 @@ static int cmd_ls(sh_session_t *s, int argc, char **argv)
             sh_printf(s, "%s:\n", targets[i]);
         }
         if (S_ISDIR(st.st_mode)) {
-            if (list_one(s, "ls", &t, long_format, show_hidden) != 0) {
+            if (list_any(s, "ls", &t, long_format, show_hidden) != 0) {
                 status = 1;
             }
             continue;
@@ -652,7 +821,7 @@ static int cmd_ls(sh_session_t *s, int argc, char **argv)
         /* A file argument prints as one line, like ls(1): the name, or the
          * long form when -l was asked for. */
         if (long_format) {
-            print_long(s, t.sce, sh_basename(t.posix), t.dev);
+            print_long(s, t.sce, sh_basename(t.posix), t.dev, NULL);
         } else {
             sh_printf(s, "%s\n", sh_basename(t.posix));
         }
@@ -692,17 +861,17 @@ static int cmd_cat(sh_session_t *s, int argc, char **argv)
             status = 1;
             continue;
         }
-        fd = open(t.sce, O_RDONLY);
+        fd = sh_target_open(&t);
         if (fd < 0) {
             sh_eprintf(s, "cat: %s: %s\n", argv[i], strerror(errno));
             status = 1;
             continue;
         }
-        while ((got = read(fd, buf, SSHD_COPY_BUFSIZE)) > 0 &&
+        while ((got = sh_target_read(fd, buf, SSHD_COPY_BUFSIZE)) > 0 &&
                !sh_session_interrupted(s)) {
             sh_write(s, buf, (size_t)got);
         }
-        close(fd);
+        sh_target_close(fd);
         if (got < 0) {
             sh_eprintf(s, "cat: %s: %s\n", argv[i], strerror(errno));
             status = 1;
@@ -1223,8 +1392,8 @@ static void land_in_dir(sh_target_t *dst, const sh_target_t *src)
     char sce[SH_SCE_PATH_MAX], posix[SH_POSIX_PATH_MAX];
     struct stat st;
 
-    if (dst->kind == SH_TARGET_ROOT || stat(dst->sce, &st) != 0 ||
-        !S_ISDIR(st.st_mode)) {
+    if (dst->kind == SH_TARGET_ROOT || dst->kind == SH_TARGET_PSEUDO ||
+        stat(dst->sce, &st) != 0 || !S_ISDIR(st.st_mode)) {
         return;
     }
     if (sh_join(sce, sizeof(sce), dst->sce, sh_basename(src->posix)) != 0 ||
@@ -1431,6 +1600,7 @@ static int cmd_stat(sh_session_t *s, int argc, char **argv)
     for (i = 1; i < argc; i++) {
         sh_target_t t;
         struct stat st;
+        mode_t mode;
         char perms[11], when[40];
 
         if (resolve_arg(s, "stat", argv[i], &t) != 0) {
@@ -1447,6 +1617,8 @@ static int cmd_stat(sh_session_t *s, int argc, char **argv)
             status = 1;
             continue;
         }
+        mode = (t.kind == SH_TARGET_PSEUDO) ? st.st_mode
+                                            : synth_mode(&st, t.dev);
         format_time(when, sizeof(when), st.st_mtime, "%Y-%m-%d %H:%M:%S");
         sh_printf(s, "  File: %s\n", t.posix);
         sh_printf(s, "  Size: %-14lld  Type: %s\n", (long long)st.st_size,
@@ -1456,8 +1628,7 @@ static int cmd_stat(sh_session_t *s, int argc, char **argv)
          * The access line shows the synthesized mode, not the zero bits stat
          * hands back -- same reason as in ls -l. */
         sh_printf(s, "Access: (%04o/%s)  Uid: (0/vita)  Gid: (0/vita)\n",
-                  (unsigned)(synth_mode(&st, t.dev) & 07777),
-                  mode_string(synth_mode(&st, t.dev), perms));
+                  (unsigned)(mode & 07777), mode_string(mode, perms));
         sh_printf(s, "Modify: %s\n", when);
     }
     return status;
@@ -1726,13 +1897,20 @@ static int cmd_date(sh_session_t *s, int argc, char **argv)
     return 0;
 }
 
+/* uname(1); the release comes from the kernel, not from a literal. */
 static int cmd_uname(sh_session_t *s, int argc, char **argv)
 {
-    if (argc > 1 && strchr(argv[1], 'a') != NULL) {
-        sh_printf(s, "Vita vita 3.73 VitaSDK armv7a\n");
+    sh_sysinfo_t info;
+
+    /* Bare uname prints only the system name: no kernel call, no new text. */
+    if (argc < 2 || strchr(argv[1], 'a') == NULL) {
+        sh_printf(s, "Vita\n");
         return 0;
     }
-    sh_printf(s, "Vita\n");
+    /* Name, kernel-reported release and machine, so nothing needs keeping current. */
+    sh_sysinfo_get(&info);
+    sh_printf(s, "Vita vita %s VitaSDK %s\n", info.firmware,
+              info.vitatv ? "armv7a (vitatv)" : "armv7a");
     return 0;
 }
 
@@ -2098,7 +2276,8 @@ static const sh_builtin_t builtins[] = {
     {"rmdir", cmd_rmdir, "rmdir DIR... -- remove an empty directory"},
     {"stat", cmd_stat, "stat PATH... -- size, mode and modification time"},
     {"touch", cmd_touch, "touch FILE... -- create a file or update its time"},
-    {"uname", cmd_uname, "uname [-a] -- system name"},
+    {"uname", cmd_uname,
+     "uname [-a] -- system name; -a adds the firmware the device reports"},
     {"vcmd", cmd_vcmd, "vcmd HOST PORT [LINE] -- send one line to a TCP port and print the reply"},
     {"vpk", cmd_vpk, "vpk list FILE | vpk install FILE -- inspect or install a VPK over this app"},
     {"which", cmd_which, "which COMMAND... -- report whether COMMAND is one of these builtins"},
@@ -2256,8 +2435,10 @@ int sh_execute_line(sh_session_t *s, const char *line)
             free_args(argv, argc);
             return 1;
         }
-        if (t.kind == SH_TARGET_ROOT || t.kind == SH_TARGET_DEVICE) {
-            sh_eprintf(s, "sh: %s: Is a directory\n", redir_path);
+        if (t.kind == SH_TARGET_ROOT || t.kind == SH_TARGET_DEVICE ||
+            t.kind == SH_TARGET_PSEUDO) {
+            /* A synthetic name has no file behind it, so nothing can be written. */
+            sh_eprintf(s, "sh: %s: Permission denied\n", redir_path);
             free(redir_path);
             free_args(argv, argc);
             return 1;

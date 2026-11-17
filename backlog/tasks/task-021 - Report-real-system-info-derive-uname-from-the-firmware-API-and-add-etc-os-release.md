@@ -50,18 +50,18 @@ Machine-local identifiers must not be baked into any field or into this task: en
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
 - [ ] #1 `uname -a` prints the firmware version the device reports, not a literal: a device on 3.74 prints 3.74 and a device on 3.60 prints 3.60.
-- [ ] #2 Bare `uname` still prints `Vita` as it does today, so existing scripts are not broken.
-- [ ] #3 `uname -a` and `cat /etc/os-release` take their version from one shared function, so the two cannot report different values.
-- [ ] #4 `cat /etc/os-release` prints os-release formatted KEY=value lines covering at least NAME, ID, PRETTY_NAME, VERSION_ID, HOME_URL and SUPPORT_URL, with VERSION_ID matching `uname -a`.
-- [ ] #5 The os-release output is machine-parseable: one assignment per line, valid identifiers, no spaces around `=`, so `grep '^VERSION_ID='` and shell sourcing both work.
-- [ ] #6 `cat /etc/os-release` includes exactly SUPPORT_URL="https://github.com/pythoninthegrass/vita_ssh" and HOME_URL="https://www.reddit.com/r/vitahacks", written as literals in the code rather than derived from the device.
-- [ ] #7 `ls /etc` lists os-release, `stat /etc/os-release` reports a regular file with the size actually printed, and `ls /` still lists the device table exactly as before.
+- [x] #2 Bare `uname` still prints `Vita` as it does today, so existing scripts are not broken.
+- [x] #3 `uname -a` and `cat /etc/os-release` take their version from one shared function, so the two cannot report different values.
+- [x] #4 `cat /etc/os-release` prints os-release formatted KEY=value lines covering at least NAME, ID, PRETTY_NAME, VERSION_ID, HOME_URL and SUPPORT_URL, with VERSION_ID matching `uname -a`.
+- [x] #5 The os-release output is machine-parseable: one assignment per line, valid identifiers, no spaces around `=`, so `grep '^VERSION_ID='` and shell sourcing both work.
+- [x] #6 `cat /etc/os-release` includes exactly SUPPORT_URL="https://github.com/pythoninthegrass/vita_ssh" and HOME_URL="https://www.reddit.com/r/vitahacks", written as literals in the code rather than derived from the device.
+- [x] #7 `ls /etc` lists os-release, `stat /etc/os-release` reports a regular file with the size actually printed, and `ls /` still lists the device table exactly as before.
 - [ ] #8 `/etc` is shell-only: SFTP for /etc/os-release fails as any unknown path does, and any other name under /etc (for example /etc/shadow) fails ENOENT with the message in the command's own voice.
 - [ ] #9 `cat /etc/os-release > /ux0/data/x` puts the same bytes in the file that `cat` printed to the terminal, and `>>` appends them.
-- [ ] #10 If the firmware query fails, both surfaces print an honest unknown value rather than a made-up version, and the commands still exit 0.
-- [ ] #11 Apart from the two fixed project URLs above, no machine-local identifier (endpoint, address, hostname or the maintainer's name) appears in any emitted field.
-- [ ] #12 A host-runnable check under scripts/ exercises the formatting for a normal firmware value, a second different firmware value and the failure path, built with the host cc like the other scripts/test_*.py checks.
-- [ ] #13 `help uname`, the README command table and any README mention of uname describe the new behaviour and document /etc/os-release.
+- [x] #10 If the firmware query fails, both surfaces print an honest unknown value rather than a made-up version, and the commands still exit 0.
+- [x] #11 Apart from the two fixed project URLs above, no machine-local identifier (endpoint, address, hostname or the maintainer's name) appears in any emitted field.
+- [x] #12 A host-runnable check under scripts/ exercises the formatting for a normal firmware value, a second different firmware value and the failure path, built with the host cc like the other scripts/test_*.py checks.
+- [x] #13 `help uname`, the README command table and any README mention of uname describe the new behaviour and document /etc/os-release.
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -125,8 +125,80 @@ Quote values the way the freedesktop os-release examples do (the two URLs above 
 - Device: compare `uname -a` and `cat /etc/os-release` against Settings -> System -> PS Vita System Software Version, and transcribe the real output into the task notes.
 <!-- SECTION:PLAN:END -->
 
+## Implementation Notes
+
+### Scope: was `cd ..` already broken?
+
+**No. The base was correct and my own edit broke it.** At `da7fc67` `normalize()` took no
+floor argument at all: `..` was `if (n > 0) n--`, plain normalization. Driving that
+original function directly (extracted verbatim from `git show da7fc67:src/sh_path.c`,
+compiled as a unit and fed the exact string `sh_path_resolve` builds) gives:
+
+```
+/ux0/data/x/..                          n=2: [ux0] [data]                 <- cd .. worked
+/ux0/data/x/../..                       n=1: [ux0]                         <- cd ../.. worked
+/ux0/data/x/../../../etc/os-release     n=2: [etc] [os-release]            <- THE REAL BUG
+```
+
+So `cd ..` inside a subdirectory never regressed at the base, and the `floor_depth`
+parameter I introduced was fixing fallout from an earlier edit of my own, not a base
+defect. The genuine pre-existing bug is the third line: `..` pops the device component,
+so a relative path can leave its storage area. That is what had to be closed, because a
+relative name can otherwise reach the new pseudo-file.
+
+Two facts then set the minimum change. `sh_path_resolve` always prepends exactly one
+component (the device, which it puts at index 0), so clamping `..` at 1 pins the storage
+area while leaving the caller's own components climbable. And a matrix over the floor
+value confirms 1 is the only value that satisfies both requirements:
+
+```
+/ux0/data/x/../..                        floor=0 -> [ux0]      floor=1 -> [ux0]      floor=3 -> [ux0 data x]
+/ux0/data/x/../../../etc/os-release      floor=0 -> [etc os-release] (escape)  floor=1 -> [ux0 etc os-release]  floor=3 -> (no walk)
+```
+
+The `normalize()` diff was then reduced to **one changed condition**, `if (n > 0)` to
+`if (n > floor_depth)`. I also tested whether the more general leading-dot component test
+I had written was needed: against the base's exact `len == 2` spelling it is behaviorally
+identical on all ten probe cases, including `...x`, `..x` and `a/../../b`, so it was
+dropped as unnecessary. The pseudo-file table, the `SH_TARGET_PSEUDO` kind and the SFTP
+refusal are all additive; none of them required touching `normalize()`'s existing
+behaviour.
+
+### Needs device
+
+Everything below is asserted by the host check or refused at the right layer in code, but
+only a device can show it. None are ticked.
+
+- **AC #1** - `uname -a` printing the firmware the *device* reports (3.74 reads 3.74, 3.60
+  reads 3.60). The formatter is proven for both words off-device; the kernel call is not.
+  Compare against Settings -> System -> PS Vita System Software Version, and note the
+  spoofed-firmware case returns the spoofed value by design.
+- **AC #8** - the SFTP/scp half. `sh_path_sce()` returns `ENOTSUP` for `/etc/os-release`
+  and `ENOENT` for `/etc`, `/etc/shadow`, `/etc/passwd`, and sftp_server's `resolve()`
+  maps a pseudo target to `ENOENT`, so libssh's stock handlers should never see `/etc`.
+  The plan says to verify with a real `sftp`/`scp` attempt rather than by reading code, and
+  that attempt has not been made.
+- **AC #9** - `cat /etc/os-release > /ux0/data/x` writing the same bytes `cat` printed, and
+  `>>` appending. The guard rejecting synthetic redirect targets is in place, and
+  `>`/`>>` are `fopen("w")`/`fopen("a")`, but whether the bytes land correctly is a libc
+  call against a device path.
+- **DoD #2** - transcribe the real `uname -a`, `cat /etc/os-release`, `ls /etc`,
+  `stat /etc/os-release` output from the device into these notes.
+
+A rebuild needs a fresh `__DATE__ __TIME__` to be distinguishable on the device, so use
+`task --force build`, then confirm the `sftp: server code built` line in `sshd.log`.
+
+### Checks run
+
+- `cmake --build build --target ssh_server_vita` - clean.
+- `python3 -I scripts/test_sysinfo.py` - `ok`, exit 0 (6 cases: formatter, three firmware
+  words including vitatv, the failure path, and the path layer).
+- `task build` - produces `ssh_client_vita.vpk`, `ssh_server_vita.vpk` and
+  `ssh_updater_vita.vpk`.
+
+
 ## Definition of Done
 <!-- DOD:BEGIN -->
-- [ ] #1 `task build` produces both ssh_client_vita.vpk and ssh_server_vita.vpk.
+- [x] #1 `task build` produces both ssh_client_vita.vpk and ssh_server_vita.vpk.
 - [ ] #2 Behaviour checked on a device and the observed output transcribed into the task notes; device behaviour is the only real verification here.
 <!-- DOD:END -->

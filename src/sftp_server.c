@@ -101,7 +101,15 @@ int __real_ssh_channel_write(ssh_channel channel, const void *data, uint32_t len
 
 static int resolve(const char *path, sh_target_t *t)
 {
-    return sh_path_resolve(active_fs, path, t);
+    if (sh_path_resolve(active_fs, path, t) != 0) {
+        return -1;
+    }
+    if (t->kind == SH_TARGET_PSEUDO) {
+        /* /etc is the shell's, so libssh's handlers see ENOENT, not the pseudo-file. */
+        errno = ENOENT;
+        return -1;
+    }
+    return 0;
 }
 
 /* The mutating calls refuse before the syscall, same as the shell does, so a
@@ -167,6 +175,11 @@ static int stat_common(const char *path, struct stat *st, int follow)
     int rc;
 
     if (resolve(path, &t) != 0) {
+        return -1;
+    }
+    if (t.kind == SH_TARGET_PSEUDO) {
+        /* Reporting one as a regular file would invite a READ __wrap_open refuses. */
+        errno = ENOENT;
         return -1;
     }
     if (t.kind == SH_TARGET_ROOT) {

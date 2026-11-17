@@ -290,6 +290,35 @@ what is actually there. Quoting (`'…'`, `"…"`, `\`) works, `*` and `?` expan
 unless quoted, and the line editor keeps 12 lines of history per session. `help` and
 `help COMMAND` are the reference on the device.
 
+The Vita has no filesystem root, so two names are answered by the server itself rather
+than by sceIo: `/` (the device table) and `/etc/os-release`, which `cat`, `ls` and `stat`
+all serve. It reports what the firmware API returns, so `VERSION_ID` and `uname -a` can
+never disagree. For a device reporting 3.74:
+
+```
+$ uname -a
+Vita vita 3.74 VitaSDK armv7a
+$ cat /etc/os-release
+NAME="PlayStation Vita"
+VERSION="3.74"
+ID=psvita
+ID_LIKE=vitasdk
+VERSION_ID="3.74"
+BUILD_ID="0x03740000"
+PRETTY_NAME="PlayStation Vita 3.74"
+VITA_MODEL=vita
+VITA_SSHD_BUILD="<__DATE__ __TIME__ of the server build>"
+HOME_URL="https://www.reddit.com/r/vitahacks"
+SUPPORT_URL="https://github.com/pythoninthegrass/vita_ssh"
+```
+
+Bare `uname` still prints just `Vita`. The release is the firmware the kernel reports, not
+a compiled-in number, so a quoted `uname -a` or os-release block in a bug report is quoting
+the device; a spoofed firmware reports its own spoofed value. `/etc` exists only in the
+shell: SFTP and `scp` treat `/etc/os-release` as the unknown path it is, and `>` cannot
+write to it, so `cat /etc/os-release > /ux0/data/x` works while `echo hi > /etc/os-release`
+fails.
+
 `vpk list FILE` prints a package's title ID and files without writing anything.
 `vpk install FILE` accepts only the server's own title (`ROM000070`), unpacks and
 CRC-checks it under `ux0:data/vitasshd-update/server`, and generates its package header.

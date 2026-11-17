@@ -41,17 +41,43 @@ typedef struct {
   int removable;
 } sh_device_t;
 
+/* The shell's synthetic pseudo-files: read-only names under a first component
+ * that is not a device. /etc/os-release is one, and the shell's own surfaces --
+ * cat, ls, stat, redirection -- all ask this table rather than comparing names
+ * themselves, so they cannot disagree about what exists, or about how many bytes
+ * the file has. */
+typedef struct {
+  const char *dir;   /* POSIX directory it lives in, "/etc" */
+  const char *name;  /* "os-release" */
+  const char *contents; /* the whole file, already formatted; never NULL */
+  size_t size;       /* strlen(contents) */
+  int mode;          /* the permission bits stat and ls report */
+} sh_pseudo_t;
+
+/* The pseudo-file exactly named by a normalized POSIX path, or NULL. Nothing
+ * else under its directory exists: /etc/shadow is ENOENT like any other name. */
+const sh_pseudo_t *sh_pseudo_lookup(const char *posix);
+
+/* The names to list for `ls /etc`, in table order, which is alphabetical; returns
+ * the count. */
+size_t sh_pseudo_list(const char *dir, const char *names[], size_t max);
+
 typedef enum {
   SH_TARGET_ROOT = 0,  /* "/", the synthetic listing of the device table */
   SH_TARGET_DEVICE,    /* "/ux0" and "/ux0/" are the same thing */
-  SH_TARGET_PATH       /* "/ux0/vita/save/x.dat" */
+  SH_TARGET_PATH,      /* "/ux0/vita/save/x.dat" */
+  /* A pseudo-file: no sce spelling, because no sceIo call can reach it. Only the
+   * shell knows these exist -- sh_path_sce() fails for them, which is what keeps
+   * them out of SFTP and out of every libc call. */
+  SH_TARGET_PSEUDO
 } sh_target_kind_t;
 
 typedef struct {
   sh_target_kind_t kind;
   const sh_device_t *dev;       /* the device the path sits on; NULL only for
-                                 * the synthetic "/" root */
-  char sce[SH_SCE_PATH_MAX];    /* "ux0:vita/save/x.dat", "" for ROOT */
+                                 * the synthetic "/" root and for a pseudo-file */
+  const sh_pseudo_t *pseudo;    /* the pseudo-file, set only for SH_TARGET_PSEUDO */
+  char sce[SH_SCE_PATH_MAX];    /* "ux0:vita/save/x.dat", "" for ROOT and PSEUDO */
   char posix[SH_POSIX_PATH_MAX];/* "/ux0/vita/save/x.dat", "/" for ROOT.
                                  * What $PWD holds: normalized, no trailing
                                  * slash, and the input `cd` was given may
@@ -76,12 +102,14 @@ int sh_device_present(const sh_device_t *dev);
 
 /* Resolves path against fs (NULL path or "" means cwd) and fills out.
  * Returns 0, or -1 with errno set: ENOENT for an unknown device or an empty
- * result, ENAMETOOLONG, EINVAL for "~user". */
+ * result, ENAMETOOLONG, EINVAL for "~user". A path that names a pseudo-file
+ * comes back SH_TARGET_PSEUDO instead of ENOENT. */
 int sh_path_resolve(const sh_fsctx_t *fs, const char *path, sh_target_t *out);
 
 /* sh_path_resolve + a copy, for callers that only want the syscall argument.
  * Fails with ENOTSUP when the path resolves to "/": the synthetic root has no
- * sceIo spelling, it is a listing of devices rather than a directory. */
+ * sceIo spelling, it is a listing of devices rather than a directory. Fails the
+ * same way for a pseudo-file, which has no sceIo spelling either. */
 int sh_path_sce(const sh_fsctx_t *fs, const char *path, char *out, size_t outlen);
 
 /* --- POSIX-side string helpers, no syscalls and no device knowledge --- */

@@ -10,6 +10,123 @@
 
 #include <psp2/io/stat.h>
 
+#include "sshd_sysinfo.h"
+
+/* Synthetic read-only files under a non-device component, served from one table. */
+
+/* A table row before the bytes exist; mode is what stat and ls report. */
+typedef struct {
+    const char *dir;  /* POSIX directory the name sits in */
+    const char *name;
+    int mode;
+    /* Fills buf with the whole file and returns its length, or -1. */
+    int (*render)(char *buf, size_t buflen);
+} sh_pseudo_def_t;
+
+/* Renders into buf and returns its length, or -1 to leave the name out of ls. */
+static int render_os_release(char *buf, size_t buflen)
+{
+    static char held[SSHD_OS_RELEASE_MAX];
+    static int ready;
+    sh_sysinfo_t info;
+
+    if (!ready) {
+        sh_sysinfo_get(&info);
+        if (sh_sysinfo_os_release(&info, held, sizeof(held)) != 0) {
+            held[0] = '\0';
+            return -1;
+        }
+        ready = 1;
+    }
+    if (strlen(held) + 1 > buflen) {
+        errno = ENAMETOOLONG;
+        return -1;
+    }
+    memcpy(buf, held, strlen(held) + 1);
+    return (int)strlen(held);
+}
+
+static const sh_pseudo_def_t pseudo_defs[] = {
+    {"/etc", "os-release", 0444, render_os_release},
+};
+
+#define N_PSEUDO (sizeof(pseudo_defs) / sizeof(pseudo_defs[0]))
+
+/* Rendered once and held for the process, so a read needs nothing else alive. */
+static sh_pseudo_t pseudo_files[N_PSEUDO];
+static int pseudo_built;
+
+static void build_pseudo(void)
+{
+    char scratch[SSHD_OS_RELEASE_MAX];
+    size_t i;
+
+    for (i = 0; i < N_PSEUDO; i++) {
+        int len;
+
+        pseudo_files[i].dir = NULL;
+        len = pseudo_defs[i].render(scratch, sizeof(scratch));
+        if (len < 0) {
+            continue;
+        }
+        pseudo_files[i].contents = strdup(scratch);
+        if (pseudo_files[i].contents == NULL) {
+            continue;
+        }
+        pseudo_files[i].dir = pseudo_defs[i].dir;
+        pseudo_files[i].name = pseudo_defs[i].name;
+        pseudo_files[i].size = (size_t)len;
+        pseudo_files[i].mode = pseudo_defs[i].mode;
+    }
+    pseudo_built = 1;
+}
+
+const sh_pseudo_t *sh_pseudo_lookup(const char *posix)
+{
+    size_t i;
+
+    if (posix == NULL) {
+        return NULL;
+    }
+    if (!pseudo_built) {
+        build_pseudo();
+    }
+    for (i = 0; i < N_PSEUDO; i++) {
+        char full[SH_POSIX_PATH_MAX];
+
+        if (pseudo_files[i].dir == NULL) {
+            continue;
+        }
+        if (sh_join(full, sizeof(full), pseudo_files[i].dir,
+                    pseudo_files[i].name) != 0) {
+            continue;
+        }
+        if (strcmp(full, posix) == 0) {
+            return &pseudo_files[i];
+        }
+    }
+    return NULL;
+}
+
+size_t sh_pseudo_list(const char *dir, const char *names[], size_t max)
+{
+    size_t i, n = 0;
+
+    if (dir == NULL || names == NULL || max == 0) {
+        return 0;
+    }
+    if (!pseudo_built) {
+        build_pseudo();
+    }
+    for (i = 0; i < N_PSEUDO && n < max; i++) {
+        if (pseudo_files[i].dir != NULL &&
+            strcmp(pseudo_files[i].dir, dir) == 0) {
+            names[n++] = pseudo_files[i].name;
+        }
+    }
+    return n;
+}
+
 /*
  * VitaShell's list, plus app0:. VitaShell omits app0: because it *is* the app
  * running there; we are a different app, so listing the server's own partition
@@ -95,15 +212,9 @@ int sh_device_present(const sh_device_t *dev)
     return sceIoGetstat(dev->sce, &st) >= 0;
 }
 
-/*
- * Splits raw on '/', dropping "." and empty components and applying ".."
- * against the component stack. Components are written into buf NUL-separated
- * and reported back as pointers into it.
- *
- * The stack is the whole point: ".." pops but never below zero, so a relative
- * path anchored on a device cannot end up on another one, and "/" stays put.
- */
-static int normalize(const char *raw, char *buf, size_t buflen,
+/* Splits raw on '/', drops "." and empties, and applies ".." against the stack. */
+/* A ".." cancels a named component but never one at or below floor_depth (the device). */
+static int normalize(const char *raw, size_t floor_depth, char *buf, size_t buflen,
                      const char **comp, size_t *ncomp_out)
 {
     const char *stack[SH_MAX_DEPTH];
@@ -128,7 +239,7 @@ static int normalize(const char *raw, char *buf, size_t buflen,
             continue;
         }
         if (len == 2 && raw[start] == '.' && raw[start + 1] == '.') {
-            if (n > 0) {
+            if (n > floor_depth) {
                 n--;
             }
             continue;
@@ -159,7 +270,7 @@ int sh_path_resolve(const sh_fsctx_t *fs, const char *path, sh_target_t *out)
     char raw[SH_POSIX_PATH_MAX];
     char norm[SH_POSIX_PATH_MAX];
     const char *comp[SH_MAX_DEPTH];
-    size_t n = 0, i, used;
+    size_t n = 0, i, used, anchor;
     const sh_device_t *dev;
     int wrote;
 
@@ -169,6 +280,7 @@ int sh_path_resolve(const sh_fsctx_t *fs, const char *path, sh_target_t *out)
     }
     out->kind = SH_TARGET_ROOT;
     out->dev = NULL;
+    out->pseudo = NULL;
     out->sce[0] = '\0';
     out->posix[0] = '\0';
 
@@ -180,29 +292,58 @@ int sh_path_resolve(const sh_fsctx_t *fs, const char *path, sh_target_t *out)
         path = fs->cwd;
     }
 
+    /* Make the path absolute first, prepending exactly one component: the device
+     * the caller named, or the one the cwd or home sits on. */
     if (path[0] == '~') {
         if (path[1] != '/' && path[1] != '\0') {
             errno = EINVAL; /* ~user: this box has no other users */
             return -1;
         }
+        /* "~" alone is home, so it keeps the whole directory; "~/x" is x under it. */
         wrote = snprintf(raw, sizeof(raw), "%s%s", fs->home, path + 1);
     } else if (path[0] == '/') {
         wrote = snprintf(raw, sizeof(raw), "%s", path);
     } else {
         wrote = snprintf(raw, sizeof(raw), "%s/%s", fs->cwd, path);
     }
+    anchor = 1; /* the device at index 0, which no ".." may cancel */
     if (wrote < 0 || (size_t)wrote >= sizeof(raw)) {
         errno = ENAMETOOLONG;
         return -1;
     }
 
-    if (normalize(raw, norm, sizeof(norm), comp, &n) != 0) {
+    if (normalize(raw, anchor, norm, sizeof(norm), comp, &n) != 0) {
         return -1;
     }
     if (n == 0) {
         out->kind = SH_TARGET_ROOT;
         snprintf(out->posix, sizeof(out->posix), "/");
         return 0;
+    }
+
+    /* Only an unknown first component can name a pseudo-file, so /ux0/etc is ux0. */
+    {
+        char full[SH_POSIX_PATH_MAX];
+        size_t p = 0;
+
+        for (i = 0; i < n; i++) {
+            size_t cl = strlen(comp[i]);
+
+            if (p + 1 + cl + 1 > sizeof(full)) {
+                errno = ENAMETOOLONG;
+                return -1;
+            }
+            full[p++] = '/';
+            memcpy(full + p, comp[i], cl);
+            p += cl;
+        }
+        full[p] = '\0';
+        out->pseudo = sh_pseudo_lookup(full);
+        if (out->pseudo != NULL) {
+            out->kind = SH_TARGET_PSEUDO;
+            snprintf(out->posix, sizeof(out->posix), "%s", full);
+            return 0;
+        }
     }
 
     dev = sh_device_by_posix(comp[0], strlen(comp[0]));
@@ -267,8 +408,8 @@ int sh_path_sce(const sh_fsctx_t *fs, const char *path, char *out, size_t outlen
     if (sh_path_resolve(fs, path, &t) != 0) {
         return -1;
     }
-    if (t.kind == SH_TARGET_ROOT) {
-        /* "/" is a view of the device table, not a directory anyone can open. */
+    if (t.kind == SH_TARGET_ROOT || t.kind == SH_TARGET_PSEUDO) {
+        /* Neither has a sceIo spelling; failing beats passing "" on to libc. */
         errno = ENOTSUP;
         return -1;
     }
