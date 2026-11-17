@@ -378,13 +378,7 @@ static void check_path_layer(void)
     CHECK(sh_path_sce(&fs, "/etc/os-release", sce, sizeof(sce)) == -1);
     CHECK(errno == ENOTSUP);
 
-    /* The bare first component is not the pseudo-file: the lookup is against a
-     * whole path, and "etc" alone is what sceIo would be asked for. It is absent,
-     * like the directory it names, and `cd /etc` fails with ENOENT for that
-     * reason. Nothing may be created there either -- see check_writable(). */
-    errno = 0;
-    CHECK(sh_path_resolve(&fs, "/etc", &t) == -1);
-    CHECK(errno == ENOENT);
+    /* The pseudo-file lookup is exact: the directory is not a file. */
     CHECK(sh_pseudo_lookup("/etc") == NULL);
     CHECK(sh_pseudo_lookup("/etc/os-release") != NULL);
     CHECK(sh_pseudo_lookup(NULL) == NULL);
@@ -498,13 +492,15 @@ static void check_path_layer(void)
     CHECK(t.pseudo == NULL);
     CHECK(strcmp(t.sce, "ux0:/etc/os-release") == 0);
 
-    /* A cwd of "/" is the synthetic device listing: not a directory, and with no
-     * device of its own to root a relative path in. The resolver refuses rather than
-     * picking a storage area nobody chose. */
+    /* A cwd of "/" has no device to root a relative path in: a name that is not
+     * a device or a pseudo-file is refused rather than landing on a storage area
+     * nobody chose, while "etc" is the /etc directory as in any shell. */
     fs.cwd = "/";
     errno = 0;
-    CHECK(sh_path_resolve(&fs, "etc", &t) == -1);
-    CHECK(t.pseudo == NULL);
+    CHECK(sh_path_resolve(&fs, "foo", &t) == -1);
+    CHECK(errno == ENOENT);
+    CHECK(sh_path_resolve(&fs, "etc", &t) == 0);
+    CHECK(t.kind == SH_TARGET_PSEUDO_DIR);
     fs.cwd = "/ux0";
 
     /* The device table and "/" still behave: the pseudo-files must not have joined
@@ -512,6 +508,30 @@ static void check_path_layer(void)
     CHECK(sh_path_resolve(&fs, "/", &t) == 0);
     CHECK(t.kind == SH_TARGET_ROOT);
     CHECK(t.pseudo == NULL);
+
+    /* /etc itself is a directory the shell can list and stat, never open. */
+    errno = 0;
+    CHECK(sh_path_resolve(&fs, "/etc", &t) == 0);
+    CHECK(t.kind == SH_TARGET_PSEUDO_DIR);
+    CHECK(t.dev == NULL);
+    CHECK(t.pseudo == NULL);
+    CHECK(t.sce[0] == '\0');
+    CHECK(strcmp(t.posix, "/etc") == 0);
+    CHECK(sh_path_resolve(&fs, "/etc/", &t) == 0);
+    CHECK(t.kind == SH_TARGET_PSEUDO_DIR);
+    CHECK(sh_path_resolve(&fs, "//etc/.", &t) == 0);
+    CHECK(t.kind == SH_TARGET_PSEUDO_DIR);
+    errno = 0;
+    CHECK(sh_path_resolve(&fs, "/etcx", &t) == -1);
+    CHECK(errno == ENOENT);
+    errno = 0;
+    CHECK(sh_path_sce(&fs, "/etc", sce, sizeof(sce)) == -1);
+    CHECK(errno == ENOTSUP);
+    CHECK(sh_pseudo_dir_exists("/etc") == 1);
+    CHECK(sh_pseudo_dir_exists("/") == 0);
+    CHECK(sh_pseudo_dir_exists("/ux0") == 0);
+    CHECK(sh_pseudo_dir_exists("/etc/os-release") == 0);
+    CHECK(sh_pseudo_dir_exists(NULL) == 0);
 
     /* ls /etc gets its names from the table, in order. */
     {
@@ -525,6 +545,22 @@ static void check_path_layer(void)
         CHECK(sh_pseudo_list("/", names, 8) == 0);
         CHECK(sh_pseudo_list("/ux0", names, 8) == 0);
     }
+}
+
+/* A pseudo-file fd must never equal -1, the value open() returns on failure. */
+static void check_pseudo_fd(void)
+{
+    int slot;
+
+    for (slot = 0; slot < 8; slot++) {
+        int fd = sh_pseudo_fd_encode(slot);
+
+        CHECK(fd < -1);
+        CHECK(sh_pseudo_fd_slot(fd) == slot);
+    }
+    CHECK(sh_pseudo_fd_slot(-1) == -1);
+    CHECK(sh_pseudo_fd_slot(0) == -1);
+    CHECK(sh_pseudo_fd_slot(3) == -1);
 }
 
 int main(void)
@@ -542,6 +578,7 @@ int main(void)
         check_buffer_bounds();
         check_two_calls_agree();
         check_path_layer();
+        check_pseudo_fd();
     }
     if (failures != 0) {
         printf("%d check(s) failed\n", failures);

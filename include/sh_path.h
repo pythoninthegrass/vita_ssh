@@ -56,12 +56,23 @@ const sh_pseudo_t *sh_pseudo_lookup(const char *posix);
 /* The names `ls /etc` lists, in table order (alphabetical); returns the count. */
 size_t sh_pseudo_list(const char *dir, const char *names[], size_t max);
 
+/* 1 when posix is exactly a directory that holds pseudo-files, e.g. "/etc". */
+int sh_pseudo_dir_exists(const char *posix);
+
+/* Pseudo-file fds are negative and never -1, which open() returns on failure; slot is 0-based. */
+int sh_pseudo_fd_encode(int slot);
+
+/* The slot a pseudo-file fd names, or -1 when fd is not one. */
+int sh_pseudo_fd_slot(int fd);
+
 typedef enum {
   SH_TARGET_ROOT = 0,  /* "/", the synthetic listing of the device table */
   SH_TARGET_DEVICE,    /* "/ux0" and "/ux0/" are the same thing */
   SH_TARGET_PATH,      /* "/ux0/vita/save/x.dat" */
   /* A pseudo-file: no sce spelling, so sh_path_sce() fails for it, which keeps it out of SFTP and libc. */
-  SH_TARGET_PSEUDO
+  SH_TARGET_PSEUDO,
+  /* A directory of pseudo-files such as /etc: listable and stat-able, with no sce spelling. */
+  SH_TARGET_PSEUDO_DIR
 } sh_target_kind_t;
 
 typedef struct {

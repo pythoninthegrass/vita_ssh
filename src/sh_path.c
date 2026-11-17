@@ -108,6 +108,34 @@ const sh_pseudo_t *sh_pseudo_lookup(const char *posix)
     return NULL;
 }
 
+int sh_pseudo_dir_exists(const char *posix)
+{
+    size_t i;
+
+    if (posix == NULL) {
+        return 0;
+    }
+    if (!pseudo_built) {
+        build_pseudo();
+    }
+    for (i = 0; i < N_PSEUDO; i++) {
+        if (pseudo_files[i].dir != NULL && strcmp(pseudo_files[i].dir, posix) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+int sh_pseudo_fd_encode(int slot)
+{
+    return -(slot + 2);
+}
+
+int sh_pseudo_fd_slot(int fd)
+{
+    return (fd <= -2) ? -fd - 2 : -1;
+}
+
 size_t sh_pseudo_list(const char *dir, const char *names[], size_t max)
 {
     size_t i, n = 0;
@@ -343,6 +371,11 @@ int sh_path_resolve(const sh_fsctx_t *fs, const char *path, sh_target_t *out)
             snprintf(out->posix, sizeof(out->posix), "%s", full);
             return 0;
         }
+        if (sh_pseudo_dir_exists(full)) {
+            out->kind = SH_TARGET_PSEUDO_DIR;
+            snprintf(out->posix, sizeof(out->posix), "%s", full);
+            return 0;
+        }
     }
 
     dev = sh_device_by_posix(comp[0], strlen(comp[0]));
@@ -407,8 +440,9 @@ int sh_path_sce(const sh_fsctx_t *fs, const char *path, char *out, size_t outlen
     if (sh_path_resolve(fs, path, &t) != 0) {
         return -1;
     }
-    if (t.kind == SH_TARGET_ROOT || t.kind == SH_TARGET_PSEUDO) {
-        /* Neither has a sceIo spelling; failing beats passing "" on to libc. */
+    if (t.kind == SH_TARGET_ROOT || t.kind == SH_TARGET_PSEUDO ||
+        t.kind == SH_TARGET_PSEUDO_DIR) {
+        /* None has a sceIo spelling; failing beats passing "" on to libc. */
         errno = ENOTSUP;
         return -1;
     }

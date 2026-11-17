@@ -92,7 +92,7 @@ static int resolve_arg(sh_session_t *s, const char *cmd, const char *arg,
 static int check_writable(sh_session_t *s, const char *cmd, const char *arg,
                           const sh_target_t *t)
 {
-    if (t->kind == SH_TARGET_PSEUDO) {
+    if (t->kind == SH_TARGET_PSEUDO || t->kind == SH_TARGET_PSEUDO_DIR) {
         /* Synthetic files report the firmware; a real file beside them would persist. */
         sh_eprintf(s, "%s: %s: Permission denied\n", cmd, arg ? arg : ".");
         return -1;
@@ -106,6 +106,11 @@ static int check_writable(sh_session_t *s, const char *cmd, const char *arg,
 
 static int stat_target(const sh_target_t *t, struct stat *st)
 {
+    if (t->kind == SH_TARGET_ROOT || t->kind == SH_TARGET_PSEUDO_DIR) {
+        memset(st, 0, sizeof(*st));
+        st->st_mode = (mode_t)(S_IFDIR | 0555);
+        return 0;
+    }
     if (t->kind == SH_TARGET_PSEUDO) {
         /* A synthetic regular file; no mtime, since the clock says nothing about it. */
         memset(st, 0, sizeof(*st));
@@ -134,7 +139,7 @@ static int pseudo_open(const sh_pseudo_t *file)
         if (pseudo_slots[i].file == NULL) {
             pseudo_slots[i].file = file;
             pseudo_slots[i].off = 0;
-            return -(i + 1); /* negative: never confusable with a libc fd */
+            return sh_pseudo_fd_encode(i);
         }
     }
     errno = EMFILE;
@@ -143,9 +148,9 @@ static int pseudo_open(const sh_pseudo_t *file)
 
 static int pseudo_close(int fd)
 {
-    int i = -fd - 1;
+    int i = sh_pseudo_fd_slot(fd);
 
-    if (fd >= 0 || i >= PSEUDO_SLOTS) {
+    if (i < 0 || i >= PSEUDO_SLOTS) {
         errno = EBADF;
         return -1;
     }
@@ -157,12 +162,13 @@ static ssize_t pseudo_read(int fd, void *buf, size_t len)
 {
     pseudo_slot_t *slot;
     size_t left, n;
+    int i = sh_pseudo_fd_slot(fd);
 
-    if (fd >= 0) {
+    if (i < 0 || i >= PSEUDO_SLOTS) {
         errno = EBADF;
         return -1;
     }
-    slot = &pseudo_slots[-fd - 1];
+    slot = &pseudo_slots[i];
     if (slot->file == NULL) {
         errno = EBADF;
         return -1;
@@ -183,12 +189,12 @@ static int sh_target_open(const sh_target_t *t)
 
 static ssize_t sh_target_read(int fd, void *buf, size_t len)
 {
-    return (fd < 0) ? pseudo_read(fd, buf, len) : read(fd, buf, len);
+    return (sh_pseudo_fd_slot(fd) >= 0) ? pseudo_read(fd, buf, len) : read(fd, buf, len);
 }
 
 static int sh_target_close(int fd)
 {
-    return (fd < 0) ? pseudo_close(fd) : close(fd);
+    return (sh_pseudo_fd_slot(fd) >= 0) ? pseudo_close(fd) : close(fd);
 }
 
 static void human_size(char *dst, size_t dstlen, long long bytes)
@@ -382,7 +388,8 @@ static int expand_glob(const sh_fsctx_t *fs, const char *word, char **out,
             return 0;
         }
         /* No directory stream behind either name, so `*` expands to nothing. */
-        if (parent.kind == SH_TARGET_ROOT || parent.kind == SH_TARGET_PSEUDO) {
+        if (parent.kind == SH_TARGET_ROOT || parent.kind == SH_TARGET_PSEUDO ||
+            parent.kind == SH_TARGET_PSEUDO_DIR) {
             return 0;
         }
         base = dirpart;
@@ -545,6 +552,10 @@ static int cmd_cd(sh_session_t *s, int argc, char **argv)
     if (t.kind == SH_TARGET_ROOT) {
         sh_session_set_cwd(s, "/");
         return 0;
+    }
+    if (t.kind == SH_TARGET_PSEUDO_DIR) {
+        sh_eprintf(s, "cd: %s: %s\n", argv[1], strerror(ENOTSUP));
+        return 1;
     }
     {
         struct stat st;
@@ -732,8 +743,8 @@ static int list_any(sh_session_t *s, const char *cmd, const sh_target_t *t,
     if (t->kind == SH_TARGET_ROOT) {
         return list_root(s);
     }
-    if (t->kind == SH_TARGET_PSEUDO) {
-        return list_pseudo_dir(s, t->pseudo->dir, long_format);
+    if (t->kind == SH_TARGET_PSEUDO_DIR) {
+        return list_pseudo_dir(s, t->posix, long_format);
     }
     if (t->dev == NULL) {
         sh_eprintf(s, "%s: %s: %s\n", cmd, t->posix, strerror(ENOENT));
@@ -804,6 +815,15 @@ static int cmd_ls(sh_session_t *s, int argc, char **argv)
             }
             continue;
         }
+        if (t.kind == SH_TARGET_ROOT || t.kind == SH_TARGET_PSEUDO_DIR) {
+            if (paths > 1) {
+                sh_printf(s, "%s:\n", targets[i]);
+            }
+            if (list_any(s, "ls", &t, long_format, show_hidden) != 0) {
+                status = 1;
+            }
+            continue;
+        }
         if (stat_target(&t, &st) != 0) {
             sh_eprintf(s, "ls: %s: %s\n", targets[i], strerror(errno));
             status = 1;
@@ -856,13 +876,13 @@ static int cmd_cat(sh_session_t *s, int argc, char **argv)
             status = 1;
             continue;
         }
-        if (t.kind == SH_TARGET_ROOT) {
+        if (t.kind == SH_TARGET_ROOT || t.kind == SH_TARGET_PSEUDO_DIR) {
             sh_eprintf(s, "cat: %s: Is a directory\n", argv[i]);
             status = 1;
             continue;
         }
         fd = sh_target_open(&t);
-        if (fd < 0) {
+        if (fd == -1) {
             sh_eprintf(s, "cat: %s: %s\n", argv[i], strerror(errno));
             status = 1;
             continue;
@@ -1393,6 +1413,7 @@ static void land_in_dir(sh_target_t *dst, const sh_target_t *src)
     struct stat st;
 
     if (dst->kind == SH_TARGET_ROOT || dst->kind == SH_TARGET_PSEUDO ||
+        dst->kind == SH_TARGET_PSEUDO_DIR ||
         stat(dst->sce, &st) != 0 || !S_ISDIR(st.st_mode)) {
         return;
     }
@@ -1617,8 +1638,9 @@ static int cmd_stat(sh_session_t *s, int argc, char **argv)
             status = 1;
             continue;
         }
-        mode = (t.kind == SH_TARGET_PSEUDO) ? st.st_mode
-                                            : synth_mode(&st, t.dev);
+        mode = (t.kind == SH_TARGET_PSEUDO || t.kind == SH_TARGET_PSEUDO_DIR)
+                   ? st.st_mode
+                   : synth_mode(&st, t.dev);
         format_time(when, sizeof(when), st.st_mtime, "%Y-%m-%d %H:%M:%S");
         sh_printf(s, "  File: %s\n", t.posix);
         sh_printf(s, "  Size: %-14lld  Type: %s\n", (long long)st.st_size,
@@ -2436,7 +2458,7 @@ int sh_execute_line(sh_session_t *s, const char *line)
             return 1;
         }
         if (t.kind == SH_TARGET_ROOT || t.kind == SH_TARGET_DEVICE ||
-            t.kind == SH_TARGET_PSEUDO) {
+            t.kind == SH_TARGET_PSEUDO || t.kind == SH_TARGET_PSEUDO_DIR) {
             /* A synthetic name has no file behind it, so nothing can be written. */
             sh_eprintf(s, "sh: %s: Permission denied\n", redir_path);
             free(redir_path);

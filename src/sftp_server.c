@@ -104,7 +104,7 @@ static int resolve(const char *path, sh_target_t *t)
     if (sh_path_resolve(active_fs, path, t) != 0) {
         return -1;
     }
-    if (t->kind == SH_TARGET_PSEUDO) {
+    if (t->kind == SH_TARGET_PSEUDO || t->kind == SH_TARGET_PSEUDO_DIR) {
         /* /etc is the shell's, so libssh's handlers see ENOENT, not the pseudo-file. */
         errno = ENOENT;
         return -1;
