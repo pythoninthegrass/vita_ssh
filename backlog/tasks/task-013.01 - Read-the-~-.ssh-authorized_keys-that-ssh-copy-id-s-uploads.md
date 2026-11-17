@@ -4,7 +4,7 @@ title: Read the ~/.ssh/authorized_keys that ssh-copy-id -s uploads
 status: To Do
 assignee: []
 created_date: '2026-11-17 03:15'
-updated_date: '2026-11-17 03:29'
+updated_date: '2026-11-17T21:07:00Z'
 labels: []
 dependencies:
   - TASK-014
@@ -38,4 +38,5 @@ Exec mode stays out of scope: it sends 'exec sh -c' with ';' '&&' '||' and '>>',
 - [ ] #4 chmod and chown answer OK only under .ssh/authorized_keys in the server's data dir; every other path still gets SSH_FX_OP_UNSUPPORTED, and the exception is written in AGENTS.md and README
 - [ ] #5 a data directory that cannot be written reports that instead of reporting success
 - [ ] #6 smoke.sh gains a copy-id check that fails when the key does not land, and task build produces both VPKs
+- [ ] #7 Plain `ssh-copy-id` without -s (exec mode) is stated to remain unsupported, in README and in the task notes: its `sh -c` line needs a shell command, `;`, `&&`, `||` and `>>` handling, and TASK-025 chaining alone does not supply `sh -c`. README points at `-s` as the route that works and no longer says chaining alone would fix it.
 <!-- AC:END -->

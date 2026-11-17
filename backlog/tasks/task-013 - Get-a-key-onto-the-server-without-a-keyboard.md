@@ -4,7 +4,7 @@ title: Get a key onto the server without a keyboard
 status: To Do
 assignee: []
 created_date: '2026-11-17 03:15'
-updated_date: '2026-11-17 03:15'
+updated_date: '2026-11-17T21:07:00Z'
 labels: []
 dependencies: []
 documentation:
@@ -46,3 +46,15 @@ Breakdown agreed with the user on 2026-11-16, all three approved for creation an
 
 Sequencing: do 013.01 first because it settles which file is read and written; 013.02 then writes to the answer 013.01 picks. 013.03 is independent. Each child needs a device pass: copy-id, ssh -i login, and the console's file-and-count line are the evidence. No owner assigned yet.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+2026-11-17: status check, nothing here is done. What already works, and is the groundwork the description names: public-key login against ux0:data/vitasshd/authorized_keys. Seen on the work Vita from OpenSSH 10.6 with `ssh -v`: `Authentications that can continue: publickey`, `Server accepts key: ... id_rsa`, `Authenticated ... using "publickey"`, then the shell and `ls -la` showing authorized_keys (1.5K, dated Nov 15, so placed by hand, not by any route in this task), ssh_host_ed25519_key, ssh_host_ed25519_key.pub, sshd.log and sshd.log.old. The loader is rule 3 in src/sshd_hostkey.c and re-reads the file per connection.
+
+Checked in the source at 3e461a8 and still missing: no `.ssh/authorized_keys` candidate in sshd_hostkey.c and no chmod/chown exception in the SFTP layer (013.01); no `authkey` row in builtins[] (013.02); no `keygen` (013.03). README line 201 still says ssh-copy-id will not work. No commit adds an install route; the related ones are ce00019 (searched, writable storage) and the backlog and README commits d6df4cb and 7d57331.
+
+Note on sequencing: 013.01 depends on TASK-014, and the compound `sh -c` line ssh-copy-id sends in exec mode also needs TASK-025 chaining, which README line 201 mentions.
+
+2026-11-17 correction to the sequencing note above: it said ssh-copy-id's exec-mode line "also needs TASK-025 chaining". That understates it. Per TASK-025's own description, chaining alone does not make plain ssh-copy-id work: the line is `sh -c '...'`, so the shell would also need an `sh` command, plus `>>` handling. Exec mode stays out of scope for 013.01 (its description already says so); only `ssh-copy-id -s` is covered, and 013.01 now has an AC (#7) making README state that.
+<!-- SECTION:NOTES:END -->
