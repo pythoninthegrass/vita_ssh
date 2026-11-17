@@ -70,19 +70,20 @@ is the same on both: connect, send a line ending in `\n`, read until EOF.
 
 Requires **Settings → Network → Wi-Fi Turbo → Developer mode** to be on; with it off
 there is no listener at all, and nothing sendable over the socket turns it back on.
-`help`, `status`, `selftest`, `log dump`, `profile`, `confirm`, `keepwifi`,
+`help`, `status`, `selftest`, `log dump`, `profile`, `confirm`, `speedtest`, `keepwifi`,
 `autoreconnect`, `mac status` and `roam status` were each run on a device; `ht40` is
 reportedly applied on this device (its patch appears in the kernel log) but was not
-exercised through the socket during that pass. The rest are transcribed from the
-plugin's own `help` output and `user/dispatch.c` and were not executed, because several
-reassociate the radio or move the MAC. Installation, the Developer-mode caveat about
-that `INADDR_ANY` bind, and what the power profiles measured are in
+exercised through the socket during that pass, and `udpsink` has never been run. The
+rest are transcribed from the plugin's own `help` output and `user/dispatch.c` and were
+not executed, because several reassociate the radio or move the MAC. Installation, the
+Developer-mode caveat about that `INADDR_ANY` bind, and what the power profiles measured
+— including that the profile changes throughput nothing — are in
 [turbo-wifi.md](turbo-wifi.md).
 
 | Command | Effect | Risk to your session |
 | --- | --- | --- |
 | `help` | the plugin's own command list | none |
-| `status` | ssid, netctl state, rssi dBm and %, snr, noise floor, channel | none |
+| `status` | ssid, netctl state, rssi dBm and %, snr, noise floor, channel; while a change is pending it appends `[REVERT <label> in <n>s-confirm]` | none |
 | `selftest` | subsystem self-check | none |
 | `log [dump]`, `log level <err\|warn\|info\|debug\|trace>`, `log clear` | read and set the plugin log | none |
 | `profile maxperf\|balanced\|maxbatt` | power-save profile | **reassociates** — needs `confirm` within 45 s |
@@ -96,7 +97,8 @@ that `INADDR_ANY` bind, and what the power profiles measured are in
 | `roam on\|off`, `roam level 65\|70\|75\|80`, `roam now`, `roam precheck on\|off`, `roam status` | Smart Mesh Roaming | `roam now` may roam |
 | `mac status\|stock\|custom\|random\|set <addr>\|pernet on` | MAC address policy | **changes your MAC** |
 | `adv scan` | scan available advanced verbs | none |
-| `speedtest <ip> <port> [secs] [rcvbuf_kb]`, `udpsink <port> [secs]` | throughput probes | saturates the radio while running |
+| `speedtest <ip> <port> [secs] [rcvbuf_kb]` | TCP downlink into RAM from a sink on your computer; answers `speedtest: 25 MiB in 10s = 21.0 Mbps down` | saturates the radio, and the :1339 thread is busy for `secs` |
+| `udpsink <port> [secs]` | counts a paced UDP stream: link capacity and loss | never run on a device here |
 | `netdown` | command netctl to disconnect | **drops the link** — kills your ssh session |
 | `icm` | the shell's saved-network auto-connect | none |
 | `icmtest` | exercise the reconnect path | **drops the link for up to ~65 s** |
