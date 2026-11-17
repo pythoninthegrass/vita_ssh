@@ -130,6 +130,8 @@ const sh_builtin_t *sh_builtin_lookup(const char *name);
  * messages, and return a shell exit status. list never writes. */
 int sh_vpk_list(sh_session_t *s, const char *sce, const char *name);
 int sh_vpk_install(sh_session_t *s, const char *sce, const char *name);
+int sh_vpk_pending(void);
+void sh_vpk_handoff(void);
 
 /* --- host key and authentication (sshd_hostkey.c) --- */
 

@@ -23,6 +23,9 @@ set(VITA_VERSION  "01.00")
 set(VITA_SERVER_NAME      "ssh_server_vita")
 set(VITA_SERVER_APP_NAME  "VitaSSHd")
 set(VITA_SERVER_TITLEID   "ROM000070")
+set(VITA_UPDATER_NAME "ssh_updater_vita")
+# ROM000071 was used for a temporary hardware test; keep this title distinct.
+set(VITA_UPDATER_TITLEID "ROM000072")
 
 # --- Flags ---
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -std=gnu11 -Wall -O2")
@@ -125,11 +128,26 @@ file(WRITE ${VPK_HEAD_TEMPLATE_SRC}
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
   ${CMAKE_CURRENT_SOURCE_DIR}/third_party/vitashell/head.bin)
 
+add_executable(${VITA_UPDATER_NAME} src/sshd_updater.c src/vpk_promote.c)
+target_compile_definitions(${VITA_UPDATER_NAME} PRIVATE
+  SSHD_TITLEID="${VITA_SERVER_TITLEID}" SSHD_UPDATER_TITLEID="${VITA_UPDATER_TITLEID}")
+target_link_libraries(${VITA_UPDATER_NAME}
+  SceAppMgr_stub SceSysmodule_stub ScePromoterUtil_stub SceLibKernel_stub)
+vita_reset_flags()
+vita_create_self(${VITA_UPDATER_NAME}.self ${VITA_UPDATER_NAME} UNSAFE)
+vita_reset_flags()
+vita_create_vpk(${VITA_UPDATER_NAME}.vpk ${VITA_UPDATER_TITLEID} ${VITA_UPDATER_NAME}.self
+  VERSION ${VITA_VERSION}
+  NAME "VitaSSHd Updater"
+)
+add_dependencies(${VITA_UPDATER_NAME}.vpk-vpk ${VITA_UPDATER_NAME}.self-self)
+
 add_executable(${VITA_SERVER_NAME}
   src/sshd.c
   src/sshd_session.c
   src/sshd_builtins.c
   src/sshd_vpk.c
+  src/vpk_promote.c
   src/vpk_zip.c
   src/vpk_head.c
   ${VPK_HEAD_TEMPLATE_SRC}
@@ -143,7 +161,8 @@ add_executable(${VITA_SERVER_NAME}
 # libssh compiles its server and SFTP declarations out of the public headers unless
 # WITH_SERVER is defined, and it defines that only in its own private config.h. A
 # consumer that does not define it too gets no ssh_bind_* and no sftp_server_*.
-target_compile_definitions(${VITA_SERVER_NAME} PRIVATE WITH_SERVER SSHD_TITLEID="${VITA_SERVER_TITLEID}")
+target_compile_definitions(${VITA_SERVER_NAME} PRIVATE WITH_SERVER
+  SSHD_TITLEID="${VITA_SERVER_TITLEID}" SSHD_UPDATER_TITLEID="${VITA_UPDATER_TITLEID}")
 
 # libssh's stock SFTP handlers call these libc functions with the client's POSIX path.
 # --wrap routes every reference, inside libssh.a too, to __wrap_<name> in
@@ -201,7 +220,7 @@ target_link_libraries(${VITA_SERVER_NAME}
 )
 
 vita_reset_flags()
-# UNSAFE: a safe-mode app cannot see ux0:app or ux0:patch, which `vpk install` writes to.
+# UNSAFE: system promotion and the updater handoff need elevated app permissions.
 vita_create_self(${VITA_SERVER_NAME}.self ${VITA_SERVER_NAME} UNSAFE)
 
 # Its own tile: the client's blue padlock and the server's teal prompt are distinct apps on
@@ -211,6 +230,7 @@ vita_reset_flags()
 vita_create_vpk(${VITA_SERVER_NAME}.vpk ${VITA_SERVER_TITLEID} ${VITA_SERVER_NAME}.self
   VERSION ${VITA_VERSION}
   NAME ${VITA_SERVER_APP_NAME}
+  FILE ${CMAKE_CURRENT_BINARY_DIR}/${VITA_UPDATER_NAME}.vpk updater.vpk
   FILE ./sce_sys_sshd/icon0.png sce_sys/icon0.png
   FILE ./sce_sys_sshd/livearea/contents/template.xml sce_sys/livearea/contents/template.xml
   FILE ./sce_sys_sshd/livearea/contents/bg0.png sce_sys/livearea/contents/bg0.png
@@ -218,3 +238,4 @@ vita_create_vpk(${VITA_SERVER_NAME}.vpk ${VITA_SERVER_TITLEID} ${VITA_SERVER_NAM
 
 # Same edge as the client, for the same reason.
 add_dependencies(${VITA_SERVER_NAME}.vpk-vpk ${VITA_SERVER_NAME}.self-self)
+add_dependencies(${VITA_SERVER_NAME}.vpk-vpk ${VITA_UPDATER_NAME}.vpk-vpk)

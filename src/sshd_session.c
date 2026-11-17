@@ -1532,14 +1532,27 @@ int sh_session_pump(sh_session_t *s)
             s->in_pump = 1;
             status = sh_execute_line(s, line);
 
-            if (!s->shell) {
+            if (!s->shell || sh_vpk_pending()) {
                 /* exec mode: the client asked for one command, so report its
                  * status and hang up the way sshd would. The session is freed
                  * as soon as this returns, so what libssh still holds has to
                  * reach the socket first or the tail of the output is lost. */
                 ssh_channel_request_send_exit_status(s->channel, status);
                 ssh_channel_send_eof(s->channel);
+                if (sh_vpk_pending()) {
+                    time_t start = time(NULL);
+
+                    ssh_channel_close(s->channel);
+                    wait_for_room(s, 0);
+                    /* Let OpenSSH acknowledge close before the app (and transport) exits. */
+                    while (!ssh_channel_is_closed(s->channel) &&
+                           (ssh_get_status(s->ssh) & (SSH_CLOSED | SSH_CLOSED_ERROR)) == 0 &&
+                           time(NULL) - start < SFTP_CLOSE_WAIT_S) {
+                        sh_server_poll_slice(WINDOW_POLL_MS);
+                    }
+                }
                 wait_for_room(s, 0);
+                sh_vpk_handoff();
                 s->in_pump = 0;
                 ssh_set_blocking(s->ssh, 1);
                 s->finished = 1;

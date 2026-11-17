@@ -270,7 +270,28 @@ what is actually there. Quoting (`'…'`, `"…"`, `\`) works, `*` and `?` expan
 unless quoted, and the line editor keeps 12 lines of history per session. `help` and
 `help COMMAND` are the reference on the device.
 
-`vpk list FILE` prints a package's title ID and the files it carries, and writes nothing. `vpk install FILE` installs a build of this app through the Vita's own package installer: it unpacks and checksums the package into `ux0:data/pkg`, refuses any title ID but its own, then hands the directory to the system, and finishes by telling you to quit and relaunch. A failure before the hand-off leaves the installed app untouched; a failure inside the system installer cannot be undone from the app, and the way back is reinstalling the VPK from VitaShell. The server is built as an unsafe app for this, which is also why it can bind port 22.
+`vpk list FILE` prints a package's title ID and files without writing anything.
+`vpk install FILE` accepts only the server's own title (`ROM000070`), unpacks and
+CRC-checks it under `ux0:data/vitasshd-update/server`, and generates its package header.
+The system installer cannot replace a running title, so the server installs its bundled
+**VitaSSHd Updater** (`ROM000072`), closes the SSH command, launches the updater and exits.
+The updater promotes the staged server and relaunches it, including after an installer
+failure. Reconnect after the server returns; SSH success means **staged for handoff**,
+not that installation has finished. Read `/ux0/data/vitasshd-update/result.txt` for the
+installer result (`0x00000000` means success).
+This file records the last helper run; failures before handoff are reported on SSH
+and do not replace that previous result.
+
+This requires a one-time VitaShell install of an updater-capable server build.
+The updater VPK is bundled inside the server VPK; it needs no separate manual install.
+Staging never uses VitaShell's `ux0:data/pkg` or the credentials in `ux0:data/vitasshd`.
+A staging failure leaves the installed server unchanged. Promotion is a system operation:
+there is no app-managed rollback, and hardware tests show that files omitted from the
+new package are removed from the app directory. Keep persistent files in the data
+directory and retain a VPK for VitaShell recovery.
+After the updater has exited, `/ux0/data/vitasshd-update` can be removed to reclaim staging
+space; subsequent installs also replace the previous stage. Do not delete it during a handoff.
+The server and updater are built UNSAFE for system installation and app launch.
 
 One command per line. There are **no pipes and no `;`, `&&` or `||` chaining**; those characters are ordinary text to the tokenizer. Redirection exists in one form: `>` or `>>` as a separate, unquoted word followed by a file name (`echo hi > /ux0/data/x.txt`), and it redirects stdout only. `echo hi>x` is just text.
 
@@ -474,7 +495,7 @@ What it stands on:
   client's shape is where that started; the code has since diverged past recognition, and
   upstream is unmaintained.
 - Packaging and installation follow the conventions of
-  [VitaShell](https://github.com/TheOfficialFloW/VitaShell) by TheOfficialFloW. The server's `vpk install` command installs a package the way VitaShell's installer does (unpack to `ux0:data/pkg`, write `sce_sys/package/head.bin`, call `scePromoterUtilityPromotePkgWithRif`), following VitaShell's `package_installer.c`. One file from VitaShell is vendored: `third_party/vitashell/head.bin`, the package-header template, under VitaShell's GPL-3.0 with its licence text beside it. The code that fills it in, `src/vpk_head.c`, is this repo's own.
+  [VitaShell](https://github.com/TheOfficialFloW/VitaShell) by TheOfficialFloW. The server's `vpk install` command follows VitaShell's installer (unpack, write `sce_sys/package/head.bin`, call `scePromoterUtilityPromotePkgWithRif`) and separate-updater handoff pattern. It uses its own staging directory. One file from VitaShell is vendored: `third_party/vitashell/head.bin`, the package-header template, under VitaShell's GPL-3.0 with its licence text beside it. The code that fills it in, `src/vpk_head.c`, is this repo's own.
 - The OpenSSL Vita port that `task setup` compiles is
   [SonicMastr/vita-openssl3](https://github.com/SonicMastr/vita-openssl3).
 - The libraries doing the real work — libssh2, libssh, vita2d, VitaSDK — are listed with

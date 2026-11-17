@@ -4,17 +4,18 @@
  *
  * ux0:app/<TITLEID> is read-only to the app even when built UNSAFE, and a copy dropped into
  * ux0:patch/<TITLEID> is ignored at launch (both verified on a device), so the files cannot
- * be laid down by hand. Instead the package is unpacked and CRC-checked into ux0:data/pkg,
+ * be laid down by hand. Instead the package is unpacked and CRC-checked into its private stage,
  * given a generated sce_sys/package/head.bin, and handed to scePromoterUtilityPromotePkgWithRif,
  * which registers and installs it. Any failure before that call leaves the installed app
  * untouched; the installer's own failure cannot be rolled back from here.
  *
  * Only this app's own title ID is accepted (SSHD_TITLEID, passed in from CMakeLists.txt).
- * The app cannot restart itself, so the command ends by saying to relaunch.
+ * A bundled second title promotes the server after it exits, then relaunches it.
  */
 #include "sshd.h"
 #include "vpk_head.h"
 #include "vpk_zip.h"
+#include "vpk_update.h"
 
 #include <dirent.h>
 #include <errno.h>
@@ -26,8 +27,8 @@
 #include <unistd.h>
 
 #include <psp2/io/devctl.h>
-#include <psp2/promoterutil.h>
-#include <psp2/sysmodule.h>
+#include <psp2/appmgr.h>
+#include <psp2/kernel/processmgr.h>
 
 #ifndef SSHD_TITLEID
 #error "SSHD_TITLEID must be defined by CMakeLists.txt"
@@ -35,9 +36,8 @@
 
 #define DEVCTL_GET_DEV_INFO 0x3001
 
-/* The directory the promoter installs from; the same one VitaShell uses. */
-#define PKG_DIR "ux0:data/pkg"
 #define HEAD_BIN_REL "sce_sys/package/head.bin"
+static int update_pending;
 
 #define SFO_MAX 65536
 #define EBOOT_MIN_SIZE 4096
@@ -347,14 +347,14 @@ static int file_write(void *ctx, const unsigned char *data, size_t len)
 /* stage and promote                                                    */
 /* ------------------------------------------------------------------ */
 
-static int stage_entry(sh_session_t *s, package_t *p, const vpk_entry_t *e)
+static int stage_entry(sh_session_t *s, package_t *p, const vpk_entry_t *e, const char *base)
 {
     char path[PATH_MAX_ENTRY];
     file_sink_t f;
     vpk_err_t err;
     int saved;
 
-    if (make_parents(PKG_DIR, e->name) != 0 || join_path(path, sizeof(path), PKG_DIR, e->name) != 0) {
+    if (make_parents(base, e->name) != 0 || join_path(path, sizeof(path), base, e->name) != 0) {
         sh_eprintf(s, "vpk: %s: %s\n", e->name, strerror(errno));
         return -1;
     }
@@ -386,22 +386,22 @@ static int stage_entry(sh_session_t *s, package_t *p, const vpk_entry_t *e)
     return 0;
 }
 
-static int stage_package(sh_session_t *s, package_t *p)
+static int stage_package(sh_session_t *s, package_t *p, const char *base)
 {
     size_t i;
 
-    if (remove_tree(PKG_DIR, 0) != 0) {
-        sh_eprintf(s, "vpk: %s: %s\n", PKG_DIR, strerror(errno));
+    if (remove_tree(base, 0) != 0) {
+        sh_eprintf(s, "vpk: %s: %s\n", base, strerror(errno));
         return -1;
     }
-    if (mkdir(PKG_DIR, 0755) != 0) {
-        sh_eprintf(s, "vpk: %s: %s\n", PKG_DIR, strerror(errno));
+    if (mkdir(base, 0755) != 0) {
+        sh_eprintf(s, "vpk: %s: %s\n", base, strerror(errno));
         return -1;
     }
     for (i = 0; i < vpk_zip_count(p->zip); i++) {
         const vpk_entry_t *e = vpk_zip_entry(p->zip, i);
 
-        if (!e->is_dir && stage_entry(s, p, e) != 0) {
+        if (!e->is_dir && stage_entry(s, p, e, base) != 0) {
             return -1;
         }
     }
@@ -411,7 +411,7 @@ static int stage_package(sh_session_t *s, package_t *p)
 extern const unsigned char vpk_head_template[];
 extern const unsigned long vpk_head_template_len;
 
-static int write_head_bin(sh_session_t *s, const package_t *p)
+static int write_head_bin(sh_session_t *s, const package_t *p, const char *base)
 {
     unsigned char *head = malloc(vpk_head_template_len);
     char path[PATH_MAX_ENTRY];
@@ -425,7 +425,7 @@ static int write_head_bin(sh_session_t *s, const package_t *p)
         sh_eprintf(s, "vpk: head.bin template is malformed\n");
         goto out;
     }
-    if (make_parents(PKG_DIR, HEAD_BIN_REL) != 0 || join_path(path, sizeof(path), PKG_DIR, HEAD_BIN_REL) != 0) {
+    if (make_parents(base, HEAD_BIN_REL) != 0 || join_path(path, sizeof(path), base, HEAD_BIN_REL) != 0) {
         sh_eprintf(s, "vpk: %s: %s\n", HEAD_BIN_REL, strerror(errno));
         goto out;
     }
@@ -437,68 +437,46 @@ static int write_head_bin(sh_session_t *s, const package_t *p)
         }
         goto out;
     }
-    close(fd);
+    if (close(fd) != 0) {
+        sh_eprintf(s, "vpk: %s: %s\n", path, strerror(errno));
+        goto out;
+    }
     rc = 0;
 out:
     free(head);
     return rc;
 }
 
-/* The promoter depends on the PAF module, which VitaShell loads with these arguments. */
-static int paf_load(void)
-{
-    static uint32_t argp[] = {0x180000, (uint32_t)-1, (uint32_t)-1, 1, (uint32_t)-1, (uint32_t)-1};
-    int result = -1;
-    SceSysmoduleOpt opt;
-
-    memset(&opt, 0, sizeof(opt));
-    opt.flags = sizeof(opt);
-    opt.result = &result;
-    opt.unused[0] = -1;
-    opt.unused[1] = -1;
-    return sceSysmoduleLoadModuleInternalWithArg(SCE_SYSMODULE_INTERNAL_PAF, sizeof(argp), argp, &opt);
-}
-
-static int paf_unload(void)
-{
-    SceSysmoduleOpt opt;
-
-    memset(&opt, 0, sizeof(opt));
-    return sceSysmoduleUnloadModuleInternalWithArg(SCE_SYSMODULE_INTERNAL_PAF, 0, NULL, &opt);
-}
-
-/* Returns 0, or the first negative SCE error with *stage naming the call that gave it. */
-static int promote(const char **stage)
+/* Called only after the command's output, status and EOF have been drained. */
+void sh_vpk_handoff(void)
 {
     int res;
 
-    *stage = "load PAF module";
-    res = paf_load();
+    if (!update_pending) {
+        return;
+    }
+    update_pending = 0;
+    res = sceAppMgrLaunchAppByUri(0xFFFFF, "psgm:play?titleid=" SSHD_UPDATER_TITLEID);
     if (res < 0) {
-        return res;
+        sh_console_log("vpk: launch updater failed: 0x%08X", (unsigned)res);
+        unlink(VPK_UPDATE_READY);
+        return;
     }
-    *stage = "load promoter module";
-    res = sceSysmoduleLoadModuleInternal(SCE_SYSMODULE_INTERNAL_PROMOTER_UTIL);
-    if (res >= 0) {
-        *stage = "promoter init";
-        res = scePromoterUtilityInit();
-        if (res >= 0) {
-            *stage = "promote package";
-            res = scePromoterUtilityPromotePkgWithRif(PKG_DIR, 1);
-            scePromoterUtilityExit();
-        }
-        sceSysmoduleUnloadModuleInternal(SCE_SYSMODULE_INTERNAL_PROMOTER_UTIL);
-    }
-    paf_unload();
-    return res;
+    sceKernelExitProcess(0);
+}
+
+int sh_vpk_pending(void)
+{
+    return update_pending;
 }
 
 int sh_vpk_install(sh_session_t *s, const char *sce, const char *name)
 {
-    package_t p;
+    package_t p, helper;
     long long avail;
     const char *stage = "";
     int res, rc = 1;
+    FILE *ready;
 
     if (package_open(s, sce, name, &p) != 0) {
         return 1;
@@ -506,27 +484,67 @@ int sh_vpk_install(sh_session_t *s, const char *sce, const char *name)
     if (package_check(s, name, &p) != 0) {
         goto out;
     }
-    avail = free_space("ux0:");
-    if (avail >= 0 && avail < p.total) {
-        sh_eprintf(s, "vpk: not enough space on ux0: need %lld bytes, %lld free\n", p.total, avail);
+    /* Use the currently running app's trusted helper, not a file from the uploaded package. */
+    if (package_open(s, "app0:updater.vpk", "bundled updater", &helper) != 0) {
         goto out;
     }
+    if (strcmp(helper.title_id, SSHD_UPDATER_TITLEID) != 0 ||
+        helper.eboot == NULL || helper.eboot->usize < EBOOT_MIN_SIZE) {
+        sh_eprintf(s, "vpk: invalid bundled updater\n");
+        package_close(&helper);
+        goto out;
+    }
+    avail = free_space("ux0:");
+    /* Stage plus an installed copy, with slack for metadata. */
+    if (avail >= 0 && avail < 2 * (p.total + helper.total) + 1024 * 1024) {
+        sh_eprintf(s, "vpk: not enough space on ux0 for staging and installation\n");
+        goto helper_out;
+    }
+    if (mkdir(VPK_UPDATE_ROOT, 0755) != 0 && errno != EEXIST) {
+        sh_eprintf(s, "vpk: %s: %s\n", VPK_UPDATE_ROOT, strerror(errno));
+        goto helper_out;
+    }
+    unlink(VPK_UPDATE_READY);
     sh_printf(s, "Unpacking %u files (%lld bytes)...\n", (unsigned)p.files, p.total);
-    if (stage_package(s, &p) != 0 || write_head_bin(s, &p) != 0) {
+    if (stage_package(s, &p, VPK_UPDATE_PKG) != 0 ||
+        write_head_bin(s, &p, VPK_UPDATE_PKG) != 0 ||
+        stage_package(s, &helper, VPK_UPDATE_HELPER) != 0 ||
+        write_head_bin(s, &helper, VPK_UPDATE_HELPER) != 0) {
         sh_eprintf(s, "vpk: install aborted, installed app unchanged\n");
         goto cleanup;
     }
-    sh_printf(s, "Handing the package to the system installer...\n");
-    res = promote(&stage);
+    sh_printf(s, "Installing the updater...\n");
+    res = vpk_promote(VPK_UPDATE_HELPER, &stage);
     if (res < 0) {
         sh_eprintf(s, "vpk: the system installer failed at \"%s\": 0x%08X\n", stage, (unsigned)res);
         goto cleanup;
     }
-    sh_printf(s, "Installed. Quit this app and relaunch it to run the new build.\n");
+    ready = fopen(VPK_UPDATE_READY, "wb");
+    if (ready == NULL) {
+        sh_eprintf(s, "vpk: cannot write updater handoff: %s\n", strerror(errno));
+        goto cleanup;
+    }
+    res = fwrite(SSHD_TITLEID, 1, strlen(SSHD_TITLEID), ready) == strlen(SSHD_TITLEID);
+    if (fclose(ready) != 0) {
+        res = 0;
+    }
+    if (!res) {
+        sh_eprintf(s, "vpk: cannot finish updater handoff\n");
+        unlink(VPK_UPDATE_READY);
+        goto cleanup;
+    }
+    sh_printf(s, "Staged. Switching to updater; SSH will disconnect. Reconnect after the server relaunches.\n"
+                 "Result: /ux0/data/vitasshd-update/result.txt\n");
+    update_pending = 1;
     rc = 0;
 
 cleanup:
-    remove_tree(PKG_DIR, 0);
+    if (!update_pending) {
+        remove_tree(VPK_UPDATE_PKG, 0);
+    }
+    remove_tree(VPK_UPDATE_HELPER, 0);
+helper_out:
+    package_close(&helper);
 out:
     package_close(&p);
     return rc;
