@@ -4,11 +4,14 @@ title: Dim the screen while the server runs
 status: To Do
 assignee: []
 created_date: '2026-11-16T04:00:00Z'
+updated_date: '2026-11-17 05:11'
 labels:
   - power
   - display
   - server
 dependencies: []
+references:
+  - docs/vcmd.md
 documentation:
   - AGENTS.md
 modified_files:
@@ -37,3 +40,9 @@ Feasibility note from this session's SDK inspection, for whoever picks this up: 
 - [ ] #4 With no session connected, a low battery still lets the device sleep (the existing low-battery policy still holds).
 - [ ] #5 The server's power behavior (stays awake, dimmed screen, low-battery sleep) is documented where the keep-awake tick is documented.
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+2026-11-17, SDK re-inspection while filing TASK-023: psp2/power.h does export scePowerRequestDisplayOff() and scePowerRequestDisplayOn(), but those blank the panel outright -- they are not a brightness control and do not satisfy this task. The blocker stated in the description still stands: no brightness setter in the public ScePower stub. Related, adjacent work: TASK-023.03 ships 'screen off|on'.
+<!-- SECTION:NOTES:END -->
