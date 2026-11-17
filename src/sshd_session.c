@@ -102,6 +102,7 @@ struct sh_session {
     int authenticated;
     int exit_requested;
     int finished;
+    const char *end_reason; /* why the session ended, first cause wins; NULL until it does */
     int in_pump; /* set while sh_session_pump() runs a command: only then may a write wait on the poll loop */
     time_t sftp_closing; /* when the sftp channel close was started, 0 before */
 
@@ -132,6 +133,14 @@ static int output_has_room(const sh_session_t *s, int need_window)
            (ssh_get_status(s->ssh) & SSH_WRITE_PENDING) == 0;
 }
 
+/* Records why a session ended; the first cause wins because later ones are fallout of it. */
+static void note_end(sh_session_t *s, const char *why)
+{
+    if (s != NULL && s->end_reason == NULL) {
+        s->end_reason = why;
+    }
+}
+
 /* Polls every session until output_has_room(); -1 if the client is gone or stalled for WINDOW_STALL_S, with the session marked finished. */
 static int wait_for_room(sh_session_t *s, int need_window)
 {
@@ -140,6 +149,7 @@ static int wait_for_room(sh_session_t *s, int need_window)
     while (!output_has_room(s, need_window)) {
         if (s->finished ||
             (ssh_get_status(s->ssh) & (SSH_CLOSED | SSH_CLOSED_ERROR)) != 0) {
+            note_end(s, "transport closed while output waited for room");
             s->finished = 1;
             return -1;
         }
@@ -371,6 +381,7 @@ void sh_session_set_cwd(sh_session_t *s, const char *posix)
 void sh_session_request_exit(sh_session_t *s)
 {
     if (s != NULL) {
+        note_end(s, "exit command");
         s->exit_requested = 1;
     }
 }
@@ -378,6 +389,11 @@ void sh_session_request_exit(sh_session_t *s)
 const char *sh_session_user(const sh_session_t *s)
 {
     return (s == NULL || s->user[0] == '\0') ? "vita" : s->user;
+}
+
+const char *sh_session_end_reason(const sh_session_t *s)
+{
+    return s != NULL && s->end_reason != NULL ? s->end_reason : "no reason recorded";
 }
 
 const char *sh_session_peer(const sh_session_t *s)
@@ -1050,6 +1066,7 @@ static void feed_byte(sh_session_t *s, unsigned char c)
         return;
     case KEY_CTRL_D:
         if (s->linelen == 0) {
+            note_end(s, "ctrl-d on an empty line");
             s->exit_requested = 1; /* EOF on an empty line, as every shell does */
         }
         return;
@@ -1114,6 +1131,7 @@ static int on_channel_data(ssh_session session, ssh_channel channel,
             sh_console_log("sftp: closing the channel after a data error");
             ssh_channel_send_eof(channel);
             ssh_channel_close(channel);
+            note_end(s, "sftp data error");
             s->finished = 1;
         }
         return (int)len;
@@ -1251,6 +1269,7 @@ static void on_channel_close(ssh_session session, ssh_channel channel,
         if (s->sftp != NULL && !s->finished) {
             sh_console_log("sftp: client closed the channel");
         }
+        note_end(s, "client closed the channel");
         s->finished = 1;
     }
 }
@@ -1268,6 +1287,7 @@ static void on_channel_eof(ssh_session session, ssh_channel channel,
         if (s->sftp != NULL && !s->finished) {
             sh_console_log("sftp: client sent EOF");
         }
+        note_end(s, "client sent EOF");
         s->finished = 1;
     }
 }
@@ -1489,6 +1509,7 @@ int sh_session_pump(sh_session_t *s)
                 ssh_channel_send_eof(s->channel);
                 ssh_channel_close(s->channel);
             }
+            note_end(s, "sftp pump error");
             s->finished = 1;
         }
     }
@@ -1555,6 +1576,7 @@ int sh_session_pump(sh_session_t *s)
                 sh_vpk_handoff();
                 s->in_pump = 0;
                 ssh_set_blocking(s->ssh, 1);
+                note_end(s, "exec command done");
                 s->finished = 1;
                 return 1;
             }

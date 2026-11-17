@@ -101,6 +101,8 @@ void sh_session_set_cwd(sh_session_t *s, const char *posix);
 void sh_session_request_exit(sh_session_t *s);
 const char *sh_session_user(const sh_session_t *s);
 const char *sh_session_peer(const sh_session_t *s);
+/* Why the session ended, for the log line; "no reason recorded" if nothing set one. */
+const char *sh_session_end_reason(const sh_session_t *s);
 int sh_session_cols(const sh_session_t *s);
 
 /* Copies up to max history entries into entries, oldest first, and returns how

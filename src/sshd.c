@@ -69,6 +69,8 @@ int scePowerSetIdleTimerCount(int count);
  * either way, so this only decides how many syscalls the loop makes. */
 #define POWER_TICK_US (1000 * 1000)
 #define SERVER_STACK (512 * 1024)
+/* The poll loop wakes every 50 ms; a gap this long means the process was not running (suspend) or was starved. */
+#define RESUME_GAP_US (3 * 1000 * 1000)
 
 typedef struct {
     sh_session_t *sh;
@@ -528,6 +530,7 @@ static void server_loop(ssh_bind bind, const sh_auth_t *auth, vita2d_pgf *font)
 {
     unsigned long long next_draw = 0;
     unsigned long long next_power_tick = 0;
+    unsigned long long last_wake = sceKernelGetSystemTimeWide();
     char ip[64];
     /* The draw takes a copy, not the caller's: the live state can move under
      * it (a key installed over this very session), and a const pointer cannot
@@ -542,7 +545,13 @@ static void server_loop(ssh_bind bind, const sh_auth_t *auth, vita2d_pgf *font)
 
     while (!quit_requested) {
         int i;
+        unsigned long long woke = sceKernelGetSystemTimeWide();
 
+        if (woke - last_wake >= RESUME_GAP_US) {
+            sh_console_log("poll: loop stalled for %llu ms (suspend or starvation); %d session(s) open",
+                           (woke - last_wake) / 1000ULL, count_sessions());
+        }
+        last_wake = woke;
         if (ssh_event_dopoll(poll_event, 50) == SSH_ERROR) {
             /* dopoll reports an error for any session's socket; the per-session
              * check right below is what decides who to drop, so there is
@@ -555,7 +564,8 @@ static void server_loop(ssh_bind bind, const sh_auth_t *auth, vita2d_pgf *font)
                 continue;
             }
             if (sh_session_pump(slots[i].sh) != 0) {
-                sh_console_log("session %s closed", sh_session_peer(slots[i].sh));
+                sh_console_log("session %s closed: %s", sh_session_peer(slots[i].sh),
+                               sh_session_end_reason(slots[i].sh));
                 slot_free(i);
                 continue;
             }
