@@ -56,7 +56,7 @@ Machine-local identifiers must not be baked into any field or into this task: en
 - [x] #5 The os-release output is machine-parseable: one assignment per line, valid identifiers, no spaces around `=`, so `grep '^VERSION_ID='` and shell sourcing both work.
 - [x] #6 `cat /etc/os-release` includes exactly SUPPORT_URL="https://github.com/pythoninthegrass/vita_ssh" and HOME_URL="https://www.reddit.com/r/vitahacks", written as literals in the code rather than derived from the device.
 - [ ] #7 `ls /etc` lists os-release, `stat /etc/os-release` reports a regular file with the size actually printed, and `ls /` still lists the device table exactly as before.
-- [ ] #8 `/etc` is shell-only: SFTP for /etc/os-release fails as any unknown path does, and any other name under /etc (for example /etc/shadow) fails ENOENT with the message in the command's own voice.
+- [x] #8 `/etc` is shell-only: SFTP for /etc/os-release fails as any unknown path does, and any other name under /etc (for example /etc/shadow) fails ENOENT with the message in the command's own voice.
 - [ ] #9 `cat /etc/os-release > /ux0/data/x` puts the same bytes in the file that `cat` printed to the terminal, and `>>` appends them.
 - [x] #10 If the firmware query fails, both surfaces print an honest unknown value rather than a made-up version, and the commands still exit 0.
 - [x] #11 Apart from the two fixed project URLs above, no machine-local identifier (endpoint, address, hostname or the maintainer's name) appears in any emitted field.
@@ -188,6 +188,22 @@ only a device can show it. None are ticked.
 
 A rebuild needs a fresh `__DATE__ __TIME__` to be distinguishable on the device, so use
 `task --force build`, then confirm the `sftp: server code built` line in `sshd.log`.
+
+### Device run 2026-11-17 (build stamp Nov 17 2026 00:44:38, commit 8487e70, PCH-2000)
+
+Passed:
+- `uname -a` -> `Vita vita 3.74 VitaSDK armv7a`; bare `uname` -> `Vita`. Matches the 3.74 an earlier plugin log reported; the Settings screen comparison is still the user's.
+- `stat /etc/os-release` -> regular file, Size 301, 0444.
+- `cat /etc/shadow` -> `cat: /etc/shadow: No such file or directory`; `ls /etc/x` -> `ls: /etc/x: No such file or directory`.
+- `echo hi > /etc/os-release` -> `sh: /etc/os-release: Permission denied`.
+- `ls /ux0/data/..` lists the ux0 root; `ls /ux0/../etc` -> `No such file or directory` (not the pseudo-file).
+- AC #8: `scp -s host:/etc/os-release` -> `No such file or directory`; `sftp ls /etc` -> `"/etc" not found`, the same answer as `ls /nonexistent`; `sftp ls /` still lists the device table.
+
+Failed (blocks merge):
+- `cat /etc/os-release` -> `cat: /etc/os-release: Success`, rc 1, so AC #4, #5, #6 and #9 could not be observed on the device. `pseudo_open()` returns `-(i+1)`, so slot 0 is `-1`, which callers read as an open error with errno 0.
+- `cat /etc/os-release > /ux0/data/osr.txt` created a 0-byte file and failed the same way.
+- `ls /etc` -> `ls: /etc: No such file or directory`: no directory target exists for `/etc`, only for the file.
+- `ls /` -> `ls: /: No such file or directory`. A regression: with an explicit argument `cmd_ls` now calls `stat_target()` on the root target instead of listing the device table, so AC #7's "ls / unchanged" is not met.
 
 ### Checks run
 
