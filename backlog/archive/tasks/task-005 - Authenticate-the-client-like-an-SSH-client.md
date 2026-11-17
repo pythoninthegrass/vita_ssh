@@ -4,6 +4,7 @@ title: Authenticate the client like an SSH client
 status: To Do
 assignee: []
 created_date: '2026-11-16T00:00:00Z'
+updated_date: '2026-11-17 03:14'
 labels: []
 dependencies: []
 documentation:
@@ -11,7 +12,6 @@ documentation:
   - src/main.c
   - src/menu.c
   - include/display.h
-type: feature
 ordinal: 12000
 ---
 
@@ -28,3 +28,9 @@ The client has one credential and no trust model. libssh2_userauth_password is t
 - [ ] #3 password authentication against an ordinary server still works unchanged
 - [ ] #4 task build produces both VPKs
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+2026-11-16: Archived at Lance's direction along with both subtasks. The client is not being developed further; the sshd server is the project's focus. What remains true of the client and untracked: password auth only, no host key verification.
+<!-- SECTION:NOTES:END -->

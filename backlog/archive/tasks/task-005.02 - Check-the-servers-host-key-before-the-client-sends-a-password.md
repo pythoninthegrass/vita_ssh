@@ -4,7 +4,7 @@ title: Check the server's host key before the client sends a password
 status: To Do
 assignee: []
 created_date: '2026-11-16T00:00:00Z'
-updated_date: '2026-11-16T02:20:00Z'
+updated_date: '2026-11-17 03:14'
 labels: []
 dependencies: []
 documentation:
@@ -12,7 +12,6 @@ documentation:
   - src/sshd_hostkey.c
   - src/menu.c
 parent_task_id: TASK-005
-type: task
 ordinal: 14000
 ---
 
@@ -30,6 +29,12 @@ ssh_client.c does libssh2_session_handshake and goes straight to authentication.
 - [ ] #4 declining an unknown key sends no password and leaves the app usable
 - [ ] #5 task build produces both VPKs
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+2026-11-16: Archived at Lance's direction with TASK-005 and TASK-005.01. Client-side work (host key verification, known_hosts) is not on the roadmap; the server is the project's focus.
+<!-- SECTION:NOTES:END -->
 
 ## Status Updates
 <!-- STATUS:BEGIN -->

@@ -4,6 +4,7 @@ title: Log in from the client with a private key
 status: To Do
 assignee: []
 created_date: '2026-11-16T00:00:00Z'
+updated_date: '2026-11-17 03:14'
 labels: []
 dependencies: []
 documentation:
@@ -13,7 +14,6 @@ documentation:
   - include/display.h
   - taskfiles/setup.yml
 parent_task_id: TASK-005
-type: task
 ordinal: 13000
 ---
 
@@ -32,3 +32,11 @@ libssh2_userauth_password is the only authentication the client performs, so a c
 - [ ] #5 password-only profiles connect exactly as they do today
 - [ ] #6 task build produces both VPKs
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+2026-11-16: Returned to To Do and unassigned before any code was written. Lance is not taking client-side work right now — the sshd server only — so this task is not being executed. Nothing under src/ changed. The gap it was meant to close (a key reaching the Vita, and a public key reaching a server) is a server-side problem anyway: ssh-copy-id still does not work against sshd (README: it sends exec sh -c with ; and &&), so installing a key means VitaShell or USB. Tracked separately as server work.
+
+2026-11-16: Archived at Lance's direction. Client-side authentication is not on the roadmap; the server is the project's focus. No code was written for this task.
+<!-- SECTION:NOTES:END -->
