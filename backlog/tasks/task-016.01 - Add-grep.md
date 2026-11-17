@@ -1,10 +1,10 @@
 ---
 id: TASK-016.01
 title: Add grep
-status: In Progress
+status: Done
 assignee: []
 created_date: '2026-11-17 03:29'
-updated_date: '2026-11-17 03:29'
+updated_date: '2026-11-17 03:36'
 labels:
   - shell
   - coreutils
@@ -31,20 +31,20 @@ Exit status follows the conventional contract, because scripts and the eventual 
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 grep PATTERN FILE prints the matching lines; with several files each line is prefixed file:.
-- [ ] #2 grep with no file argument reads the session's stdin, so ls | grep ux0 works once pipes exist.
-- [ ] #3 -i matches case-insensitively, -v inverts, -n prefixes line numbers, -c prints only a count, -l prints only file names, -q prints nothing and sets only the exit status.
-- [ ] #4 Exit status is 0 when a line matched, 1 when none did, 2 on error such as an unreadable file.
-- [ ] #5 An unreadable file is reported as grep: FILE: reason on the terminal and the other files still searched.
+- [x] #1 grep PATTERN FILE prints the matching lines; with several files each line is prefixed file:.
+- [x] #2 grep with no file argument reads the session's stdin, so ls | grep ux0 works once pipes exist.
+- [x] #3 -i matches case-insensitively, -v inverts, -n prefixes line numbers, -c prints only a count, -l prints only file names, -q prints nothing and sets only the exit status.
+- [x] #4 Exit status is 0 when a line matched, 1 when none did, 2 on error such as an unreadable file.
+- [x] #5 An unreadable file is reported as grep: FILE: reason on the terminal and the other files still searched.
 - [x] #6 Regex behaviour is stated: either the POSIX basic subset works (and a test like grep 'a.c' matches abc) or the tool matches literally and both help and README say so.
 - [x] #7 A line longer than the tool's bound is either matched correctly or reported as over the limit, never silently truncated into a wrong answer.
-- [ ] #8 A nonexistent pattern argument (no PATTERN given) prints usage and exits nonzero rather than matching everything.
+- [x] #8 A nonexistent pattern argument (no PATTERN given) prints usage and exits nonzero rather than matching everything.
 <!-- AC:END -->
 
 ## Definition of Done
 <!-- DOD:BEGIN -->
 - [x] #1 task build produces both VPKs
-- [ ] #2 Verified on a device over a real ssh session
+- [x] #2 Verified on a device over a real ssh session
 - [x] #3 README states which pattern syntax grep supports
 <!-- DOD:END -->
 
@@ -90,6 +90,10 @@ and sed (TASK-016.03/.04) reuse it. Exit status is 0 matched, 1 none, 2 error
 
 Verified: host tests for the engine and line reader pass; task build produces both
 VPKs clean, no warnings. AC #6 (BRE works, stated in help/README) and #7 (overlong line
-reported, not truncated) are covered by scripts/test_sh_grep.py. Pending on a device over
-ssh: AC #1-#5 and #8 through sh_printf/sh_eprintf/sh_session_stdin_read and the channel
-exit code, and `help grep` output.
+reported, not truncated) are covered by scripts/test_sh_grep.py.
+
+Device run on the home Vita, server built 2026-11-17 03:34, installed with `vpk install` and exercised over real ssh exec sessions. Passing: AC1 one file and two files (`file:` prefix); AC2 `grep abc < file` reads the redirected stdin, and bare `grep abc` returns in about 1 s (the pipe form waits on TASK-015.02); AC3 `-i`, `-v`, `-n`, `-c`, `-l`, `-q`; AC4 exit 0 on a match, 1 on none, 2 on an unreadable file, a bad pattern (`[`) and a directory; AC5 `grep: FILE: No such file or directory` with the remaining file still searched (exit 2); AC6 `a.c`, `^al` and `a\(b\)c` match; AC7 a 5000-byte line reports `line 1: too long (limit 4096 bytes)`, still searches the later lines and exits 2; AC8 no PATTERN prints the usage line and `missing pattern operand`, exit 2; `help grep` and `which grep` answer.
+
+The device run found one defect, fixed in this task: `grep -c PATTERN FILE` printed `FILE:N` for a single file. The count line now carries the name only when more than one file is given, matching the match-line rule. Re-checked on the device after the fix.
+
+Known gaps, not fixed here: `--` and `-e PATTERN` are rejected (`grep: illegal option -- -`), so a pattern that begins with `-` cannot be given. An unknown flag prints `grep: illegal option -- z`, the same wording `ls` uses, whereas the TASK-016 parent AC #4 asks for `name: unsupported option: FLAG`; no builtin meets that wording yet, so the parent AC needs a decision on whether to change the shared option error or the AC.
