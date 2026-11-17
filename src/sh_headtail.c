@@ -1,9 +1,9 @@
-/* The window logic behind head and tail: which part of a stream to print, and how to get
- * it without reading the whole file. No Vita APIs, no stdout and no paths, so the host
- * check in scripts/test_sh_headtail.c runs the same code the server links. Bounds come
- * back as errno and the builtin reports them in the command's own voice.
- *
- * A line ends at a newline byte, or at end of file when the last line has no newline. The
+/* The window logic behind head and tail: which part of a stream to print, and how to get it
+ * without reading the whole file. No Vita APIs, no stdout and no paths, so the host check
+ * in scripts/test_sh_headtail.c runs the same code the server links. Bounds come back as
+ * errno and the builtin reports them in the command's own voice. */
+
+/* A line ends at a newline byte, or at end of file when the last line has no newline. The
  * empty file has no lines and "\n" has one empty line. head prints the first want lines
  * and tail the last want, each keeping its own newline, and both print the bytes of those
  * lines exactly as the file holds them, so a blank line prints as a blank line. */
@@ -228,15 +228,15 @@ ssize_t sh_tail_bytes(sh_ht_seek_read_fn read_at, void *ctx, size_t file_size,
     return byte_window(read_at, ctx, start, want, out, out_cap);
 }
 
-/* Finds where tail's answer begins, by counting newlines backwards from end.
- *
- * end is file_size, or file_size - 1 when the last byte is a newline, because that newline
+/* Finds where tail's answer begins, by counting newlines backwards from end. */
+
+/* end is file_size, or file_size - 1 when the last byte is a newline, because that newline
  * ends the last line rather than opening a blank one. The walk goes from end - 1 down to 0
  * and the answer starts one byte after the want'th newline it meets, running to file_size so
  * the answer keeps its own trailing newline. With fewer than want newlines there, every line
- * the file has is the answer and the start stays 0.
- *
- * Bytes are fetched in chunks rather than one by one, which changes only where a byte comes
+ * the file has is the answer and the start stays 0. */
+
+/* Bytes are fetched in chunks rather than one by one, which changes only where a byte comes
  * from. pos is the first byte not yet read and starts at end, so each chunk is [from, pos)
  * with from < pos, and pos becomes from at the end of every pass. pos therefore strictly
  * decreases and the walk cannot repeat a byte or spin: it ends at the want'th newline, or at
