@@ -555,6 +555,7 @@ Server:
 - The exec, pty, sftp and scp checks match between macOS (OpenSSH 10.6) and Linux (OpenSSH 9.6); Windows clients have not been tried.
 - A cross-device `mv` is only as testable as the hardware: the checks pass against a Vita with a USB drive mounted as `uma0`, and `scripts/smoke.sh` skips them on a unit with nothing in the USB port. Plug a drive in before running them.
 - A running command cannot be interrupted. The server is one thread, so the keystroke that would stop it arrives on the socket the command is blocking; Ctrl-C at the prompt works, Ctrl-C during a `cp -r` does not. Long recursive walks are bounded by a depth limit instead.
+- At most 4 sessions are open at once (a hardware limit). A connection that has not logged in within 30 seconds is dropped, and when all 4 slots are taken a new connection takes the slot of the longest-waiting one that has not logged in. So a client that is slow to authenticate can lose its slot to a newcomer while the table is full, and a fifth connection is refused outright only when all 4 sessions have logged in.
 - The bootstrap password is compared in non-constant time, and it exists to be replaced.
   Use `authorized_keys` for anything you care about.
 - If no data directory is writable, the host key lives in memory and every boot introduces

@@ -458,6 +458,11 @@ const char *sh_session_peer(const sh_session_t *s)
     return (s == NULL || s->peer[0] == '\0') ? "unknown" : s->peer;
 }
 
+int sh_session_authenticated(const sh_session_t *s)
+{
+    return s != NULL && s->authenticated;
+}
+
 int sh_session_cols(const sh_session_t *s)
 {
     if (s == NULL || s->cols < 20) {

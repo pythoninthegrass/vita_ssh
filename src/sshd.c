@@ -72,10 +72,15 @@ int scePowerSetIdleTimerCount(int count);
 /* The poll loop wakes every 50 ms; a gap this long means the process was not running (suspend) or was starved. */
 #define RESUME_GAP_US (3 * 1000 * 1000)
 
+/* A connection that has not logged in by now is reclaimed, whether it is still in key exchange or sitting at the login prompt. */
+#define HANDSHAKE_TIMEOUT_S 30
+
 typedef struct {
     sh_session_t *sh;
     ssh_session ssh;
     int used;
+    int handshaking;
+    unsigned long long accepted_us;
 } slot_t;
 
 static ssh_event poll_event;
@@ -367,6 +372,49 @@ static void slot_free(int i)
     memset(&slots[i], 0, sizeof(slots[i]));
 }
 
+/* The slot that has waited longest without a login, or -1 when every open session has logged in. */
+static int slot_oldest_preauth(void)
+{
+    int i, oldest = -1;
+
+    for (i = 0; i < SSHD_MAX_SESSIONS; i++) {
+        if (!slots[i].used || sh_session_authenticated(slots[i].sh)) {
+            continue;
+        }
+        if (oldest < 0 || slots[i].accepted_us < slots[oldest].accepted_us) {
+            oldest = i;
+        }
+    }
+    return oldest;
+}
+
+/* Key exchange runs from the poll loop on a non-blocking session: a client that completes TCP and sends nothing must not park the one thread. */
+static void handshake_done(int i)
+{
+    slots[i].handshaking = 0;
+    ssh_set_blocking(slots[i].ssh, 1);
+    sh_console_log("peer %s: key exchange complete", sh_session_peer(slots[i].sh));
+    sh_console_log("connection from %s (%d open)", sh_session_peer(slots[i].sh),
+                   count_sessions());
+}
+
+static void handshake_step(int i)
+{
+    int rc = ssh_handle_key_exchange(slots[i].ssh);
+
+    if (rc == SSH_AGAIN) {
+        return;
+    }
+    if (rc != SSH_OK) {
+        /* A port scan or a client that does not speak the same kex ends here; one line is all it is worth. */
+        sh_console_log("handshake failed from %s: %s", sh_session_peer(slots[i].sh),
+                       ssh_get_error(slots[i].ssh));
+        slot_free(i);
+        return;
+    }
+    handshake_done(i);
+}
+
 static int on_incoming(socket_t fd, int revents, void *userdata)
 {
     ssh_bind bind = (ssh_bind)userdata;
@@ -376,7 +424,7 @@ static int on_incoming(socket_t fd, int revents, void *userdata)
     ssh_session ssh;
     sh_session_t *sh;
     char ip[INET_ADDRSTRLEN] = "unknown";
-    int index;
+    int index, rc;
 
     sh_console_log("incoming: fd %d, events 0x%X; accepting",
                    (int)fd, (unsigned int)revents);
@@ -405,10 +453,19 @@ static int on_incoming(socket_t fd, int revents, void *userdata)
     }
     index = slot_alloc();
     if (index < 0) {
-        sh_console_log("refused %s: %d sessions already open", ip,
-                       SSHD_MAX_SESSIONS);
-        close((int)client);
-        return SSH_OK;
+        /* A silent socket must not keep a real client out: take the slot of the longest-waiting session that has not logged in. */
+        index = slot_oldest_preauth();
+        if (index < 0) {
+            sh_console_log("refused %s: %d sessions already open", ip,
+                           SSHD_MAX_SESSIONS);
+            close((int)client);
+            return SSH_OK;
+        }
+        sh_console_log("evicting %s (no login after %llu s) for %s",
+                       sh_session_peer(slots[index].sh),
+                       (sceKernelGetProcessTimeWide() - slots[index].accepted_us) / 1000000ULL,
+                       ip);
+        slot_free(index);
     }
 
     sh_console_log("peer %s: allocating SSH session", ip);
@@ -435,10 +492,9 @@ static int on_incoming(socket_t fd, int revents, void *userdata)
         return SSH_OK;
     }
     sh_console_log("peer %s: starting key exchange", ip);
-    if (ssh_handle_key_exchange(ssh) != SSH_OK) {
-        /* Reaching here and failing is normal for a port scan or a client that
-         * does not speak the same kex: log it, but do not treat it as an error
-         * worth more than one line. */
+    ssh_set_blocking(ssh, 0);
+    rc = ssh_handle_key_exchange(ssh);
+    if (rc == SSH_ERROR) {
         sh_console_log("handshake failed from %s: %s", ip,
                        ssh_get_error(ssh));
         sh_session_free(sh);
@@ -447,7 +503,6 @@ static int on_incoming(socket_t fd, int revents, void *userdata)
         return SSH_OK;
     }
 
-    sh_console_log("peer %s: key exchange complete; adding to poll event", ip);
     if (ssh_event_add_session(poll_event, ssh) != SSH_OK) {
         sh_console_log("refused %s: could not join the poll loop", ip);
         sh_session_free(sh);
@@ -459,7 +514,11 @@ static int on_incoming(socket_t fd, int revents, void *userdata)
     slots[index].used = 1;
     slots[index].ssh = ssh;
     slots[index].sh = sh;
-    sh_console_log("connection from %s (%d open)", ip, count_sessions());
+    slots[index].handshaking = rc != SSH_OK;
+    slots[index].accepted_us = sceKernelGetProcessTimeWide();
+    if (rc == SSH_OK) {
+        handshake_done(index);
+    }
     return SSH_OK;
 }
 
@@ -562,6 +621,20 @@ static void server_loop(ssh_bind bind, const sh_auth_t *auth, vita2d_pgf *font)
 
             if (!slots[i].used) {
                 continue;
+            }
+            if (!sh_session_authenticated(slots[i].sh) &&
+                sceKernelGetProcessTimeWide() - slots[i].accepted_us >=
+                    HANDSHAKE_TIMEOUT_S * 1000000ULL) {
+                sh_console_log("reclaimed %s: no login within %d s",
+                               sh_session_peer(slots[i].sh), HANDSHAKE_TIMEOUT_S);
+                slot_free(i);
+                continue;
+            }
+            if (slots[i].handshaking) {
+                handshake_step(i);
+                if (!slots[i].used || slots[i].handshaking) {
+                    continue;
+                }
             }
             if (sh_session_pump(slots[i].sh) != 0) {
                 sh_console_log("session %s closed: %s", sh_session_peer(slots[i].sh),
