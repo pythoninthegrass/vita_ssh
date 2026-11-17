@@ -31,6 +31,20 @@ Nothing here runs on the host: the apps are cross-compiled for the Vita, so ever
 
    The scripts need key auth and a terminal on the same LAN as the Vita. The authoring agent's sandbox cannot reach the device, so run them yourself. On-card (storage-side) speed is affected by the Turbo Storage plugin installed on the test device; its setup, headless controls and card benchmarks are in [turbo-storage.md](turbo-storage.md). On the radio side the device also runs Wi-Fi Turbo, power save off and 40 MHz on; its install, its unauthenticated `:1339` control port and what the profiles measured here are in [turbo-wifi.md](turbo-wifi.md), and `vcmd` is how you drive that port from a session ([vcmd.md](vcmd.md)).
 
+### Install over SSH instead
+
+With a server already running on the Vita, no USB mount or VitaShell is needed. `vpk install` is fully implemented for any VPK, including the vitasshd server itself.
+
+```bash
+scp -s build/ssh_server_vita.vpk any@<ip>:/ux0/data/
+ssh any@<ip> "vpk list /ux0/data/ssh_server_vita.vpk"      # optional: show what the package holds
+ssh any@<ip> "vpk install /ux0/data/ssh_server_vita.vpk"
+```
+
+Use the system `/usr/bin/scp` and `ssh`: Homebrew's report "No route to host" for the Vita. Installing the server over itself is a handoff: the server stages the package in `ux0:data/vitasshd-update/server`, promotes the bundled updater app, closes the command's SSH channel and exits. The updater shuts down the old server, promotes the stage, writes `ux0:data/vitasshd-update/result.txt` and relaunches the server, even when the install failed. Expect the connection to drop and the server to answer again after a few seconds; read `result.txt` (`ssh any@<ip> "cat /ux0/data/vitasshd-update/result.txt"`) for the outcome. The path rules and why the install goes through the promoter are in the `vpk install` section of AGENTS.md.
+
+If the server is wedged and no longer answers a banner (`Connection timed out during banner exchange`), there is nothing to install through: restart it on the device (hold START, relaunch), or fall back to the USB route above.
+
 ## Debugging
 
 ### The server log
