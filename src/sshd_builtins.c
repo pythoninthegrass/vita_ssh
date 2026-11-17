@@ -1712,9 +1712,12 @@ static void to_report_error(sh_session_t *s, const char *cmd, const char *name)
     if (errno == E2BIG) {
         sh_eprintf(s, "%s: %s: line too long (limit %d bytes)\n", cmd, name,
                    SH_TEXTOPS_LINE_MAX);
-    } else if (errno == EFBIG) {
+    } else if (errno == EFBIG && strcmp(cmd, "wc") == 0) {
         sh_eprintf(s, "%s: %s: file too large (limit %d bytes)\n", cmd, name,
                    SH_TEXTOPS_BYTES_MAX);
+    } else if (errno == EFBIG) {
+        sh_eprintf(s, "%s: %s: input too large (limit %d bytes or %d lines)\n", cmd, name,
+                   SH_TEXTOPS_BYTES_MAX, SH_TEXTOPS_LINES_MAX);
     } else if (errno == EILSEQ) {
         sh_eprintf(s, "%s: %s: numeric field too long (limit %d digits)\n", cmd, name,
                    SH_TEXTOPS_DIGITS_MAX);
@@ -1804,15 +1807,27 @@ static int cmd_wc(sh_session_t *s, int argc, char **argv)
             return 1;
         }
         free(src.buf);
-        /* No name to align against, so each count is right-aligned in seven. */
-        if (want_l) {
-            sh_printf(s, "%7lu", wc.lines);
-        }
-        if (want_w) {
-            sh_printf(s, "%s%7lu", want_l ? " " : "", wc.words);
-        }
-        if (want_b) {
-            sh_printf(s, "%s%7lu", (want_l || want_w) ? " " : "", wc.bytes);
+        /* No name to align against: a bare count for one column, else the digits of the bytes. */
+        {
+            unsigned long v = wc.bytes;
+            int w = 1;
+
+            while (v >= 10) {
+                v /= 10;
+                w++;
+            }
+            if (want_l + want_w + want_b == 1) {
+                w = 1;
+            }
+            if (want_l) {
+                sh_printf(s, "%*lu", w, wc.lines);
+            }
+            if (want_w) {
+                sh_printf(s, "%s%*lu", want_l ? " " : "", w, wc.words);
+            }
+            if (want_b) {
+                sh_printf(s, "%s%*lu", (want_l || want_w) ? " " : "", w, wc.bytes);
+            }
         }
         sh_printf(s, "\n");
         return 0;
@@ -3506,7 +3521,7 @@ static const sh_builtin_t builtins[] = {
      "uniq [-c] [-d] [-u] [FILE] -- collapse adjacent repeats; -c counts, -d repeats only, -u once-only"},
     {"vcmd", cmd_vcmd, "vcmd HOST PORT [LINE] -- send one line to a TCP port and print the reply"},
     {"vpk", cmd_vpk, "vpk list FILE | vpk install FILE -- inspect or install a VPK over this app"},
-    {"wc", cmd_wc, "wc [-l] [-w] [-c] [FILE] -- count lines, words and bytes of a file or stdin"},
+    {"wc", cmd_wc, "wc [-lwc] [FILE...] -- count lines, words and bytes of files or stdin"},
     {"which", cmd_which, "which COMMAND... -- report whether COMMAND is one of these builtins"},
     {"whoami", cmd_whoami, "whoami -- the name you logged in as"},
 };
