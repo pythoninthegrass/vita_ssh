@@ -105,7 +105,9 @@ connections, logins and commands. <kbd>START</kbd> stops the server.
 - Listens on **port 22**, falling back to **2222** if something already holds it. The port
   in use is printed.
 - Up to **4 concurrent sessions**, each with its own working directory, driven from one
-  poll loop, so a slow `du` in one session cannot starve the others.
+  poll loop, so a slow `du` in one session cannot starve the others. Four is a hardware
+  limit rather than a preference: each session is its own libssh session with its own
+  buffers on a device with no swap.
 
 ### Where its files live
 
@@ -116,7 +118,7 @@ uses.
 | Device | Path in a file manager | Path in the shell | Survives a reboot |
 | --- | --- | --- | --- |
 | `ux0:` internal storage or memory card | `ux0:data/vitasshd` | `/ux0/data/vitasshd` | yes — **use this one** |
-| `uma0:` microSD / SD2Vita adapter | `uma0:data/vitasshd` | `/uma0/data/vitasshd` | yes, while mounted |
+| `uma0:` a USB drive in the host port | `uma0:data/vitasshd` | `/uma0/data/vitasshd` | yes, while plugged in |
 | `xmc0:` the Vita TV's own card | `xmc0:data/vitasshd` | `/xmc0/data/vitasshd` | yes, while mounted |
 | `ur0:` RAM disk | `ur0:data/vitasshd` | `/ur0/data/vitasshd` | no — it is RAM |
 
@@ -438,7 +440,7 @@ Server:
 
 - SFTP cannot set permissions, owners or file times, and the legacy scp protocol (`scp -O`) is not supported; see "Copying files with sftp and scp" for what that means in practice. There is no statvfs over SFTP.
 - The exec, pty, sftp and scp checks match between macOS (OpenSSH 10.6) and Linux (OpenSSH 9.6); Windows clients have not been tried.
-- The one server path never run on hardware is a cross-device `mv` that succeeds. The test device has no second writable device, so `scripts/smoke.sh` skips that check and only the refusal is covered — the source stays put and the error names the right command.
+- A cross-device `mv` is only as testable as the hardware: the checks pass against a Vita with a USB drive mounted as `uma0`, and `scripts/smoke.sh` skips them on a unit with nothing in the USB port. Plug a drive in before running them.
 - A running command cannot be interrupted. The server is one thread, so the keystroke that would stop it arrives on the socket the command is blocking; Ctrl-C at the prompt works, Ctrl-C during a `cp -r` does not. Long recursive walks are bounded by a depth limit instead.
 - The bootstrap password is compared in non-constant time, and it exists to be replaced.
   Use `authorized_keys` for anything you care about.

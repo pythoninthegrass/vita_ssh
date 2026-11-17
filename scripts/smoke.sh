@@ -104,10 +104,15 @@ run_exec() {
     fi
   done
   if [ -z "$MVOK" ]; then
-    printf 'SKIP  cross-device mv: no second writable device accepted it\n'
+    printf 'SKIP  cross-device mv: no second writable device accepted it (plug a USB drive into the Vita)\n'
   else
-    $V "cat /$MVOK/smoke-$$.txt" >/dev/null 2>&1
-    check "mv across devices (->$MVOK)" 0 "$?"
+    # Not just the statuses: the bytes have to arrive and the source has to go,
+    # which is what a copy-and-delete mv can get wrong without saying so.
+    OUT=$($V "cat /$MVOK/smoke-$$.txt")
+    if [ "$OUT" = "hello" ]; then check "mv across devices: bytes arrive (->$MVOK)" ok ok
+    else printf 'FAIL  mv across devices: bytes arrive (->$MVOK got "%s")\n' "$OUT"; FAIL=$((FAIL+1)); fi
+    $V "cat /ux0/data/$T/sub/f.txt" >/dev/null 2>&1; RC=$?
+    check "mv across devices: source removed (->$MVOK)" 1 "$RC"
     $V "rm /$MVOK/smoke-$$.txt" >/dev/null 2>&1
     $V "echo hello > /ux0/data/$T/sub/f.txt" >/dev/null 2>&1
   fi

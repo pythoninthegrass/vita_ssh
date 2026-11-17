@@ -279,7 +279,7 @@ typedef struct {
 
 static const sh_datadir_t data_dirs[] = {
     { "ux0:/data/vitasshd",  0 }, /* the documented one: VitaShell and every file manager reach it */
-    { "uma0:/data/vitasshd", 0 }, /* microSD / SD2Vita adapter, while mounted */
+    { "uma0:/data/vitasshd", 0 }, /* a USB drive in the host port, while one is plugged in */
     { "xmc0:/data/vitasshd", 0 }, /* the Vita TV's own card */
     { "ur0:/data/vitasshd",  1 }, /* RAM disk: writable on every device, forgotten on reboot */
 };

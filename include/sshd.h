@@ -25,6 +25,10 @@
 
 #define SSHD_PORT_PRIMARY 22
 #define SSHD_PORT_FALLBACK 2222
+/* Four concurrent sessions is a hardware limit, not a preference: every slot is a
+ * libssh session with its own buffers and channel, all driven from one poll loop on
+ * a handheld with no swap. Raising it is a memory question, not an edit to this
+ * number -- what it costs has to be measured on a device first. */
 #define SSHD_MAX_SESSIONS 4
 /* Room for a remote command that carries what authorized_keys can: an ssh-rsa
  * 8192-bit key line is about 1.6 KB, and `ssh host "echo KEY > path"` has to

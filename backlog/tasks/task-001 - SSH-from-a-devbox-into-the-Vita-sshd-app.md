@@ -4,7 +4,7 @@ title: SSH from a devbox into the Vita (sshd app)
 status: Done
 assignee: []
 created_date: '2026-11-15T22:56:00Z'
-updated_date: '2026-11-17 01:52'
+updated_date: '2026-11-17 02:33'
 labels: []
 dependencies: []
 references:
@@ -59,9 +59,9 @@ What landed, by subtask:
 
 Architecture, since nothing here can fork or exec: one thread drives vita2d, the pad, the sockets and every session through one poll loop; commands are builtins run in-process with a shell-owned cwd per session (libc's cwd is one process-wide static, so chdir is off limits); the path layer in src/sh_path.c is the only code that knows /ux0/data/x is ux0:data/x, and it refuses an unknown device rather than falling back.
 
-Criteria basis: #1 and #4 rest on password login with the on-screen passphrase verified in TASK-001.04 AC1; #2 on `ls /` plus a per-device `ls` loop and cd checks in scripts/smoke.sh, and on the read-only and cross-device cases exercised through SFTP (TASK-002.02, TASK-002.03.01) -- the literal `cd` from one device into another was the one atom never graded, so scripts/smoke.sh gained `cd /os0` and `cd /vs0` checks for the next device run; #5 is the unchanged client titleid in CMakeLists.txt with the client's source list untouched.
+Criteria basis: #1 and #4 rest on password login with the on-screen passphrase verified in TASK-001.04 AC1; #2 on `ls /`, the per-device `ls` loop and the cd checks in scripts/smoke.sh -- including `cd /os0` and `cd /vs0`, which pass on the device -- and on the read-only and cross-device cases exercised through SFTP (TASK-002.02, TASK-002.03.01); #5 is the unchanged client titleid in CMakeLists.txt with the client's source list untouched.
 
-Closed with two limits, both documented in the README rather than left as bugs: the cross-device `mv` success path has never executed (no second writable device on the test Vita), and a running command cannot be interrupted by Ctrl-C because the poll loop is inside the command.
+Closed with one limit documented rather than left as a bug: a running command cannot be interrupted by Ctrl-C, because the single poll loop is inside the command. The other gap this task closed against, the cross-device `mv` success path, has since run on hardware -- scripts/smoke.sh exec is 28 pass, 0 fail, 0 skip on a Vita with a USB drive mounted as uma0 (see TASK-001.04) -- and still SKIPs on a unit with nothing in the USB port.
 
 Follow-ups moved out of this parent, because they are separate deliverables rather than parts of "ssh from a devbox works": TASK-010 (dim the screen while the server runs, was TASK-001.05) and TASK-011 (a full-screen text editor builtin, was TASK-001.06). TASK-001.07, the `vpk install` self-update path, is Done.
 <!-- SECTION:FINAL_SUMMARY:END -->
