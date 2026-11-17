@@ -1,11 +1,4 @@
-/* Host test for src/sh_textops.c; driven by scripts/test_sh_textops.py.
- *
- * The references are naive line loops written from the specification, not from the
- * implementation, so agreement between the two says something. The Python wrapper pins
- * those references against a handful of real gwc/gsort/guniq calls before running this,
- * so a wrong reference is caught rather than copied. Everything is in memory: the
- * exhaustive part is every string up to length 6 over {a, b, newline, space, 1, -} for
- * every flag combination, with no subprocesses per case. */
+/* Host test for src/sh_textops.c, driven by scripts/test_sh_textops.py. */
 #include "sh_textops.h"
 
 #include <errno.h>
@@ -39,8 +32,7 @@ static void tick(const char *what, size_t len)
 #define MAX_LEN 6
 #define REF_MAX 64
 
-/* File scope: a 64 KB answer buffer does not belong on a thread stack, and the harness
- * runs on one. */
+/* File scope: a 64 KB answer buffer does not belong on a thread stack. */
 static char got_buf[OUT_CAP];
 static char ref_buf[OUT_CAP];
 
@@ -117,8 +109,7 @@ static int sink_put(sink_t *s, const char *p, size_t n)
     return 0;
 }
 
-/* The sink appends the newline that every line the tools print is followed by, so an
- * input whose last line had none still comes back terminated. */
+/* The sink appends the newline every printed line gets, even if the input's last had none. */
 static int sink_line(void *vctx, const char *line, size_t len, unsigned long count)
 {
     sink_t *s = vctx;
@@ -148,8 +139,7 @@ static int ref_blank(int c)
     return c == ' ' || c == '\t' || c == '\n' || c == '\v' || c == '\f' || c == '\r';
 }
 
-/* A line ends at a newline, or at end of input when the last line has none; the empty
- * input has no lines and "\n" has one empty line. */
+/* A line ends at a newline or end of input; empty input has none, "\n" has one empty line. */
 static size_t ref_split(const char *b, size_t len, size_t *st, size_t *ln, size_t cap)
 {
     size_t n = 0;
@@ -263,8 +253,7 @@ static int ref_bytes(const char *a, const char *b, size_t n)
     return 0;
 }
 
-/* Sign, then the integer magnitude with leading zeros stripped (longer is larger, equal
- * length compares the digit strings), then the fraction digit strings. */
+/* Sign, then integer magnitude without leading zeros, then fraction digit strings. */
 static int ref_num_cmp(const ref_key_t *a, const ref_key_t *b)
 {
     int av = a->has ? (a->neg ? -1 : 1) : 0;
@@ -293,8 +282,7 @@ static int ref_num_cmp(const ref_key_t *a, const ref_key_t *b)
         r = ref_bytes(ai, bi, al);
     }
     if (r == 0) {
-        /* Only a tie in the integer part reaches the fraction, and trailing fraction zeros
-         * carry no value, so 1, 1.0 and 1.00 share a key. */
+        /* Only an integer tie reaches the fraction; trailing zeros are void: 1, 1.0, 1.00 tie. */
         const char *af = a->fp;
         const char *bf = b->fp;
         size_t al = a->fl;
@@ -315,8 +303,7 @@ static int ref_num_cmp(const ref_key_t *a, const ref_key_t *b)
     return av < 0 ? -r : r;
 }
 
-/* -u compares keys without the byte tie-break, so with -n the lines 1, 01 and 1.0 count
- * as one line. */
+/* -u ignores the byte tie-break, so with -n the lines 1, 01 and 1.0 count as one. */
 static int ref_key_eq(const char *b, size_t la, size_t sa, size_t lb, size_t sb,
                       int numeric)
 {
@@ -357,8 +344,7 @@ static int ref_cmp(const char *b, size_t la, size_t sa, size_t lb, size_t sb,
     return la < lb ? -1 : 1;
 }
 
-/* Plain sort orders whole lines, -r reverses the comparison and -u drops later lines whose
- * key equals an earlier one. The insertion sort is stable, so equals keep input order. */
+/* Plain sort orders whole lines, -r reverses, -u drops later equal keys; sort is stable. */
 static size_t ref_sort(const char *b, size_t len, int numeric, int reverse, int uniq,
                        char *out, size_t cap)
 {
@@ -393,10 +379,7 @@ static size_t ref_sort(const char *b, size_t len, int numeric, int reverse, int 
         }
         ord[j] = keep;
     }
-    /* -u compares keys without the byte tie-break, on the already sorted list, and keeps one
-     * line per maximal run of equal keys. The line kept from a run is the run's earliest in
-     * the input, which is what makes 1, 01 and 1.0 one line whose survivor is whichever of
-     * them came first. Runs are contiguous here because equal keys sort together. */
+    /* -u on the sorted list keeps the input-earliest line of each run of equal keys. */
     if (uniq) {
         size_t w = 0;
         size_t r = 0;
@@ -428,8 +411,7 @@ static size_t ref_sort(const char *b, size_t len, int numeric, int reverse, int 
     return used;
 }
 
-/* uniq collapses runs of adjacent byte-identical lines; -c prefixes the count, -d keeps
- * runs of two or more, -u runs of one, and -d with -u keeps nothing. */
+/* uniq collapses adjacent identical lines; -c prefixes counts, -d keeps 2+, -u keeps 1. */
 static size_t ref_uniq(const char *b, size_t len, int show_count, int dups, int single,
                        char *out, size_t cap)
 {
@@ -598,8 +580,7 @@ static void test_wccounts(void)
     CHECK(wc.words == 3);
     CHECK(wc.bytes == 12);
 
-    /* Only bytes asked for: the other two still come back, because the row is built from
-     * them by the caller and a half-count row is worse than a refusal. */
+    /* Only bytes asked for: the other two still come back since the caller builds the row. */
     src_init(&src, "ab\ncd", 5);
     memset(&wc, 0, sizeof(wc));
     wc.want_bytes = 1;
@@ -629,17 +610,14 @@ static void test_bounds(void)
     }
     memset(huge, 'a', SH_TEXTOPS_BYTES_MAX + 64);
 
-    /* Past the byte bound a caller that asks for the truth is refused rather than told a
-     * number it cannot check. */
+    /* Past the byte bound a caller asking for the truth is refused, not given a bad number. */
     src_init(&src, huge, SH_TEXTOPS_BYTES_MAX + 16);
     memset(&wc, 0, sizeof(wc));
     wc.want_bytes = 1;
     CHECK(sh_wc(mem_fill, &src, &wc) == -1);
     CHECK(errno == EFBIG);
 
-    /* A caller that says the input is small but feeds more is refused rather than allowed
-     * past the bound it was promised. Here every byte is one line, so the line bound is the
-     * one met first and the verdict is the one that names it. */
+    /* A caller understating the input size is refused; the line bound is hit first here. */
     src_init(&src, huge, SH_TEXTOPS_BYTES_MAX + 16);
     sink_init(&s, got_buf, OUT_CAP);
     CHECK(sh_sort(mem_fill, &src, 16, 0, 0, 0, sink_line, &s) == -1);
@@ -683,8 +661,7 @@ static void test_bounds(void)
                           &s) == -1);
             CHECK(errno == E2BIG);
 
-            /* wc keeps no line, so a single huge line is not its bound: the counts are
-             * still exact, and only the total byte bound can refuse. */
+            /* wc keeps no line, so a huge line is no bound: only the total byte bound refuses. */
             src_init(&src, long_line, SH_TEXTOPS_LINE_MAX + 2);
             memset(&wc, 0, sizeof(wc));
             wc.want_lines = 1;

@@ -1,6 +1,4 @@
-/* The counting, ordering and collapsing behind wc, sort and uniq: no I/O, no paths and no
- * Vita APIs, so the host check in scripts/test_sh_textops.c runs the same code the server
- * links. Bounds come back as errno and each builtin reports them in its own voice. */
+/* Counting, ordering and collapsing for wc, sort, uniq; notes in docs/shell-text-tools.md. */
 #include "sh_textops.h"
 
 #include <errno.h>
@@ -15,8 +13,7 @@ static int is_blank(int c)
     return c == ' ' || c == '\t' || c == '\n' || c == '\v' || c == '\f' || c == '\r';
 }
 
-/* One chunk from the source: how many bytes arrived (0 at end of input), or -1 with the
- * fill's errno. */
+/* One chunk from the source: bytes arrived (0 at end of input), or -1 with the fill's errno. */
 static ssize_t pull(sh_textops_fill_fn fill, void *ctx, char *p, size_t want)
 {
     ssize_t n;
@@ -41,8 +38,7 @@ int sh_wc(sh_textops_fill_fn fill, void *ctx, sh_wc_t *wc)
         errno = ENOMEM;
         return -1;
     }
-    /* Nothing is kept between chunks, so the only bound that can be passed is the total
-     * byte count, and every count stays exact right up to the refusal. */
+    /* Nothing is kept between chunks, so only the total byte count can pass the bound. */
     for (;;) {
         ssize_t n = pull(fill, ctx, chunk, FILL_CHUNK);
         ssize_t i;
@@ -65,8 +61,7 @@ int sh_wc(sh_textops_fill_fn fill, void *ctx, sh_wc_t *wc)
             if (c == '\n') {
                 wc->lines++;
             }
-            /* Every column is counted, not only the wanted ones: the field width comes
-             * from the byte count of the largest input, which the caller learns last. */
+            /* Every column is counted: field width needs the largest byte count, known last. */
             if (is_blank(c)) {
                 in_word = 0;
             } else if (!in_word) {
@@ -80,8 +75,7 @@ int sh_wc(sh_textops_fill_fn fill, void *ctx, sh_wc_t *wc)
     return 0;
 }
 
-/* The -n key of a line: leading blanks, an optional sign, digits, an optional fraction. A
- * line with none of them has no key and counts as zero. */
+/* The -n key of a line: blanks, optional sign, digits, optional fraction; none means zero. */
 typedef struct {
     int neg;
     const char *ip;
@@ -149,9 +143,7 @@ static int byte_cmp(const char *a, const char *b, size_t n)
     return 0;
 }
 
-/* Sign first, so a line with no number sits between the negatives and the positives; then
- * the integer magnitude with leading zeros stripped, where longer is larger and equal
- * lengths compare their digit strings; then the fraction digit strings. */
+/* Order by sign, then integer magnitude without leading zeros, then fraction digits. */
 static int key_cmp(const numkey_t *a, const numkey_t *b)
 {
     int av = a->has ? (a->neg ? -1 : 1) : 0;
@@ -180,8 +172,7 @@ static int key_cmp(const numkey_t *a, const numkey_t *b)
         r = byte_cmp(ai, bi, al);
     }
     if (r == 0) {
-        /* Trailing fraction zeros carry no value, so 1, 1.0 and 1.00 share a key; what is
-         * compared is the fraction with them gone. */
+        /* Trailing fraction zeros carry no value, so 1, 1.0 and 1.00 share a key. */
         const char *af = a->fp;
         const char *bf = b->fp;
         size_t al = a->fl;
@@ -229,8 +220,7 @@ int sh_cmp(const char *a, size_t al, const char *b, size_t bl, int numeric)
     return al < bl ? -1 : 1;
 }
 
-/* Whether two neighbouring lines are one line as far as -u is concerned: the same bytes
- * without -n, the same number with it, and never the byte tie-break. */
+/* Whether neighbouring lines are one line for -u: same bytes, or same number with -n. */
 static int key_equal(const char *a, size_t al, const char *b, size_t bl, int numeric)
 {
     numkey_t ka, kb;
@@ -246,8 +236,7 @@ static int key_equal(const char *a, size_t al, const char *b, size_t bl, int num
     return key_cmp(&ka, &kb) == 0;
 }
 
-/* Reads a source one line at a time into one growing accumulator, which is the shape both
- * tools that keep lines need: sort holds every line and uniq holds two. */
+/* Reads a source line by line into one growing accumulator, as sort and uniq both need. */
 typedef struct {
     char *acc;
     size_t len;
@@ -278,9 +267,7 @@ static void reader_init(reader_t *r, char *acc, size_t cap, char *chunk,
     r->eof = 0;
 }
 
-/* The next byte into *c: 1 for a byte, 0 for end of input, or -1 with errno set. A NUL is
- * a byte like any other, so the verdict travels separately from the value, and end of
- * input is known only once a read has come back empty, which is what eof records. */
+/* The next byte into *c: 1 for a byte, 0 at end of input, -1 with errno; eof records the end. */
 static int reader_byte(reader_t *r, sh_textops_fill_fn fill, void *ctx, int *c)
 {
     for (;;) {
@@ -293,8 +280,7 @@ static int reader_byte(reader_t *r, sh_textops_fill_fn fill, void *ctx, int *c)
         if (r->eof) {
             return 0;
         }
-        /* Never ask for more than the chunk holds, or a caller with a small buffer would
-         * be written past. */
+        /* Never ask for more than the chunk holds, or a small caller buffer would be overrun. */
         n = pull(fill, ctx, r->chunk, r->chunk_cap);
         if (n < 0) {
             return -1;
@@ -309,10 +295,7 @@ static int reader_byte(reader_t *r, sh_textops_fill_fn fill, void *ctx, int *c)
     }
 }
 
-/* The next line without its newline, or -1 with errno E2BIG past the line bound, ENOMEM
- * past the accumulator, or the read's errno. A line ends at a newline or at end of input,
- * so a last line with no newline is still a line and "\n" is one empty line; 0 with *done
- * means the input ended on a newline and no line follows. */
+/* The next line without its newline, 0 with *done at end of input, or -1 with errno. */
 static ssize_t reader_line(reader_t *r, sh_textops_fill_fn fill, void *ctx, int *done)
 {
     int saw_byte = 0;
@@ -327,9 +310,7 @@ static ssize_t reader_line(reader_t *r, sh_textops_fill_fn fill, void *ctx, int 
             return -1;
         }
         if (got == 0) {
-            /* End of input gives a line only when bytes arrived during this call: that is
-             * the last line, written without a newline. Once the source has been drained,
-             * every later call is done, which is what stops the reader repeating it. */
+            /* End of input yields the last unterminated line once; later calls report done. */
             if (!saw_byte) {
                 *done = 1;
                 return 0;
@@ -364,8 +345,7 @@ typedef struct {
     numkey_t key;
 } item_t;
 
-/* The comparison sort uses. With -n the key decides and -r applies to the key alone; the
- * byte order is the tie-break, where a proper prefix sorts first. */
+/* The sort comparison: -n key first with -r on the key alone, byte order as tie-break. */
 static int cmp_items(const item_t *a, const item_t *b, const char *blob, int numeric,
                      int reverse, int *bad)
 {
@@ -392,9 +372,7 @@ static int cmp_items(const item_t *a, const item_t *b, const char *blob, int num
     return reverse ? -r : r;
 }
 
-/* One merge pass: src holds runs of width and dst receives them merged two at a time.
- * Taking the left run whenever the two compare equal is what keeps the sort stable, which
- * is what lets -u keep the first of a set of equal lines in input order. */
+/* One merge pass of runs of width; taking the left run on ties keeps the sort stable. */
 static void merge_pass(const item_t *src, size_t n, size_t width, const char *blob,
                        int numeric, int reverse, int *bad, item_t *dst)
 {
@@ -459,8 +437,7 @@ int sh_sort(sh_textops_fill_fn fill, void *ctx, size_t size, int numeric, int re
     cap_items = 1;
     reader_init(&r, run, SH_TEXTOPS_LINE_MAX, scratch, FILL_CHUNK);
 
-    /* Everything is held before anything is printed, because the last line can sort first;
-     * the line is copied into the blob as it arrives so no second copy is needed. */
+    /* Everything is held before printing because the last line can sort first. */
     for (;;) {
         int done = 0;
         ssize_t len = reader_line(&r, fill, ctx, &done);
@@ -472,9 +449,7 @@ int sh_sort(sh_textops_fill_fn fill, void *ctx, size_t size, int numeric, int re
         if (done) {
             break;
         }
-        /* The caller states the size it believes it has; the bytes actually consumed are
-         * checked against both that and the stated maximum, so a source that lies about its
-         * length cannot walk past the bound it was promised. */
+        /* Consumed bytes are checked against the stated size and the maximum, not the source. */
         if (r.total > size || r.total > SH_TEXTOPS_BYTES_MAX) {
             errno = EFBIG;
             goto out;
@@ -510,9 +485,7 @@ int sh_sort(sh_textops_fill_fn fill, void *ctx, size_t size, int numeric, int re
         n++;
     }
 
-    /* A key with more digits than the bound is refused before any comparison is trusted,
-     * so the whole input is scanned for it rather than only the pairs a merge happens to
-     * compare: two lines never compared still have to fail the run. */
+    /* Scan every key for an over-long digit run, since a merge may never compare some pairs. */
     if (numeric) {
         for (size_t i = 0; i < n; i++) {
             if (digits_over(&items[i].key)) {
@@ -536,11 +509,7 @@ int sh_sort(sh_textops_fill_fn fill, void *ctx, size_t size, int numeric, int re
         goto out;
     }
 
-    /* -u is a verdict on the key alone, with no byte tie-break, and it is transitive: all
-     * the lines sharing a key form one group no matter where the tie-break put them, and
-     * the first of them in input order is the one kept. Grouping by key first, then taking
-     * each group's earliest line, is what makes 1, 01 and 1.0 one line while still printing
-     * the survivor at the position the key comparison ordered it. */
+    /* -u compares keys only: group by key, keep each group's earliest line in input order. */
     {
         char *seen = NULL; /* one flag per line, cleared as groups are consumed */
         size_t i;
@@ -560,11 +529,7 @@ int sh_sort(sh_textops_fill_fn fill, void *ctx, size_t size, int numeric, int re
                 continue;
             }
             if (uniq) {
-                /* One group per key: every other line with the same key is dropped, and the
-                 * line kept is the group's earliest in the input, not whichever the byte
-                 * tie-break happened to leave first. The whole group is marked, including
-                 * the survivor, so a survivor sitting earlier in the sorted order is not
-                 * emitted a second time when the walk reaches it. */
+                /* Drop all but the key group's earliest line; mark the survivor too. */
                 size_t first = i;
 
                 seen[i] = 1;
@@ -584,8 +549,7 @@ int sh_sort(sh_textops_fill_fn fill, void *ctx, size_t size, int numeric, int re
             }
             if (rc != 0) {
                 free(seen);
-                /* A sink that stops is the caller's answer channel closing, which is not
-                 * the tool's own failure; ENOMEM says the answer could not be delivered. */
+                /* A stopping sink is not the tool's failure; ENOMEM means the answer was lost. */
                 errno = ENOMEM;
                 status = -1;
                 goto out;
@@ -604,8 +568,7 @@ out:
     return status;
 }
 
-/* Whether one collapsed run is printed: -d keeps runs of two or more, -u runs of one, and
- * asking for both keeps nothing. The count is passed out so -c can prefix it. */
+/* Whether a run is printed: -d keeps 2 or more, -u exactly 1, both nothing; count out for -c. */
 static int run_shown(int dups_only, int singles_only, unsigned long count)
 {
     if (dups_only && singles_only) {
@@ -661,8 +624,7 @@ int sh_uniq(sh_textops_fill_fn fill, void *ctx, size_t size, int show_count,
     }
     reader_init(&r, nxt, SH_TEXTOPS_LINE_MAX, scratch, FILL_CHUNK);
 
-    /* Only the run in hand is held: a line is compared with the one before it, so a long
-     * file costs one line of memory rather than the file. */
+    /* Only the run in hand is held, so a long file costs one line of memory. */
     for (;;) {
         int done = 0;
         ssize_t len = reader_line(&r, fill, ctx, &done);
