@@ -70,6 +70,21 @@
   - The libraries are `ssh`, `ssl`, `crypto`, `z` (libssh's compression path) and `pthread` (libssh's `pthread.c`; the SDK ships `libpthread.a`), plus `SceAppMgr_stub` and `SceCommonDialog_stub`. The last two look unrelated to SSH: vita2d's shared-framebuffer path references them, and omitting either breaks the link. `ScePower_stub` is the idle-timer tick that keeps the device awake while the server runs. `png` and `bz2` are deliberately absent from the server, since nothing there pulls vita2d's image loaders.
   - libssh2 and libssh never mix: the client links only libssh2, the server only libssh.
 
+## libcurl portlib (HTTPS downloads; not linked into an app yet)
+
+- `libs/curl/VITABUILD` and `setup:curl` in `taskfiles/setup.yml` are two copies of one recipe and must be edited together, including the `ac_cv_*` overrides. `pkgver=` and `sha256sums=` are read by the task, and it refuses a tarball that does not match. Only `lib/` and `include/` are built and installed (no curl tool), http and https only, static only. `setup:curl` is part of `setup:portlibs`, and `libcurl.a` is a source of `task build`.
+- The version is pinned at 8.17.0 because curl removed OpenSSL 1.1.1 support in 8.18.0 (its `docs/DEPRECATE.md`) and the SDK's OpenSSL port is 1.1.1. A bump past 8.17.x means moving the OpenSSL port first.
+- Each override looks tidy-able and is not:
+  - `ac_cv_header_stdatomic_h=no`: the SDK's `stdatomic.h` is clang's and uses `__c11_atomic_*` builtins gcc lacks, so `easy_lock.h` fails to compile.
+  - `ac_cv_func_pipe2=no ac_cv_func_pipe=no ac_cv_func_eventfd=no`: configure's checks only link, the Vita libc has stubs, and the headers do not declare `pipe2`.
+  - `curl_disallow_socketpair=yes`: `--disable-socketpair` only defines `CURL_DISABLE_SOCKETPAIR` and the link check still sets `HAVE_SOCKETPAIR`, so with unix sockets off `socketpair.h` stops at `#error "unsupported Unix domain and socketpair build combo"`. The `ac_cv_func_socketpair` cache variable is not what that check reads.
+  - The `env -u CPPFLAGS ... PKG_CONFIG_*` scrub and `--with-openssl=$VITASDK/arm-vita-eabi` are the same Homebrew-OpenSSL defence as libssh2. The task asserts `USE_OPENSSL` in `lib/curl_config.h` and that no host path reached the flags rather than trusting configure's output.
+- Settled on a device (work Vita, 2026-11-17, scratch probe on a 1 MB-stack thread, network brought up with `src/network.c`):
+  - Name resolution: the blocking resolver is right. libc `getaddrinfo()` and `gethostbyname()` both resolve through sceNet with no extra setup, so no threaded resolver or c-ares is needed.
+  - CA store: libcurl built without a CA path fails every HTTPS request with `unable to get local issuer certificate (20)`, so `CURLOPT_CAINFO` must always be set. `vs0:data/external/cert/CA_LIST.cer` (315 KB, concatenated PEM with `#SCEI Root CA` comment lines) verified `https://github.com/` with HTTP 200, so the system store needs nothing shipped. curl's own `cacert.pem` (200 KB) in `ux0:data/` also verified, and is the fallback if a firmware lacks the system file.
+  - `curl_global_init()` and a TLS handshake against OpenSSL 1.1.1t run fine on a `sceKernelCreateThread` thread.
+- Nothing links libcurl yet. An app that does will need `curl ssl crypto z` plus `SceNet_stub` and `SceNetCtl_stub`, and must not also link libssh2 (libcurl is built without it, so the two do not mix).
+
 ## Source quirks
 
 - Two user apps and one updater, with explicit `add_executable` lists in `CMakeLists.txt`: the client (`ssh_client_vita`, entry `src/main.c`, links libssh2), the server (`ssh_server_vita`, entry `src/sshd.c`, links libssh with `-DWITH_SERVER`), and the minimal updater (`ssh_updater_vita`, `src/sshd_updater.c` plus `src/vpk_promote.c`). New `.c` files must be added to the right list by hand; nothing globs. The client list is `main.c`, `input.c`, `network.c`, `ssh_client.c`, `shell.c`, `text.c`, `menu.c`. The server list is `sshd.c`, `sshd_session.c`, `sshd_builtins.c`, `sshd_hostkey.c`, `sftp_server.c`, `sh_path.c`, `sh_grep.c`, `sh_headtail.c`, `sh_textops.c`, `sh_stdin.c`, `vita_shims.c`, `network.c`, `sshd_vpk.c`, `vpk_promote.c`, `vpk_zip.c`, `vpk_head.c`, plus the generated `build/vpk_head_template.c`. `src/network.c` is shared by client and server; only server and updater share `src/vpk_promote.c`.

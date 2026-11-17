@@ -59,6 +59,7 @@ tasks:
       # is the one the server target alone links; it was missing here.
       - '{{.VITASDK}}/arm-vita-eabi/lib/libssh2.a'
       - '{{.VITASDK}}/arm-vita-eabi/lib/libssh.a'
+      - '{{.VITASDK}}/arm-vita-eabi/lib/libcurl.a'
       - '{{.VITASDK}}/arm-vita-eabi/lib/libssl.a'
       - '{{.VITASDK}}/arm-vita-eabi/lib/libcrypto.a'
       - '{{.VITASDK}}/share/vita.toolchain.cmake'

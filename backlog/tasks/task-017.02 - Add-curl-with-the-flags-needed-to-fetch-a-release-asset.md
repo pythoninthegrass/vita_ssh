@@ -4,7 +4,7 @@ title: Add curl with the flags needed to fetch a release asset
 status: To Do
 assignee: []
 created_date: '2026-11-17 03:29'
-updated_date: '2026-11-17 03:38'
+updated_date: '2026-11-17T16:44:00Z'
 labels:
   - shell
   - network
@@ -62,15 +62,17 @@ Security and platform points that are not optional:
 - [ ] #11 curl with no URL prints usage and exits nonzero; a malformed or unsupported URL reports which part was rejected.
 <!-- AC:END -->
 
-## Implementation Notes
-
-<!-- SECTION:NOTES:BEGIN -->
-Partial downloads: when TASK-019.01 lands, curl's partial/temporary file resolves through the path layer to /tmp (the ur0: RAM disk) rather than sitting next to the final file, and the size cap has to account for the tmp bound measured in that task.
-<!-- SECTION:NOTES:END -->
-
 ## Definition of Done
 <!-- DOD:BEGIN -->
 - [ ] #1 task build produces both VPKs
 - [ ] #2 Verified on a device, including the wifiturbo.suprx acceptance run
 - [ ] #3 README documents the supported flags and the CA store arrangement
 <!-- DOD:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Partial downloads: when TASK-019.01 lands, curl's partial/temporary file resolves through the path layer to /tmp (the ur0: RAM disk) rather than sitting next to the final file, and the size cap has to account for the tmp bound measured in that task.
+
+From TASK-017.01 device probe (work Vita): libcurl has no default CA path, so CURLOPT_CAINFO must always be set or every HTTPS request fails with verify error 20. Use vs0:data/external/cert/CA_LIST.cer (verified, HTTP 200) with ux0:data/cacert.pem as the fallback. getaddrinfo works as is. Link set and details are in AGENTS.md under 'libcurl portlib'.
+<!-- SECTION:NOTES:END -->

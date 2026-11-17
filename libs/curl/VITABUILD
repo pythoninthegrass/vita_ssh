@@ -1,0 +1,39 @@
+pkgname=curl
+pkgver=8.17.0
+pkgrel=1
+url="https://curl.se"
+source=("https://curl.se/download/curl-8.17.0.tar.xz")
+
+sha256sums=('955f6e729ad6b3566260e8fef68620e76ba3c31acf0a18524416a185acf77992')
+
+# 8.17.0 is pinned because curl 8.18.0 removed OpenSSL 1.1.1 support and the
+# SDK's OpenSSL port is 1.1.1. Only lib/ and include/ are built: the curl tool
+# is not wanted, the shell builtins drive libcurl directly.
+# ac_cv_header_stdatomic_h=no: the SDK's stdatomic.h is clang's and uses
+# __c11_atomic_* builtins gcc lacks, so easy_lock.h fails to compile with it.
+build() {
+  cd curl-$pkgver
+  ac_cv_header_stdatomic_h=no ac_cv_func_pipe2=no ac_cv_func_pipe=no ac_cv_func_eventfd=no curl_disallow_socketpair=yes ./configure \
+    --host=arm-vita-eabi \
+    --prefix=$VITASDK/arm-vita-eabi \
+    --disable-shared --enable-static \
+    --with-openssl=$VITASDK/arm-vita-eabi \
+    --with-zlib=$VITASDK/arm-vita-eabi \
+    --disable-threaded-resolver --disable-ares \
+    --disable-ipv6 --disable-unix-sockets --disable-socketpair \
+    --disable-ldap --disable-ldaps --disable-rtsp --disable-dict --disable-telnet \
+    --disable-tftp --disable-pop3 --disable-imap --disable-smb --disable-smtp \
+    --disable-gopher --disable-mqtt --disable-ftp --disable-file \
+    --disable-manual --disable-docs --disable-ntlm --disable-netrc \
+    --without-libpsl --without-libidn2 --without-nghttp2 --without-brotli \
+    --without-zstd --without-libssh2 --without-libssh
+
+  make -C lib -j$(nproc)
+}
+
+package() {
+  cd curl-$pkgver
+  make -C lib DESTDIR=$pkgdir install
+  make -C include DESTDIR=$pkgdir install
+  rm -rf $pkgdir/$prefix/share
+}

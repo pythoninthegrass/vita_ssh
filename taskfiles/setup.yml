@@ -34,7 +34,7 @@ tasks:
       - '"{{.VITASDK}}/bin/arm-vita-eabi-gcc" --version | head -1 || { echo "vitasdk not found at {{.VITASDK}} (install it or export VITASDK; see https://docs.vitasdk.org)" >&2; exit 1; }'
 
   portlibs:
-    desc: "Build and install OpenSSL 1.1.1 vita port, libssh2 and libssh into the SDK"
+    desc: "Build and install OpenSSL 1.1.1 vita port, libssh2, libssh and libcurl into the SDK"
     summary: |
       Ordered on purpose: libssh2 and libssh both configure against the OpenSSL
       built here, so these run as sequential cmds rather than parallel deps.
@@ -43,10 +43,12 @@ tasks:
         task --force setup:openssl
         task --force setup:libssh2
         task --force setup:libssh
+        task --force setup:curl
     cmds:
       - task: openssl
       - task: libssh2
       - task: libssh
+      - task: curl
 
   openssl:
     desc: "Build SonicMastr/vita-openssl3 (OpenSSL_1_1_1-vita) and install it into $VITASDK"
@@ -266,4 +268,90 @@ tasks:
         test -f "{{.VITASDK}}/arm-vita-eabi/lib/libssh.a" || \
           { echo "libssh.a missing after install" >&2; exit 1; }
         # The VITABUILD ships no man pages; neither does the SDK need them.
+        rm -rf "{{.VITASDK}}/arm-vita-eabi/share/man"
+
+  curl:
+    desc: "Build libcurl against the SDK's OpenSSL port and install it into $VITASDK"
+    summary: |
+      Usage: task setup:curl [--force]
+
+      Mirrors libs/curl/VITABUILD: configure --host=arm-vita-eabi against the
+      SDK's OpenSSL and zlib, static only, http and https only. Only lib/ and
+      include/ are built and installed; the curl tool is not wanted. The version
+      is 8.17.0 because curl 8.18.0 dropped OpenSSL 1.1.1 and the SDK's port is
+      1.1.1. Host CPPFLAGS/LDFLAGS/PKG_CONFIG_* are unset for the same
+      Homebrew-OpenSSL reason as libssh2. Skips itself once the SDK has
+      libcurl; --force rebuilds.
+    preconditions:
+      - sh: test -f "{{.VITASDK}}/arm-vita-eabi/lib/libssl.a"
+        msg: "OpenSSL port not installed in the SDK yet (run: task setup:openssl)"
+    status:
+      - test -f {{.VITASDK}}/arm-vita-eabi/lib/libcurl.a
+      - test -f {{.VITASDK}}/arm-vita-eabi/include/curl/curl.h
+    vars:
+      # The version and digest the VITABUILD pins, e.g. 8.17.0.
+      CURL_VERSION:
+        sh: sed -n 's/^pkgver=//p' libs/curl/VITABUILD | head -1
+      CURL_SHA256:
+        sh: sed -n "s/^sha256sums=('\([0-9a-f]*\)')/\1/p" libs/curl/VITABUILD | head -1
+    cmds:
+      - |
+        set -eu
+        # configure --host=arm-vita-eabi probes for arm-vita-eabi-gcc on PATH; the root
+        # taskfile cannot export it (process environment outranks Taskfile env values).
+        export PATH="{{.VITASDK}}/bin:$PATH"
+        root="$PWD"
+        base="$root/{{.PORTLIBS_DIR}}"
+        ver="{{.CURL_VERSION}}"
+        tarball="curl-$ver.tar.xz"
+        src="$base/curl-$ver"
+        build="$base/curl-build"
+        stage="$base/stage-curl"
+        mkdir -p "$base"
+        [ -f "$base/$tarball" ] || \
+          curl -sfL -o "$base/$tarball" "https://curl.se/download/$tarball"
+        echo "{{.CURL_SHA256}}  $base/$tarball" | shasum -a 256 -c --status || \
+          { echo "sha256 mismatch for $tarball (expected {{.CURL_SHA256}})" >&2; exit 1; }
+        # Out-of-tree and wiped first: a cached Makefile keeps the --prefix it was
+        # configured with, which is how a bad run poisons later ones.
+        rm -rf "$src" "$build" "$stage"; mkdir -p "$build"
+        tar xf "$base/$tarball" -C "$base"
+        cd "$build"
+        # ac_cv_header_stdatomic_h=no: the SDK's stdatomic.h is clang's and uses
+        # __c11_atomic_* builtins gcc lacks, so easy_lock.h fails to compile with it.
+        env -u CPPFLAGS -u CFLAGS -u CXXFLAGS -u LDFLAGS -u LIBS \
+          -u PKG_CONFIG_PATH -u PKG_CONFIG_LIBDIR \
+          PKG_CONFIG_LIBDIR={{.VITASDK}}/arm-vita-eabi/lib/pkgconfig \
+          ac_cv_header_stdatomic_h=no ac_cv_func_pipe2=no ac_cv_func_pipe=no ac_cv_func_eventfd=no curl_disallow_socketpair=yes \
+          "../curl-$ver/configure" --host=arm-vita-eabi \
+            --prefix="$stage{{.VITASDK}}/arm-vita-eabi" \
+            --disable-shared --enable-static \
+            --with-openssl={{.VITASDK}}/arm-vita-eabi \
+            --with-zlib={{.VITASDK}}/arm-vita-eabi \
+            --disable-threaded-resolver --disable-ares \
+            --disable-ipv6 --disable-unix-sockets --disable-socketpair \
+            --disable-ldap --disable-ldaps --disable-rtsp --disable-dict --disable-telnet \
+            --disable-tftp --disable-pop3 --disable-imap --disable-smb --disable-smtp \
+            --disable-gopher --disable-mqtt --disable-ftp --disable-file \
+            --disable-manual --disable-docs --disable-ntlm --disable-netrc \
+            --without-libpsl --without-libidn2 --without-nghttp2 --without-brotli \
+            --without-zstd --without-libssh2 --without-libssh > configure.log 2>&1 \
+            || { tail -20 configure.log >&2; exit 1; }
+        # configure's prose is not trusted: assert the TLS backend and that the
+        # compile and link flags it recorded point into the SDK, not a host OpenSSL.
+        grep -q 'SSL:  *enabled (OpenSSL)' configure.log \
+          || { grep -E 'SSL|OpenSSL' configure.log >&2; exit 1; }
+        grep -q '^#define USE_OPENSSL 1' lib/curl_config.h \
+          || { echo "USE_OPENSSL not defined in curl_config.h" >&2; exit 1; }
+        grep -E '^(CPPFLAGS|LDFLAGS|LIBS) ' lib/Makefile | grep -E '/(opt/homebrew|usr/local)' >&2 \
+          && { echo "host OpenSSL path leaked into the libcurl build" >&2; exit 1; }
+        make -C lib -j"{{.JOBS}}" > build.log 2>&1 || { tail -30 build.log >&2; exit 1; }
+        make -C lib install > install.log 2>&1 || { tail -30 install.log >&2; exit 1; }
+        make -C include install >> install.log 2>&1 || { tail -30 install.log >&2; exit 1; }
+        rm -f "$stage{{.VITASDK}}/arm-vita-eabi/lib/libcurl.la"
+        cp -Rf "$stage{{.VITASDK}}/arm-vita-eabi/." "{{.VITASDK}}/arm-vita-eabi/"
+        # An archive-less build is the failure that matters: every step above can
+        # exit 0 and leave the app link later unable to find curl_easy_init.
+        test -f "{{.VITASDK}}/arm-vita-eabi/lib/libcurl.a" || \
+          { echo "libcurl.a missing after install" >&2; exit 1; }
         rm -rf "{{.VITASDK}}/arm-vita-eabi/share/man"
