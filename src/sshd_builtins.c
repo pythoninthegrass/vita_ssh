@@ -1447,13 +1447,6 @@ static int ht_command(sh_session_t *s, const char *cmd, int is_tail, int argc,
     for (; i < argc && files < MAX_ARGS; i++) {
         targets[files++] = argv[i];
     }
-    if (files > 1) {
-        /* Several files at once would need each answer held while the next is produced,
-         * and a tool that quietly printed only the first is worse than one that says no.
-         * A loop over names belongs with the pipes in TASK-015.02. */
-        sh_eprintf(s, "%s: only one file is read at a time\n", cmd);
-        return 2;
-    }
 
     if (files == 0) {
         if (follow) {
@@ -1465,37 +1458,59 @@ static int ht_command(sh_session_t *s, const char *cmd, int is_tail, int argc,
     }
 
     {
-        sh_target_t t;
-        struct stat st;
-        int fd, r;
+        int status = 0;
+        int k;
 
-        if (resolve_arg(s, cmd, targets[0], &t) != 0) {
-            return 1;
+        /* Each file is streamed in turn and none is held while the next is read, which
+         * is why several names cost no more memory than one. With more than one, the
+         * coreutils header goes ahead of each answer; with one it would only be noise.
+         * A file that cannot be opened is reported and the rest are still printed, and
+         * the run is then an error -- a partial answer the user cannot tell is partial
+         * would be the worse result. */
+        for (k = 0; k < files; k++) {
+            sh_target_t t;
+            struct stat st;
+            int fd, r;
+
+            if (files > 1) {
+                sh_printf(s, "==> %s <==\n", targets[k]);
+            }
+            if (resolve_arg(s, cmd, targets[k], &t) != 0) {
+                status = 1;
+                continue;
+            }
+            if (t.kind == SH_TARGET_ROOT || t.kind == SH_TARGET_PSEUDO_DIR) {
+                sh_eprintf(s, "%s: %s: Is a directory\n", cmd, targets[k]);
+                status = 1;
+                continue;
+            }
+            if (stat_target(&t, &st) == 0 && S_ISDIR(st.st_mode)) {
+                sh_eprintf(s, "%s: %s: Is a directory\n", cmd, targets[k]);
+                status = 1;
+                continue;
+            }
+            fd = sh_target_open(&t);
+            if (fd == -1) {
+                sh_eprintf(s, "%s: %s: %s\n", cmd, targets[k], strerror(errno));
+                status = 1;
+                continue;
+            }
+            if (follow) {
+                /* -f waits for the file to grow, and waiting for a file is the one thing
+                 * a command in this server's single poll loop cannot do: the sleep would
+                 * park every other session with it. Saying so beats pretending. */
+                sh_eprintf(s, "%s: %s: following a file is not supported\n", cmd,
+                           targets[k]);
+                sh_target_close(fd);
+                return 1;
+            }
+            r = ht_run(s, cmd, is_tail, by_bytes, want, fd, targets[k]);
+            sh_target_close(fd);
+            if (r != 0) {
+                status = r;
+            }
         }
-        if (t.kind == SH_TARGET_ROOT || t.kind == SH_TARGET_PSEUDO_DIR) {
-            sh_eprintf(s, "%s: %s: Is a directory\n", cmd, targets[0]);
-            return 1;
-        }
-        if (stat_target(&t, &st) == 0 && S_ISDIR(st.st_mode)) {
-            sh_eprintf(s, "%s: %s: Is a directory\n", cmd, targets[0]);
-            return 1;
-        }
-        fd = sh_target_open(&t);
-        if (fd == -1) {
-            sh_eprintf(s, "%s: %s: %s\n", cmd, targets[0], strerror(errno));
-            return 1;
-        }
-        r = ht_run(s, cmd, is_tail, by_bytes, want, fd, targets[0]);
-        sh_target_close(fd);
-        if (follow) {
-            /* -f waits for the file to grow, and waiting for a file is the one thing a
-             * command in this server's single poll loop cannot do: the sleep would park
-             * every other session with it. Saying so beats pretending to follow. */
-            sh_eprintf(s, "%s: %s: following a file is not supported\n", cmd,
-                       targets[0]);
-            return 1;
-        }
-        return r;
+        return status;
     }
 }
 
