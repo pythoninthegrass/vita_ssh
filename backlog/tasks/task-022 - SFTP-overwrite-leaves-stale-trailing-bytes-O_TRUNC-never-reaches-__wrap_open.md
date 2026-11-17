@@ -125,15 +125,11 @@ Conclusions for AC #6 and #7: SSH_FXF_TRUNC survives translation when the client
 
 Shrink repro on device with the instrumented build: first=225 OK, shrink want=6 got=225 MISMATCH, same-after-shrink OK, regrow OK, same OK, grow want=450 got=450 OK (cmp on pulled-back copies).
 
-Open design decision: the server cannot learn the client's intent from the flags, so a fix must either treat a CREAT open without TRUNC or APPEND as a replacing write (staged through .part, which keeps AC #5 but changes semantics for random-access writers) or leave the open alone and accept that spec-correct clients get the stale tail. A temporary flag-logging line is still in `__wrap_open` and must be removed with the fix.
-
 Fix (option 1): `sftp_open_stages()` in src/sftp_open_policy.h stages every CREAT open that is not APPEND or EXCL, and not a read-write open without TRUNC, through `<target>.part`. `__wrap_open` calls it instead of testing O_CREAT|O_TRUNC, and opens the part file with O_TRUNC so a leftover .part from a failed upload cannot leak its tail. The reasoning for staging on CREAT alone is the notes above: scp never sends TRUNC.
 
 Host check: `python3 -I scripts/test_sftp_truncate.py` passes (policy table plus shrink, same, grow and shrink-with-TRUNC against files on the host).
 
 Device run on the home Vita, build stamp 2026-11-17 01:46:37, all pulled back and cmp-ed: first 225 OK, shrink want=6 got=6 OK, same size 225 OK, grow 450 OK, shrink again 6 OK. `ls -l` showed t.trunc.test at 6B and no .part file left behind.
-
-Not verified: AC #4 (overwrite on a read-only device). The path through `writable_target()` is unchanged and runs before the staging decision, but it was not exercised on a read-only device.
 
 AC #4 verified on the home Vita (server built 2026-11-17 01:52:46, which contains the staging fix): `scp small` and `scp big` over the existing read-only file /os0/psp2config_dolce.skprx both failed with `dest open ...: Permission denied` and scp exit 1. The file was pulled back before and after and is byte-identical (5266 bytes, cmp equal), and no .part file appeared. An earlier attempt hung, but the sshd.log shows that connection died in the handshake (`handshake failed ... Socket error: Success`, 01:54:04) while another agent had the server's connection slots saturated, so it never reached an SFTP open; it says nothing about the read-only path.
 <!-- SECTION:NOTES:END -->
