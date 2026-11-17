@@ -15,6 +15,11 @@
 # LAN, with the client sitting where it will be for every later run.
 set -u
 
+# Apple's OpenSSH ahead of Homebrew's: brew's ssh cannot reach the Vita, and brew
+# is first in PATH on the mini, so a baseline run that trusts PATH would measure
+# the wrong client. See scripts/smoke.sh for the same guard.
+export PATH="/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
+
 usage() {
   sed -n '2,15p' "$0"
 }

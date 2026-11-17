@@ -16,6 +16,12 @@
 # sce_sys/livearea/contents/bg0.png has no SVG behind it yet (TASK-009): it is committed art,
 # so it is verified and can be re-quantized, but it is not rendered here.
 set -euo pipefail
+
+# System dirs first, Homebrew after them, so any tool both provides resolves the
+# same way here as in scripts/smoke.sh. brew stays on PATH: rsvg-convert and uv
+# come from it and have no system equivalent.
+export PATH="/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
+
 cd "$(dirname "$0")/.."
 
 QUANTIZER=${QUANTIZER:-pillow}

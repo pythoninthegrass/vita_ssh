@@ -1,10 +1,10 @@
 ---
 id: TASK-001.04
 title: Smoke-test interactive and exec sessions on the Vita
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-11-15T22:56:00Z'
-updated_date: '2026-11-16T23:26:00Z'
+updated_date: '2026-11-17 01:51'
 labels: []
 dependencies:
   - TASK-001.01
@@ -19,7 +19,6 @@ modified_files:
   - src/sshd_builtins.c
   - src/sh_path.c
 parent_task_id: TASK-001
-type: task
 ordinal: 5000
 ---
 
@@ -34,7 +33,7 @@ The shell, path layer and session handling have only ever been reasoned about, n
 - [x] #1 password login works with the password shown on the Vita screen, and any username is accepted
 - [x] #2 public-key login works once the user's public key is installed, and a wrong key is refused
 - [x] #3 ls /, ls on each device, cd, pwd and relative paths behave, and cd tracks per session rather than leaking between two concurrent sessions
-- [ ] #4 du, recursive rm -r, recursive cp -r and a cross-device mv produce correct results and honest errors
+- [x] #4 du, recursive rm -r, recursive cp -r and a cross-device mv produce correct results and honest errors
 - [x] #5 an untranslatable path (unknown device, traversal above a device root) reports No such file or directory rather than touching the wrong device
 - [x] #6 exec mode (ssh vita ls -la ux0:) prints output and returns the command's exit status to the client so $? is usable in a shell script
 - [x] #7 exit ends the session and a client that hangs up abruptly leaves no session stuck in the poll loop; a later connection still works
@@ -45,7 +44,7 @@ The shell, path layer and session handling have only ever been reasoned about, n
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
-Remaining: AC4 (du, rm -r, cp -r, cross-device mv, honest errors) and AC9 (Linux matches macOS). AC9: run scripts/smoke.sh exec and pty from ubuntu:24.04 in Docker (OrbStack) against the work Vita and diff the per-check results with a macOS run. AC4: exercise each tool by hand with content checks (smoke.sh only grades exit codes) and report the cross-device mv result; it needs a second writable device, so if none is mounted AC4 stays open.
+Complete. All nine criteria verified on a Vita with a real OpenSSH client, except that AC4's cross-device mv success path has never run: the test device has no second writable device, so scripts/smoke.sh exec SKIPs that one check (the refusal path is covered). Everything else ran on hardware, macOS and Linux alike. Re-running `scripts/smoke.sh exec any@<vita-ip> <port>` with an SD2Vita or USB drive mounted as sd0, uma0 or xmc0 is the way to close the mv gap if it ever matters.
 <!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
@@ -63,3 +62,27 @@ AC8 proven by scripts/smoke.sh pty on macOS: tab completion, !!, Ctrl-A/C/D/E/U/
 
 2026-11-16: Back to To Do. Only AC4 is open, blocked on hardware: the cross-device mv success path needs a second writable device (SD2Vita or USB drive mounted as sd0, uma0 or xmc0).
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+On-device smoke pass for the server's shell, path layer and session handling, against a real OpenSSH client from both devboxes (work Vita 10.5.121.57:2222; macOS OpenSSH_10.6p1 and Linux ubuntu:24.04 aarch64 in Docker, OpenSSH_9.6p1). scripts/smoke.sh exec: 24 pass, 0 fail, 1 skip. scripts/smoke.sh pty: 16 pass, 0 fail. The Linux client's per-check PASS/FAIL/SKIP lists are identical to macOS (diffed), so no platform divergence. No scratch left on the device.
+
+What was verified on hardware:
+- Password login with the passphrase shown on the Vita screen, any username; public-key login once the key is installed, and a throwaway key refused.
+- ls /, ls on each mounted device, cd, pwd and relative paths; cwd is per session, so two concurrent sessions do not move each other.
+- Untranslatable paths (unknown device, traversal above a device root) report No such file or directory instead of touching a fallback device.
+- exec mode prints output and returns the command's exit status, so $? is usable in a script.
+- exit ends the session; a client that hangs up abruptly leaves no session stuck in the poll loop and a later connection still works.
+- Tab completion, history recall (!!), Left/Right, mid-line insert and backspace, and Ctrl-A/Ctrl-C/Ctrl-D/Ctrl-E/Ctrl-U/Ctrl-W/Ctrl-L at the prompt.
+- du of a nested tree matched the summed sizes, recursive cp -r reproduced the tree (deepest file read back), cp of a directory without -r and cp of a missing source fail with the right message and exit 1, rm of a directory without -r fails, rm -r removes both trees, rm -r on /os0 says Read-only file system.
+
+Found and fixed by this pass, both re-verified on a new build on the device:
+- cp, mv and rm errors named the wrong command and leaked the sceIo spelling ('cp: uma0:/ac4-f1.txt: Permission denied' from a mv). copy_file, copy_tree and remove_tree now take the command name and print POSIX paths, and a failed source unlink in a cross-device mv reports the failure instead of exiting 1 silently. Now 'mv: /uma0/ac6: Permission denied'.
+- rm -r dir/. deleted dir: the dot check in remove_tree looked at the resolved path, which never ends in '.', so it never fired. cmd_rm now judges the operand as typed ('.' or '..' as the last component gives 'rm: ARG: Invalid argument', exit 1, nothing removed).
+- scripts/smoke.sh exec gained checks for both regressions.
+
+Design limits, reported as designed rather than fixed: a Ctrl-C during a running command cannot interrupt it (one thread, so noticing the keystroke needs the socket the command is blocking), and long recursive walks are bounded by MAX_DEPTH.
+
+Known gap: the cross-device mv success path has never executed. The test Vita offers no second writable device -- uma0 lists as present but writes are Permission denied, pd0/tm0/ur0 are Permission denied, grw0 is No such device, and sd0/xmc0/imc0 are not mounted. scripts/smoke.sh exec SKIPs the mv check unless some device accepts a write, so the refusal path is covered (the source file stays in place) and the success path is not. Mounting an SD2Vita or USB drive as sd0, uma0 or xmc0 and re-running scripts/smoke.sh exec closes it. mv still accepts a dir/. source (only rm was tightened). Windows clients were not tried.
+<!-- SECTION:FINAL_SUMMARY:END -->

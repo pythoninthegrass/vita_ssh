@@ -22,6 +22,12 @@
 # allowlists binaries and its ssh cannot leave the machine at all.
 set -u
 
+# Apple's OpenSSH ahead of Homebrew's. brew's ssh reports "No route to host" for
+# the Vita where /usr/bin/ssh connects, and brew is first in PATH on the mini, so
+# a run that trusts PATH grades the wrong client. brew stays on PATH behind the
+# system dirs, for whatever else the script shells out to.
+export PATH="/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
+
 usage() {
   sed -n '2,10p' "$0"
 }
@@ -71,6 +77,8 @@ run_exec() {
   # pwd run in one live session.
   $V "cd /ux0/data"              >/dev/null 2>&1; RC=$?; check "cd absolute (device path)" 0 "$RC"
   $V "cd /ux0"                   >/dev/null 2>&1; RC=$?; check "cd device root"            0 "$RC"
+  $V "cd /os0"                   >/dev/null 2>&1; RC=$?; check "cd read-only device root"  0 "$RC"
+  $V "cd /vs0"                   >/dev/null 2>&1; RC=$?; check "cd between devices"        0 "$RC"
   $V "cd"                        >/dev/null 2>&1; RC=$?; check "bare cd lands home"   0 "$RC"
 
   # --- AC5: untranslatable paths are honest errors ------------------------

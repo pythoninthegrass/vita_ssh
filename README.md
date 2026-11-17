@@ -93,7 +93,7 @@ Honest list, because the useful part of a README is telling you what will disapp
 A libssh-based server: `ssh` at the Vita from a devbox and you get a shell whose filesystem
 is the Vita's own devices.
 
-> **Status.** The shell, exec mode and SFTP have been smoke-tested on a device with `scripts/smoke.sh` (`TASK-001.04`, `TASK-002`), run from a macOS devbox over OpenSSH. A few edge cases are still unproven; see Known issues.
+> **Status.** The shell, exec mode and SFTP have been smoke-tested on a device with `scripts/smoke.sh` (`TASK-001.04`, `TASK-002`), from both a macOS devbox (OpenSSH 10.6) and a Linux one (OpenSSH 9.6), which agree check for check. A few edge cases are still unproven; see Known issues.
 
 ### On the Vita's screen
 
@@ -437,7 +437,9 @@ Client:
 Server:
 
 - SFTP cannot set permissions, owners or file times, and the legacy scp protocol (`scp -O`) is not supported; see "Copying files with sftp and scp" for what that means in practice. There is no statvfs over SFTP.
-- The exec and pty checks have been run from macOS only; a Linux devbox has not been compared (`TASK-001.04`). The sftp and scp checks match between macOS (OpenSSH 10.6) and Linux (OpenSSH 9.6). The recursive tools and a cross-device `mv` on awkward input are not yet covered by the smoke tests, nor is a Ctrl-C in the middle of a recursive `rm`.
+- The exec, pty, sftp and scp checks match between macOS (OpenSSH 10.6) and Linux (OpenSSH 9.6); Windows clients have not been tried.
+- The one server path never run on hardware is a cross-device `mv` that succeeds. The test device has no second writable device, so `scripts/smoke.sh` skips that check and only the refusal is covered — the source stays put and the error names the right command.
+- A running command cannot be interrupted. The server is one thread, so the keystroke that would stop it arrives on the socket the command is blocking; Ctrl-C at the prompt works, Ctrl-C during a `cp -r` does not. Long recursive walks are bounded by a depth limit instead.
 - The bootstrap password is compared in non-constant time, and it exists to be replaced.
   Use `authorized_keys` for anything you care about.
 - If no data directory is writable, the host key lives in memory and every boot introduces
@@ -466,9 +468,8 @@ Unclaimed, self-contained, and reasonable to start on:
 | `TASK-007` | alternate screen and scroll regions, so `top` and `vim` work |
 | `TASK-008` | touch selection in the menus and profile list |
 | `TASK-009` | SVG sources for the client's tile |
-| `TASK-001.05` | dim the server's screen while it runs (needs the brightness call found first; the public ScePower stub has none) |
-| `TASK-001.06` | a full-screen text editor builtin for the server's shell |
-| `TASK-001.07` | a `vpk install` builtin that installs a build over SSH, so the USB and VitaShell loop goes away |
+| `TASK-010` | dim the server's screen while it runs (needs the brightness call found first; the public ScePower stub has none) |
+| `TASK-011` | a full-screen text editor builtin for the server's shell |
 
 Ground rules, all of them inherited from how this repo is built:
 

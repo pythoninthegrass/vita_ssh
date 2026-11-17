@@ -1,5 +1,5 @@
 ---
-id: TASK-001.05
+id: TASK-010
 title: Dim the screen while the server runs
 status: To Do
 assignee: []
@@ -14,7 +14,6 @@ documentation:
 modified_files:
   - src/sshd.c
   - include/sshd.h
-parent_task_id: TASK-001
 priority: low
 type: enhancement
 ordinal: 17000

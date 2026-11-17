@@ -1,24 +1,23 @@
 ---
-id: TASK-001.06
+id: TASK-011
 title: Give the shell a full-screen text editor over SSH
 status: To Do
 assignee: []
 created_date: '2026-11-16T04:27:00Z'
+updated_date: '2026-11-17 01:51'
 labels:
   - shell
   - editor
   - server
 dependencies: []
 references:
-  - TASK-001.05
+  - TASK-010
   - TASK-007
 modified_files:
   - src/sshd_builtins.c
   - src/sshd_session.c
   - include/sshd.h
-parent_task_id: TASK-001
 priority: low
-type: enhancement
 ordinal: 18000
 ---
 

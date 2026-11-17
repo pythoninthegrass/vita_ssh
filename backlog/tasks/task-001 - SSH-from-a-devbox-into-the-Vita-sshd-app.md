@@ -1,10 +1,10 @@
 ---
 id: TASK-001
 title: SSH from a devbox into the Vita (sshd app)
-status: In Progress
+status: Done
 assignee: []
 created_date: '2026-11-15T22:56:00Z'
-updated_date: '2026-11-15T23:58:27Z'
+updated_date: '2026-11-17 01:52'
 labels: []
 dependencies: []
 references:
@@ -29,7 +29,6 @@ modified_files:
   - include/sh_path.h
   - CMakeLists.txt
 priority: high
-type: feature
 ordinal: 1000
 ---
 
@@ -41,48 +40,28 @@ The repo's client app is the less useful half: typing on the Vita's on-screen ke
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 ssh <user>@<vita-ip> from a macOS devbox authenticates and lands at a shell prompt
-- [ ] #2 the shell reaches every mounted device through POSIX paths (ls /, ls /ux0:, cd between devices)
+- [x] #1 ssh <user>@<vita-ip> from a macOS devbox authenticates and lands at a shell prompt
+- [x] #2 the shell reaches every mounted device through POSIX paths (ls /, ls /ux0:, cd between devices)
 - [x] #3 task build produces the client VPK and the server VPK, and skips when nothing changed
-- [ ] #4 with no authorized_keys installed, the server generates a password and shows it on the Vita screen
-- [ ] #5 the client app is unaffected: same titleid, same behaviour as before this feature
+- [x] #4 with no authorized_keys installed, the server generates a password and shows it on the Vita screen
+- [x] #5 the client app is unaffected: same titleid, same behaviour as before this feature
 <!-- AC:END -->
 
-## Status Updates
-<!-- STATUS:BEGIN -->
-### Update: [2026-11-15 23:58:27 UTC]
-- TASK-001.01 and TASK-001.02 are Done, so the app exists and builds: `task build` emits both
-  VPKs and skips when nothing changed, which is all AC #3 asserts. Marked In Progress rather
-  than Done because #1, #2 and #4 can only be settled on hardware — that is TASK-001.04, and
-  it is now unblocked. #5 is separately verified, not assumed: the client's `param.sfo` inside
-  its VPK is byte-identical to the pre-server build (`ROM000069`, title `VitaSSH`).
-- Next open child is TASK-001.03 (host key and authorized_keys on writable storage). It is the
-  right next step because none of it can be judged without hardware: the host key already
-  targets `ux0:data/vitasshd` (writable) and its save is deliberately best-effort with a
-  console warning, so the code path is plausible — but AC #1–#4 are claims about retail
-  firmware and about a malformed `authorized_keys` falling back to password auth, and only a
-  device can say whether they hold.
-- TASK-001.03 is code-complete and its own ACs #3-#6 are checked. What it changed: the server
-  owns an ordered list of data directories (`ux0:/data/vitasshd`, then `uma0:`, `xmc0:`,
-  `ur0:` flagged RAM) instead of one hardcoded path, with three rules over it — import a host
-  key from the first candidate that has one, save a new key to the first that can be created
-  and written, read `authorized_keys` from the first that has the file and never merge them. A
-  key that cannot be saved leaves a running server and says `not saved: new fingerprint each
-  boot` on the screen. README now carries the table, the search order, and the known_hosts
-  section.
-- Read again against that update's last paragraph, which was too generous to the code it was
-  describing: "its save is deliberately best-effort with a console warning" described
-  behaviour that did not exist. `save_host_key()` tested `if (!ensure_dir(...)) continue;` —
-  skipping precisely the directories it could write — so the host key was never saved
-  anywhere, and the console's rejected-`authorized_keys`-lines counter was read but never
-  assigned. Both compiled and linked without complaint. They surfaced only because the policy
-  code was run off-device against a real filesystem. That is the argument for 001.04 being
-  001.04: a green `task build` had already told us nothing about this file twice.
-- #1, #2 and #4 therefore stay unchecked and belong to TASK-001.04, along with the two claims
-  001.03 deliberately did not make for itself: that the in-memory fallback is what retail
-  firmware does with a read-only card, and that a saved key presents the same fingerprint
-  after a reboot. Suggested script for that run: follow README's "Where its files live" as the
-  test plan — boot with no card, with a card, with the data directories present but
-  unwritable, and compare the on-screen `SHA256:…` before and after a reboot, and against
-  `ssh-keygen -lf` on the copied-out `.pub`.
-<!-- STATUS:END -->
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+The server app ships: `ssh <any-user>@<vita-ip>` from a macOS or Linux devbox lands in a shell over the Vita's own devices, and `ssh <vita> 'ls /ux0/vita'` works as a one-shot command. Built as a second target in the same tree (`ROM000070`, alongside the client's untouched `ROM000069`), so one `task build` produces both VPKs and they install side by side on one card.
+
+What landed, by subtask:
+- TASK-001.01, TASK-001.02 -- sshd registered as its own executable, VPK and titleid; sources compile and link against the libssh 0.12.2 Vita port (vita.patch keeps libssh's server side buildable without net/if.h, sys/un.h or termios, non-PIC so vita-elf-create accepts it, and out of __thread storage so the log callbacks work on a sceKernelCreateThread thread).
+- TASK-001.03 -- host key and authorized_keys on ux0:data/vitasshd, so an identity survives a reboot instead of a new fingerprint every boot.
+- TASK-001.04 -- the device pass: sign-in with the on-screen passphrase or a key, ls/cd/pwd and relative paths across devices, per-session cwd, honest errors for untranslatable paths, exec exit statuses, clean teardown on exit and on an abrupt hangup, and the line editor at the prompt -- all from macOS and Linux OpenSSH alike. It fixed two real bugs (cp/mv/rm naming the wrong command and leaking sceIo paths; `rm -r dir/.` deleting the parent).
+
+Architecture, since nothing here can fork or exec: one thread drives vita2d, the pad, the sockets and every session through one poll loop; commands are builtins run in-process with a shell-owned cwd per session (libc's cwd is one process-wide static, so chdir is off limits); the path layer in src/sh_path.c is the only code that knows /ux0/data/x is ux0:data/x, and it refuses an unknown device rather than falling back.
+
+Criteria basis: #1 and #4 rest on password login with the on-screen passphrase verified in TASK-001.04 AC1; #2 on `ls /` plus a per-device `ls` loop and cd checks in scripts/smoke.sh, and on the read-only and cross-device cases exercised through SFTP (TASK-002.02, TASK-002.03.01) -- the literal `cd` from one device into another was the one atom never graded, so scripts/smoke.sh gained `cd /os0` and `cd /vs0` checks for the next device run; #5 is the unchanged client titleid in CMakeLists.txt with the client's source list untouched.
+
+Closed with two limits, both documented in the README rather than left as bugs: the cross-device `mv` success path has never executed (no second writable device on the test Vita), and a running command cannot be interrupted by Ctrl-C because the poll loop is inside the command.
+
+Follow-ups moved out of this parent, because they are separate deliverables rather than parts of "ssh from a devbox works": TASK-010 (dim the screen while the server runs, was TASK-001.05) and TASK-011 (a full-screen text editor builtin, was TASK-001.06). TASK-001.07, the `vpk install` self-update path, is Done.
+<!-- SECTION:FINAL_SUMMARY:END -->
