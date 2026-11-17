@@ -1241,7 +1241,7 @@ static int ht_parse_count(sh_session_t *s, const char *cmd, const char *text,
             return -1;
         }
         if (v > (unsigned long)(SH_HT_SIZE_MAX / 10)) {
-            sh_eprintf(s, "%s: %s: value too large\n", cmd, text);
+            sh_eprintf(s, "%s: %s: value too large (limit %d)\n", cmd, text, SH_HT_SIZE_MAX);
             return -1;
         }
         v = v * 10UL + (unsigned long)(*p - '0');
@@ -1265,7 +1265,7 @@ static void ht_report_error(sh_session_t *s, const char *cmd, const char *name)
     } else if (errno == ENAMETOOLONG) {
         sh_eprintf(s, "%s: %s: result too large to print\n", cmd, name);
     } else if (errno == ERANGE) {
-        sh_eprintf(s, "%s: %s: file too large\n", cmd, name);
+        sh_eprintf(s, "%s: %s: file too large (limit %d bytes)\n", cmd, name, SH_HT_SIZE_MAX);
     } else if (errno == ENOMEM) {
         sh_eprintf(s, "%s: %s: out of memory\n", cmd, name);
     } else if (errno == EIO) {
@@ -1345,6 +1345,8 @@ static int ht_run(sh_session_t *s, const char *cmd, int is_tail, int by_bytes,
         free(src.stream);
         free(buf);
         return 1;
+    } else {
+        len = src.streamed;
     }
 
     if (by_bytes) {
@@ -1459,7 +1461,7 @@ static int ht_command(sh_session_t *s, const char *cmd, int is_tail, int argc,
 
     {
         int status = 0;
-        int k;
+        int k, headed = 0;
 
         /* Each file is streamed in turn and none is held while the next is read, which
          * is why several names cost no more memory than one. With more than one, the
@@ -1472,9 +1474,6 @@ static int ht_command(sh_session_t *s, const char *cmd, int is_tail, int argc,
             struct stat st;
             int fd, r;
 
-            if (files > 1) {
-                sh_printf(s, "==> %s <==\n", targets[k]);
-            }
             if (resolve_arg(s, cmd, targets[k], &t) != 0) {
                 status = 1;
                 continue;
@@ -1494,6 +1493,9 @@ static int ht_command(sh_session_t *s, const char *cmd, int is_tail, int argc,
                 sh_eprintf(s, "%s: %s: %s\n", cmd, targets[k], strerror(errno));
                 status = 1;
                 continue;
+            }
+            if (files > 1) {
+                sh_printf(s, "%s==> %s <==\n", headed++ ? "\n" : "", targets[k]);
             }
             if (follow) {
                 /* -f waits for the file to grow, and waiting for a file is the one thing
