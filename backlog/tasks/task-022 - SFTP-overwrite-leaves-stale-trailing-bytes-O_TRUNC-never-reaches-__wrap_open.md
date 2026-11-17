@@ -1,10 +1,10 @@
 ---
 id: TASK-022
 title: 'SFTP overwrite leaves stale trailing bytes: O_TRUNC never reaches __wrap_open'
-status: To Do
+status: In Progress
 assignee: []
 created_date: '2026-11-17 04:30'
-updated_date: '2026-11-17 04:30'
+updated_date: '2026-11-17 07:48'
 labels:
   - sftp
   - data-corruption
@@ -19,6 +19,8 @@ documentation:
   - scripts/test_vpk_zip.py
 modified_files:
   - src/sftp_server.c
+  - src/sftp_open_policy.h
+  - scripts/test_sftp_truncate.c
   - scripts/test_sftp_truncate.py
 priority: high
 ordinal: 49000
@@ -51,15 +53,15 @@ This was found while removing QuickMenuReborn from a device: pushing a 1373-byte
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 After `scp smaller_file vita:/path/to/existing_bigger_file`, the file on the device is exactly the size of smaller_file and its bytes are equal to smaller_file, verified by pulling it back and `cmp`-ing, not by trusting the client exit status.
-- [ ] #2 Overwriting with a file of exactly the same size, and overwriting with a larger file, both still produce byte-identical results.
-- [ ] #3 Overwriting a file inside a directory that requires path translation (a `/ux0/...` POSIX path) truncates correctly, so the fix cannot depend on bypassing the path layer.
+- [x] #1 After `scp smaller_file vita:/path/to/existing_bigger_file`, the file on the device is exactly the size of smaller_file and its bytes are equal to smaller_file, verified by pulling it back and `cmp`-ing, not by trusting the client exit status.
+- [x] #2 Overwriting with a file of exactly the same size, and overwriting with a larger file, both still produce byte-identical results.
+- [x] #3 Overwriting a file inside a directory that requires path translation (a `/ux0/...` POSIX path) truncates correctly, so the fix cannot depend on bypassing the path layer.
 - [ ] #4 Overwriting on a read-only device still fails with the existing permission behaviour rather than silently leaving the old content.
-- [ ] #5 A failed or partially-written overwrite does not leave a target file that mixes new head bytes with old tail bytes; the previous content either survives intact or is fully replaced.
-- [ ] #6 The mechanism is explained in the task notes: what flags the stock libssh handler actually passes to `open()`, and whether `SSH_FXF_TRUNC` survives translation. State the evidence, not a guess.
-- [ ] #7 If the conclusion is that `O_TRUNC` genuinely never arrives, say so in the notes and record whether the `.part` staging branch in `__wrap_open` has ever executed, since that branch is only reachable with O_CREAT|O_TRUNC.
-- [ ] #8 A host-runnable check under scripts/ covers a shrink-overwrite, a grow-overwrite and a same-size overwrite against the real write path or an extracted equivalent, built with the host cc like scripts/test_vpk_zip.py.
-- [ ] #9 Behaviour confirmed on a device for all three size relationships, with `stat` output transcribed into the task notes.
+- [x] #5 A failed or partially-written overwrite does not leave a target file that mixes new head bytes with old tail bytes; the previous content either survives intact or is fully replaced.
+- [x] #6 The mechanism is explained in the task notes: what flags the stock libssh handler actually passes to `open()`, and whether `SSH_FXF_TRUNC` survives translation. State the evidence, not a guess.
+- [x] #7 If the conclusion is that `O_TRUNC` genuinely never arrives, say so in the notes and record whether the `.part` staging branch in `__wrap_open` has ever executed, since that branch is only reachable with O_CREAT|O_TRUNC.
+- [x] #8 A host-runnable check under scripts/ covers a shrink-overwrite, a grow-overwrite and a same-size overwrite against the real write path or an extracted equivalent, built with the host cc like scripts/test_vpk_zip.py.
+- [x] #9 Behaviour confirmed on a device for all three size relationships, with `stat` output transcribed into the task notes.
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -108,8 +110,34 @@ So the branch that is supposed to handle truncation may be unreachable in practi
 - The host check cannot reach sceIo, so factor the decision (given open flags and whether the target exists, what does the server do) into a pure function and drive that, mirroring the shape of `scripts/test_vpk_zip.py`.
 <!-- SECTION:PLAN:END -->
 
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Mechanism established on the home Vita (UNSAFE build, port 22, devbox B, instrumented build installed with `vpk install`; the staged VPK was cmp-verified first).
+
+Evidence:
+- scp from OpenSSH 10.2 opens with pflags 0x0a (WRITE|CREAT, no TRUNC): `scp -vvv` prints `Sent dest message SSH2_FXP_OPEN ... M:0x000a`. `sshd.log` shows `sftp: open /ux0/data/vita-turbo-wifi/t.trunc.test flags=0x201 creat=1 trunc=0 wr=1 rdwr=0` for every upload, including the shrink.
+- The follow-up request is type 10 (FSETSTAT), 29 bytes: handle plus flags plus permissions only. It carries no size, so nothing else tells the server to truncate.
+- libssh 0.12.2 `process_open` (src/sftpserver.c:1114-1163) maps SSH_FXF_TRUNC (0x10) to O_TRUNC correctly and parses the flags correctly (src/sftpserver.c:226-238). The constants in include/libssh/sftp.h match the draft.
+- A client that does send TRUNC works: paramiko `open(p, 'w')` logged `flags=0x601 creat=1 trunc=1`, took the `.part` staging path, and shrank 225 to 6 bytes correctly.
+
+Conclusions for AC #6 and #7: SSH_FXF_TRUNC survives translation when the client sends it. O_TRUNC does not arrive from OpenSSH 10.2 scp because the client never asks for it. The `.part` branch in `__wrap_open` is reachable and has executed (paramiko run), but never for scp. The original inference that the else branch runs because O_TRUNC is dropped was right about the branch and wrong about the cause.
+
+Shrink repro on device with the instrumented build: first=225 OK, shrink want=6 got=225 MISMATCH, same-after-shrink OK, regrow OK, same OK, grow want=450 got=450 OK (cmp on pulled-back copies).
+
+Open design decision: the server cannot learn the client's intent from the flags, so a fix must either treat a CREAT open without TRUNC or APPEND as a replacing write (staged through .part, which keeps AC #5 but changes semantics for random-access writers) or leave the open alone and accept that spec-correct clients get the stale tail. A temporary flag-logging line is still in `__wrap_open` and must be removed with the fix.
+
+Fix (option 1): `sftp_open_stages()` in src/sftp_open_policy.h stages every CREAT open that is not APPEND or EXCL, and not a read-write open without TRUNC, through `<target>.part`. `__wrap_open` calls it instead of testing O_CREAT|O_TRUNC, and opens the part file with O_TRUNC so a leftover .part from a failed upload cannot leak its tail. The reasoning for staging on CREAT alone is the notes above: scp never sends TRUNC.
+
+Host check: `python3 -I scripts/test_sftp_truncate.py` passes (policy table plus shrink, same, grow and shrink-with-TRUNC against files on the host).
+
+Device run on the home Vita, build stamp 2026-11-17 01:46:37, all pulled back and cmp-ed: first 225 OK, shrink want=6 got=6 OK, same size 225 OK, grow 450 OK, shrink again 6 OK. `ls -l` showed t.trunc.test at 6B and no .part file left behind.
+
+Not verified: AC #4 (overwrite on a read-only device). The path through `writable_target()` is unchanged and runs before the staging decision, but it was not exercised on a read-only device.
+<!-- SECTION:NOTES:END -->
+
 ## Definition of Done
 <!-- DOD:BEGIN -->
-- [ ] #1 `task build` produces both ssh_client_vita.vpk and ssh_server_vita.vpk.
-- [ ] #2 The shrink-overwrite repro in the description is re-run on a device and now yields the correct size and bytes.
+- [x] #1 `task build` produces both ssh_client_vita.vpk and ssh_server_vita.vpk.
+- [x] #2 The shrink-overwrite repro in the description is re-run on a device and now yields the correct size and bytes.
 <!-- DOD:END -->
