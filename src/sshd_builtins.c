@@ -14,6 +14,7 @@
  * string handed to libc comes out of sh_path.c.
  */
 #include "sshd.h"
+#include "sh_grep.h"
 
 #include <dirent.h>
 #include <errno.h>
@@ -904,6 +905,262 @@ static int cmd_cat(sh_session_t *s, int argc, char **argv)
         }
     }
     free(buf);
+    return status;
+}
+
+/* ------------------------------------------------------------------ */
+/* grep                                                                 */
+/* ------------------------------------------------------------------ */
+
+/*
+ * grep is the first tool that reads its input a line at a time. A source is either a
+ * file descriptor or the session's stdin, and both are pulled through one byte callback
+ * so the SH_GREP_LINE_MAX bound and the newline split live once, in sh_grep_read_line.
+ */
+typedef struct {
+    sh_session_t *s;
+    int fd;            /* >= 0 for a file, -1 for stdin */
+    int file_eof;      /* the file has been drained */
+} grep_src_t;
+
+/* Pulls up to n bytes from a file or stdin into p. Returns the count, or 0 at end. */
+static size_t grep_fill(void *vsrc, char *p, size_t n)
+{
+    grep_src_t *src = vsrc;
+
+    if (src->fd >= 0) {
+        ssize_t got;
+
+        if (src->file_eof) {
+            return 0;
+        }
+        got = sh_target_read(src->fd, p, n);
+        if (got <= 0) {
+            src->file_eof = 1;
+            return 0;
+        }
+        return (size_t)got;
+    }
+    return sh_session_stdin_read(src->s, p, n);
+}
+
+static int cmd_grep(sh_session_t *s, int argc, char **argv)
+{
+    int icase = 0, invert = 0, numbering = 0, counting = 0, only_files = 0;
+    int quiet = 0, i, bad = 0, status = 2, files = 0, matched_any = 0, had_error = 0;
+    const char *pattern = NULL;
+    const char *targets[MAX_ARGS];
+    char *line;
+    sh_grep_t *re;
+    char why[96];
+
+    for (i = 1; i < argc; i++) {
+        const char *f;
+
+        if (argv[i][0] != '-' || argv[i][1] == '\0') {
+            break;
+        }
+        for (f = argv[i] + 1; *f != '\0'; f++) {
+            switch (*f) {
+            case 'i': icase = 1; break;
+            case 'v': invert = 1; break;
+            case 'n': numbering = 1; break;
+            case 'c': counting = 1; break;
+            case 'l': only_files = 1; break;
+            case 'q': quiet = 1; break;
+            default: bad = *f; break;
+            }
+        }
+    }
+    if (bad != 0) {
+        sh_eprintf(s, "grep: illegal option -- %c\n", bad);
+        return 2;
+    }
+    if (i >= argc) {
+        sh_eprintf(s, "usage: grep [-ivnclq] PATTERN [FILE...]\n");
+        sh_eprintf(s, "grep: %s\n", "missing pattern operand");
+        return 2;
+    }
+    pattern = argv[i++];
+    for (; i < argc && files < MAX_ARGS; i++) {
+        targets[files++] = argv[i];
+    }
+
+    re = sh_grep_compile(pattern, icase ? SH_GREP_ICASE : 0);
+    if (re == NULL) {
+        sh_grep_compile_error(why, sizeof(why));
+        sh_eprintf(s, "grep: %s: %s\n", pattern, why[0] != '\0' ? why : "invalid pattern");
+        return 2;
+    }
+    line = malloc(SH_GREP_LINE_MAX);
+    if (line == NULL) {
+        sh_grep_free(re);
+        sh_eprintf(s, "grep: out of memory\n");
+        return 2;
+    }
+
+    if (files == 0) {
+        grep_src_t src;
+        long lineno = 0;
+        long count = 0;
+        int n;
+        int err = 0;
+        int eof = 0;
+
+        src.s = s;
+        src.fd = -1;
+        src.file_eof = 0;
+        while (!sh_session_interrupted(s)) {
+            int hit;
+
+            n = sh_grep_read_line(grep_fill, &src, line, SH_GREP_LINE_MAX, &eof);
+            if (eof) {
+                break;
+            }
+            lineno++;
+            if (n < 0) {
+                sh_eprintf(s, "grep: (standard input): line %ld: too long (limit %d bytes)\n",
+                           lineno, SH_GREP_LINE_MAX);
+                err = 1;
+                continue;
+            }
+            hit = sh_grep_match(re, line, invert);
+            if (hit < 0) {
+                sh_eprintf(s, "grep: %s: pattern too expensive to match\n", pattern);
+                err = 1;
+                break;
+            }
+            if (hit) {
+                matched_any = 1;
+                count++;
+                if (quiet) {
+                    /* -q says nothing and only sets the status: stop at the first hit. */
+                    break;
+                }
+                if (!counting && !only_files) {
+                    if (numbering) {
+                        sh_printf(s, "%ld:%s\n", lineno, line);
+                    } else {
+                        sh_printf(s, "%s\n", line);
+                    }
+                }
+            }
+        }
+        if (counting && !quiet) {
+            sh_printf(s, "%ld\n", count);
+        }
+        free(line);
+        sh_grep_free(re);
+        if (quiet) {
+            return matched_any ? 0 : 1;
+        }
+        if (err) {
+            return 2;
+        }
+        return matched_any ? 0 : 1;
+    }
+
+    /* Several files: -l names each with a match; with more than one, a match prints
+     * file: ahead of the line. An unreadable file is exit 2 no matter what another
+     * file matches -- an error outranks a match, because a partial result the user
+     * cannot tell is incomplete from a complete one would be the worse answer. */
+    status = 1;
+    had_error = 0;
+    for (i = 0; i < files; i++) {
+        sh_target_t t;
+        struct stat st;
+        grep_src_t src;
+        long lineno = 0;
+        long count = 0;
+        int fd, n, file_hit = 0;
+        int eof = 0;
+
+        if (resolve_arg(s, "grep", targets[i], &t) != 0) {
+            had_error = 1;
+            continue;
+        }
+        if (t.kind == SH_TARGET_ROOT || t.kind == SH_TARGET_PSEUDO_DIR) {
+            sh_eprintf(s, "grep: %s: Is a directory\n", targets[i]);
+            had_error = 1;
+            continue;
+        }
+        if (stat_target(&t, &st) == 0 && S_ISDIR(st.st_mode)) {
+            sh_eprintf(s, "grep: %s: Is a directory\n", targets[i]);
+            had_error = 1;
+            continue;
+        }
+        fd = sh_target_open(&t);
+        if (fd == -1) {
+            sh_eprintf(s, "grep: %s: %s\n", targets[i], strerror(errno));
+            had_error = 1;
+            continue;
+        }
+        src.s = s;
+        src.fd = fd;
+        src.file_eof = 0;
+        while (!sh_session_interrupted(s)) {
+            int hit;
+
+            n = sh_grep_read_line(grep_fill, &src, line, SH_GREP_LINE_MAX, &eof);
+            if (eof) {
+                break;
+            }
+            lineno++;
+            if (n < 0) {
+                sh_eprintf(s, "grep: %s: line %ld: too long (limit %d bytes)\n",
+                           targets[i], lineno, SH_GREP_LINE_MAX);
+                had_error = 1;
+                continue;
+            }
+            hit = sh_grep_match(re, line, invert);
+            if (hit < 0) {
+                sh_eprintf(s, "grep: %s: pattern too expensive to match\n", pattern);
+                had_error = 1;
+                break;
+            }
+            if (hit) {
+                file_hit = 1;
+                matched_any = 1;
+                status = 0;
+                count++;
+                if (quiet) {
+                    break;  /* -q: the first hit is the only answer it wants */
+                }
+                if (!counting && !only_files) {
+                    if (files > 1) {
+                        sh_printf(s, "%s:", targets[i]);
+                    }
+                    if (numbering) {
+                        sh_printf(s, "%ld:%s\n", lineno, line);
+                    } else {
+                        sh_printf(s, "%s\n", line);
+                    }
+                }
+            }
+        }
+        sh_target_close(fd);
+        if (quiet) {
+            if (file_hit) {
+                free(line);
+                sh_grep_free(re);
+                return 0;
+            }
+            continue;
+        }
+        if (counting) {
+            sh_printf(s, "%s:%ld\n", targets[i], count);
+        } else if (only_files && file_hit) {
+            sh_printf(s, "%s\n", targets[i]);
+        }
+    }
+    free(line);
+    sh_grep_free(re);
+    if (quiet) {
+        return 1;
+    }
+    if (had_error) {
+        return 2;
+    }
     return status;
 }
 
@@ -2294,6 +2551,8 @@ static const sh_builtin_t builtins[] = {
     {"echo", cmd_echo, "echo [-n] TEXT... -- print its arguments"},
     {"env", cmd_env, "env -- print the environment"},
     {"exit", cmd_exit, "exit -- end this session"},
+    {"grep", cmd_grep,
+     "grep [-ivnclq] PATTERN [FILE...] -- lines matching a POSIX basic regex"},
     {"help", cmd_help, "help [COMMAND] -- usage"},
     {"history", cmd_history, "history [COUNT] -- show numbered command history (!n re-runs line n)"},
     {"ls", cmd_ls, "ls [-l] [-a] [PATH] -- list a directory (no argument: .)"},

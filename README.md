@@ -263,7 +263,7 @@ running in the server's own process, the working directory belongs to the sessio
 than to libc, and POSIX paths are mapped onto sceIo devices at the boundary.
 
 ```
-cat  cd  cp  date  devices  df  du  echo  env  exit  help
+cat  cd  cp  date  devices  df  du  echo  env  exit  grep  help
 ls   mkdir  mv   pwd     rm   rmdir  stat  touch  uname  vcmd  vpk  whoami
 ```
 
@@ -281,6 +281,19 @@ resolver lookup. And the whole exchange gets five seconds, served non-blocking s
 sessions keep running while it waits. Loopback is asymmetric: `:1339` answers because it
 lives on the plugin's own thread, but `127.0.0.1:22` is this server waiting on itself, so
 it just spends the deadline.
+
+`grep PATTERN [FILE...]` prints the lines that match, and is the reason pipes will be
+worth having once they exist. **Pattern syntax: POSIX basic regular expressions** — `.`,
+`[ ]`, `^`, `$`, and the operators `\( \)`, `\{m,n\}`, `\|`, `\+`, `\?`. This is real
+regex, not literal substring matching; unescaped `+ ? ( ) { } |` are ordinary bytes, the
+way BRE defines them. Options: `-i` case-insensitive, `-v` invert, `-n` line numbers,
+`-c` count only, `-l` file names only, `-q` quiet (exit status only). With no FILE it
+reads the session's stdin; with several files each match is prefixed `file:`. Exit status
+follows the convention: **0** a line matched, **1** none did, **2** an error (bad pattern,
+unreadable file). A file that cannot be read is reported as `grep: FILE: reason` and the
+other files are still searched. A line longer than **4096 bytes** is reported as too long
+rather than matched, never silently truncated into a wrong answer; and a pattern too
+expensive to match in the step budget is refused rather than allowed to hang the session.
 
 [`docs/vcmd.md`](docs/vcmd.md) has the arguments, the error strings, and the command
 surfaces both plugins expose on those ports.
