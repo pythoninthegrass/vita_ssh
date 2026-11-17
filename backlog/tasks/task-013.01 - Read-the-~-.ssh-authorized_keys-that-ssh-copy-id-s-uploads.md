@@ -4,8 +4,10 @@ title: Read the ~/.ssh/authorized_keys that ssh-copy-id -s uploads
 status: To Do
 assignee: []
 created_date: '2026-11-17 03:15'
+updated_date: '2026-11-17 03:29'
 labels: []
-dependencies: []
+dependencies:
+  - TASK-014
 documentation:
   - src/sshd_hostkey.c
   - src/sftp_server.c

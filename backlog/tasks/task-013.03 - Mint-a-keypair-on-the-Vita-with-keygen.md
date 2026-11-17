@@ -4,6 +4,7 @@ title: Mint a keypair on the Vita with keygen
 status: To Do
 assignee: []
 created_date: '2026-11-17 03:15'
+updated_date: '2026-11-17 03:38'
 labels: []
 dependencies: []
 documentation:
@@ -32,3 +33,9 @@ No passphrase: ssh_pki_export_privkey_file with a NULL passphrase stores the key
 - [ ] #4 README states the private half is stored unencrypted and why
 - [ ] #5 task build produces both VPKs
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Randomness: TASK-019.02 provides /dev/urandom backed by the platform random source. If that task has not landed, call the platform random API directly rather than deriving bytes from time or addresses -- key material from a predictable source is not a shortcut, it is a broken key.
+<!-- SECTION:NOTES:END -->
