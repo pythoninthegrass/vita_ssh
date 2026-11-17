@@ -97,3 +97,8 @@ Device run on the home Vita, server built 2026-11-17 03:34, installed with `vpk 
 The device run found one defect, fixed in this task: `grep -c PATTERN FILE` printed `FILE:N` for a single file. The count line now carries the name only when more than one file is given, matching the match-line rule. Re-checked on the device after the fix.
 
 Known gaps, not fixed here: `--` and `-e PATTERN` are rejected (`grep: illegal option -- -`), so a pattern that begins with `-` cannot be given. An unknown flag prints `grep: illegal option -- z`, the same wording `ls` uses, whereas the TASK-016 parent AC #4 asks for `name: unsupported option: FLAG`; no builtin meets that wording yet, so the parent AC needs a decision on whether to change the shared option error or the AC.
+
+## Later finding
+
+2026-11-17, found during the TASK-016.03 device run: grep was unusable on large inputs even though every criterion above had passed on small fixtures. sh_grep_read_line pulls its input one byte per call and grep_fill turned each into its own sceIoRead, so `grep -c line` over a 20000-line, 175 KB file took 45 s on the home Vita; matched lines were also written to the channel in two or three pieces each. Commit 55e60db on branch TASK-016.03 reads a file in 4096-byte blocks and batches the output into one buffer, flushed before any error message and at the end. `grep -c line` on the same file now takes 1 s, `-v 1` 1 s and `-i LINE` 2 s, and every checked case is byte-identical to the host grep; printing all 20000 matches took 8 to 12 s, which is the device's large-output transport stalls and not the command. The lesson for the rest of the family: a host test cannot see device performance, so each builtin needs a device run on a 20000-line file.
+
