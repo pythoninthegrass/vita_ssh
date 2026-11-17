@@ -300,6 +300,10 @@ bytes, and `tail [-n N | -c N] [FILE]` the last — the whole file when it holds
 than you asked for. With no FILE both read the session's stdin. The two agree with `grep`
 on what a line is: one ends at a newline, and a file whose last line has none still prints
 that line without inventing one, so a trailing newline never comes back as a blank line.
+`head -n 0` and `tail -n 0` print nothing and exit **0**; GNU exits 1 for those, which is
+the one place either tool deliberately differs, because an empty answer here is what you
+asked for rather than a failure.
+
 `tail` reads the file **backwards in 4 KB steps** and stops as soon as it holds the answer,
 so `tail -n 20` of a 12 MB log costs twenty lines of reading and not the file; `head` stops
 at the Nth newline. Options are `-n` for lines and `-c` for bytes, written `-n20` or
@@ -309,9 +313,12 @@ keeps `head -n 5` from quietly becoming `head -c 4096`. `-f` is refused with a p
 "following a file is not supported": waiting for a file to grow means sleeping, and a
 sleeping command parks every other session in this server's one poll loop. Exit status is
 **0** on success and **1** on a failure such as an unreadable file or a line over the
-bound; a bad option or a count operand that is not a non-negative integer is **2**. Only
-one file is read per invocation, and several names are refused rather than half-answered —
-a loop over them belongs with the pipes in TASK-015.02.
+bound; a bad option or a count operand that is not a non-negative integer is **2**. With
+several FILE arguments each answer is preceded by `==> name <==`, the coreutils header, and
+a file that cannot be read is reported as `head: FILE: reason` while the others are still
+printed (the exit status is then nonzero, because a partial answer you cannot tell is
+partial is the worse result). Each file is streamed in turn and none is held while the next
+is read, so several names cost no more memory than one.
 
 [`docs/vcmd.md`](docs/vcmd.md) has the arguments, the error strings, and the command
 surfaces both plugins expose on those ports.
