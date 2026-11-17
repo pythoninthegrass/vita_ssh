@@ -263,8 +263,8 @@ running in the server's own process, the working directory belongs to the sessio
 than to libc, and POSIX paths are mapped onto sceIo devices at the boundary.
 
 ```
-cat  cd  cp  date  devices  df  du  echo  env  exit  grep  help
-ls   mkdir  mv   pwd     rm   rmdir  stat  touch  uname  vcmd  vpk  whoami
+cat  cd  cp  date  devices  df  du  echo  env  exit  grep  head  help
+ls   mkdir  mv   pwd     rm   rmdir  stat  tail  touch  uname  vcmd  vpk  whoami
 ```
 
 `vcmd HOST PORT [LINE]` sends one newline-terminated line to a TCP port and prints the
@@ -294,6 +294,24 @@ unreadable file). A file that cannot be read is reported as `grep: FILE: reason`
 other files are still searched. A line longer than **4096 bytes** is reported as too long
 rather than matched, never silently truncated into a wrong answer; and a pattern too
 expensive to match in the step budget is refused rather than allowed to hang the session.
+
+`head [-n N | -c N] [FILE]` prints the first N lines (**10** by default) or the first N
+bytes, and `tail [-n N | -c N] [FILE]` the last — the whole file when it holds fewer lines
+than you asked for. With no FILE both read the session's stdin. The two agree with `grep`
+on what a line is: one ends at a newline, and a file whose last line has none still prints
+that line without inventing one, so a trailing newline never comes back as a blank line.
+`tail` reads the file **backwards in 4 KB steps** and stops as soon as it holds the answer,
+so `tail -n 20` of a 12 MB log costs twenty lines of reading and not the file; `head` stops
+at the Nth newline. Options are `-n` for lines and `-c` for bytes, written `-n20` or
+`-n 20`, and `tail +20` is accepted as the older spelling of `tail -n +20`. A line over
+**4096 bytes** is reported as too long rather than printed as the prefix that fits, which
+keeps `head -n 5` from quietly becoming `head -c 4096`. `-f` is refused with a plain
+"following a file is not supported": waiting for a file to grow means sleeping, and a
+sleeping command parks every other session in this server's one poll loop. Exit status is
+**0** on success and **1** on a failure such as an unreadable file or a line over the
+bound; a bad option or a count operand that is not a non-negative integer is **2**. Only
+one file is read per invocation, and several names are refused rather than half-answered —
+a loop over them belongs with the pipes in TASK-015.02.
 
 [`docs/vcmd.md`](docs/vcmd.md) has the arguments, the error strings, and the command
 surfaces both plugins expose on those ports.
