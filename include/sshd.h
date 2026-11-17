@@ -22,6 +22,7 @@
 #include <libssh/libssh.h>
 
 #include "sh_path.h"
+#include "sh_stdin.h"
 
 #define SSHD_PORT_PRIMARY 22
 #define SSHD_PORT_FALLBACK 2222
@@ -91,6 +92,17 @@ void sh_write(sh_session_t *s, const char *data, size_t len);
 int sh_session_redirect_start(sh_session_t *s, const char *sce_path,
                               int append);
 void sh_session_redirect_end(sh_session_t *s);
+
+/* The largest source `command < file` will take as stdin. */
+#define SSHD_STDIN_MAX (1024 * 1024)
+
+/* Gives one command everything rd produces as stdin -- the `command < file` form.
+ * Returns 0, or -1 with errno set for the caller to report (EFBIG past
+ * SSHD_STDIN_MAX bytes). Every path that calls _start calls _end. A session with no
+ * source reads as an empty file, so a reader never waits. */
+int sh_session_stdin_start(sh_session_t *s, sh_stdin_reader_t rd, void *ctx);
+size_t sh_session_stdin_read(sh_session_t *s, char *buf, size_t n);
+void sh_session_stdin_end(sh_session_t *s);
 
 void sh_prompt(sh_session_t *s);
 

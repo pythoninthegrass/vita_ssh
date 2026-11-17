@@ -858,14 +858,20 @@ static int cmd_cat(sh_session_t *s, int argc, char **argv)
     char *buf;
     int i, status = 0;
 
-    if (argc < 2) {
-        sh_eprintf(s, "cat: missing operand\n");
-        return 1;
-    }
     buf = malloc(SSHD_COPY_BUFSIZE);
     if (buf == NULL) {
         sh_eprintf(s, "cat: out of memory\n");
         return 1;
+    }
+    if (argc < 2) {
+        size_t got;
+
+        while ((got = sh_session_stdin_read(s, buf, SSHD_COPY_BUFSIZE)) > 0 &&
+               !sh_session_interrupted(s)) {
+            sh_write(s, buf, got);
+        }
+        free(buf);
+        return 0;
     }
     for (i = 1; i < argc; i++) {
         sh_target_t t;
@@ -2333,6 +2339,87 @@ const sh_builtin_t *sh_builtin_lookup(const char *name)
 
 #define MAX_WORDS (MAX_ARGS * 2)
 
+/* Closes the operator word at i and the file name after it, which the caller has
+ * already taken. Shifting once instead left the filename alive as a plain argument,
+ * and `echo hello > f.txt` printed "hello f.txt" into f.txt. */
+static void drop_operator(int *argc, char **argv, int *quoted, int i)
+{
+    int j, k;
+
+    free(argv[i]);
+    for (k = 0; k < 2; k++) {
+        for (j = i; j < *argc - 1; j++) {
+            argv[j] = argv[j + 1];
+            quoted[j] = quoted[j + 1];
+        }
+        (*argc)--;
+    }
+}
+
+/* Pulls the `<` word and the file name after it, like extract_redirect: both must be
+ * separate, unquoted words, and a second `<` replaces the first. The caller frees
+ * *path. Returns 0, or -1 after reporting a dangling operator. */
+static int extract_stdin(sh_session_t *s, int *argc, char **argv, int *quoted,
+                         char **path)
+{
+    int i;
+
+    for (i = 1; i < *argc; i++) {
+        if (quoted[i] || strcmp(argv[i], "<") != 0) {
+            continue;
+        }
+        if (i + 1 >= *argc) {
+            sh_eprintf(s, "sh: syntax error: file name expected after <\n");
+            return -1;
+        }
+        free(*path);
+        *path = argv[i + 1];
+        drop_operator(argc, argv, quoted, i);
+        i--;
+    }
+    return 0;
+}
+
+static ssize_t target_fd_reader(void *ctx, void *buf, size_t n)
+{
+    return sh_target_read(*(int *)ctx, buf, n);
+}
+
+/* Opens the `<` target and loads it as the session's stdin, reporting any failure
+ * in the shell's own voice. Returns 0, or -1 when no command should run. */
+static int start_stdin(sh_session_t *s, const char *arg)
+{
+    sh_target_t t;
+    struct stat st;
+    int fd, rc, saved;
+
+    if (resolve_arg(s, "sh", arg, &t) != 0) {
+        return -1;
+    }
+    if (stat_target(&t, &st) == 0 && S_ISDIR(st.st_mode)) {
+        sh_eprintf(s, "sh: %s: Is a directory\n", arg);
+        return -1;
+    }
+    fd = sh_target_open(&t);
+    if (fd == -1) {
+        sh_eprintf(s, "sh: %s: %s\n", arg, strerror(errno));
+        return -1;
+    }
+    rc = sh_session_stdin_start(s, target_fd_reader, &fd);
+    saved = errno;
+    sh_target_close(fd);
+    if (rc != 0) {
+        if (saved == EFBIG) {
+            sh_eprintf(s, "sh: %s: too large for stdin (limit %d bytes)\n", arg,
+                       SSHD_STDIN_MAX);
+        } else {
+            sh_eprintf(s, "sh: %s: %s\n", arg, strerror(saved));
+        }
+        return -1;
+    }
+    return 0;
+}
+
 /*
  * Pulls redirection words off the argument list: the `>` or `>>` word and the
  * file name after it. Both must be separate words (`echo hi > /f/x`), because
@@ -2358,23 +2445,9 @@ static int extract_redirect(sh_session_t *s, int *argc, char **argv,
             return -1;
         }
         *append = (argv[i][1] == '>');
-        /* The caller gets the filename and frees it: the two shifts below
-         * close BOTH slots (operator and name). Shifting once instead left
-         * the filename alive as a plain argument, and `echo hello > f.txt`
-         * printed "hello f.txt" into f.txt. */
+        /* The caller gets the filename and frees it. */
         *path = argv[i + 1];
-        free(argv[i]);
-        {
-            int j, k;
-
-            for (k = 0; k < 2; k++) {
-                for (j = i; j < *argc - 1; j++) {
-                    argv[j] = argv[j + 1];
-                    quoted[j] = quoted[j + 1];
-                }
-                (*argc)--;
-            }
-        }
+        drop_operator(argc, argv, quoted, i);
         i--; /* the shifted-down tail may hold another redirect */
     }
     return 0;
@@ -2389,6 +2462,8 @@ int sh_execute_line(sh_session_t *s, const char *line)
     char *redir_path = NULL; /* owns the filename word extract_redirect took
                               * out of argv; freed on every path below */
     int redir_append = 0;
+    char *in_path = NULL; /* the `<` filename, owned the same way */
+    int in_started = 0;
 
     argc = split_line(line, argv, quoted, MAX_WORDS);
     if (argc == 0) {
@@ -2397,7 +2472,10 @@ int sh_execute_line(sh_session_t *s, const char *line)
     /* Redirection words leave the list FIRST, so the glob loop never sees
      * them: a redirect target is a file to create, not a pattern to expand. */
     if (extract_redirect(s, &argc, argv, quoted, &redir_path,
-                         &redir_append) != 0) {
+                         &redir_append) != 0 ||
+        extract_stdin(s, &argc, argv, quoted, &in_path) != 0) {
+        free(redir_path);
+        free(in_path);
         free_args(argv, argc);
         return 1;
     }
@@ -2441,6 +2519,16 @@ int sh_execute_line(sh_session_t *s, const char *line)
         }
     }
 
+    /* `command < file`: loaded before anything is created, so a missing input runs
+     * no command and leaves no empty output file behind. */
+    if (in_path != NULL) {
+        if (start_stdin(s, in_path) != 0) {
+            status = 1;
+            goto out;
+        }
+        in_started = 1;
+    }
+
     /* `command > file` / `>>`: the target is resolved like any path argument,
      * opened before the builtin runs, closed after, on every path below. sh
      * semantics kept where they cost nothing: the file is created even when
@@ -2453,29 +2541,25 @@ int sh_execute_line(sh_session_t *s, const char *line)
 
         if (resolve_arg(s, "sh", redir_path, &t) != 0) {
             /* resolve_arg already reported it in the command's own voice */
-            free(redir_path);
-            free_args(argv, argc);
-            return 1;
+            status = 1;
+            goto out;
         }
         if (t.kind == SH_TARGET_ROOT || t.kind == SH_TARGET_DEVICE ||
             t.kind == SH_TARGET_PSEUDO || t.kind == SH_TARGET_PSEUDO_DIR) {
             /* A synthetic name has no file behind it, so nothing can be written. */
             sh_eprintf(s, "sh: %s: Permission denied\n", redir_path);
-            free(redir_path);
-            free_args(argv, argc);
-            return 1;
+            status = 1;
+            goto out;
         }
         if (t.dev != NULL && !t.dev->writable) {
             sh_eprintf(s, "sh: %s: read-only file system\n", redir_path);
-            free(redir_path);
-            free_args(argv, argc);
-            return 1;
+            status = 1;
+            goto out;
         }
         if (sh_session_redirect_start(s, t.sce, redir_append) != 0) {
             sh_eprintf(s, "sh: %s: %s\n", redir_path, strerror(errno));
-            free(redir_path);
-            free_args(argv, argc);
-            return 1;
+            status = 1;
+            goto out;
         }
     }
 
@@ -2489,6 +2573,11 @@ int sh_execute_line(sh_session_t *s, const char *line)
     if (redir_path != NULL) {
         sh_session_redirect_end(s);
     }
+out:
+    if (in_started) {
+        sh_session_stdin_end(s);
+    }
+    free(in_path);
     free(redir_path);
     free_args(argv, argc);
     return status;

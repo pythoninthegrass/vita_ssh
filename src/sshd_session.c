@@ -116,6 +116,9 @@ struct sh_session {
      * stdout, and errors belong on the terminal. */
     FILE *out_fp;
 
+    /* What a command reads as stdin while `command < file` runs; empty otherwise. */
+    sh_stdin_t in;
+
     /* Escape-sequence state so arrow keys and terminal reports never land in
      * the line: 0 normal, 1 after ESC, 2 after "ESC [", 3 after "ESC O". */
     int esc;
@@ -288,6 +291,27 @@ void sh_session_redirect_end(sh_session_t *s)
     fflush(s->out_fp);
     fclose(s->out_fp);
     s->out_fp = NULL;
+}
+
+int sh_session_stdin_start(sh_session_t *s, sh_stdin_reader_t rd, void *ctx)
+{
+    if (s == NULL || rd == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+    return sh_stdin_load(&s->in, rd, ctx, SSHD_STDIN_MAX);
+}
+
+size_t sh_session_stdin_read(sh_session_t *s, char *buf, size_t n)
+{
+    return sh_stdin_read(&s->in, buf, n);
+}
+
+void sh_session_stdin_end(sh_session_t *s)
+{
+    if (s != NULL) {
+        sh_stdin_free(&s->in);
+    }
 }
 
 void sh_printf(sh_session_t *s, const char *fmt, ...)
@@ -1479,6 +1503,7 @@ void sh_session_free(sh_session_t *s)
         return;
     }
     sh_sftp_free(s->sftp);
+    sh_stdin_free(&s->in);
     for (i = 0; i < s->hist_len; i++) {
         free(s->history[i]);
     }

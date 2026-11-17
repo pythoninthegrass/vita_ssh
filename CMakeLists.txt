@@ -155,6 +155,7 @@ add_executable(${VITA_SERVER_NAME}
   src/sshd_sysinfo.c
   src/sftp_server.c
   src/sh_path.c
+  src/sh_stdin.c
   src/vita_shims.c
   src/network.c
 )

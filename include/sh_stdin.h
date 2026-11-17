@@ -1,0 +1,29 @@
+/* A bounded, in-memory stdin source for one shell command. */
+#ifndef SH_STDIN_H
+#define SH_STDIN_H
+
+#include <stddef.h>
+#include <sys/types.h>
+
+typedef struct {
+    char *data;
+    size_t len;
+    size_t off;
+} sh_stdin_t;
+
+void sh_stdin_init(sh_stdin_t *in);
+
+/* Returns the bytes read, 0 at the end, or -1 with errno set. */
+typedef ssize_t (*sh_stdin_reader_t)(void *ctx, void *buf, size_t n);
+
+/* Replaces the source with everything rd produces. Returns -1 with errno EFBIG when it
+ * holds more than max bytes, or the read errno, and leaves the source empty. */
+int sh_stdin_load(sh_stdin_t *in, sh_stdin_reader_t rd, void *ctx, size_t max);
+
+/* Copies up to n bytes. Returns 0 at the end and for a source that was never loaded,
+ * so a reader never waits. */
+size_t sh_stdin_read(sh_stdin_t *in, char *buf, size_t n);
+
+void sh_stdin_free(sh_stdin_t *in);
+
+#endif
