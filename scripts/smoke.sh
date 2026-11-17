@@ -276,7 +276,7 @@ run_sftp() {
     head -c 6291456 /dev/urandom > "$LOCAL/big.bin"      # larger than any transfer buffer
     printf 'hello vita\n' > "$LOCAL/small.txt"
     : > "$LOCAL/empty.txt"
-    # scp sends the source mode after an upload, and the server only accepts the mode it reports.
+    # A fixed source mode, so the scp checks do not depend on the umask of the machine running them.
     chmod 644 "$LOCAL/small.txt"
 
     # --- 002.01: the basics ---------------------------------------------------
@@ -363,8 +363,10 @@ ls $REMOTE" >/dev/null
 
     # --- 002.02 AC4: clients that send attributes along with the data ---------
     sftp_run "put -p $LOCAL/small.txt $REMOTE/p.txt" >/dev/null; check "sftp put -p completes (-> 0)" 0 $?
-    scp -s -q $SSHO -P "$PORT" "$LOCAL/small.txt" "$HOST:$REMOTE/scp1.txt" 2>"$ERRF"
+    scp -s $SSHO -P "$PORT" "$LOCAL/small.txt" "$HOST:$REMOTE/scp1.txt" 2>"$ERRF"
     check "scp -s upload completes (-> 0)" 0 $?
+    # scp exits 0 and only prints a warning when its fsetstat is refused, so grade stderr too.
+    check "scp -s upload prints no fsetstat warning" 0 "$(grep -c fsetstat "$ERRF")"
     scp -s -q $SSHO -P "$PORT" "$HOST:$REMOTE/scp1.txt" "$LOCAL/scp1.back" 2>"$ERRF"
     check "scp -s download completes (-> 0)" 0 $?
     check "scp round trip identical" ok "$(same "$LOCAL/small.txt" "$LOCAL/scp1.back")"

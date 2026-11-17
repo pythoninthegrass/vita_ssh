@@ -835,6 +835,63 @@ static int handle_perm_setstat(sh_sftp_t *s, const uint8_t *packet, size_t len)
     return 1;
 }
 
+/* Head of libssh 0.12.2's private struct sftp_handle (src/sftpserver.c); the version is pinned in libs/libssh/VITABUILD. */
+typedef struct {
+    uint32_t type;
+    int fd;
+} libssh_handle_head_t;
+
+/* What scp sends after an upload: an FSETSTAT carrying only the file's size. The
+ * request succeeds only when the open file already has that size, which leaves it
+ * as the client believes it is; any other size is left to the stock server and
+ * answered as unsupported. The fd is read out of libssh's handle table and
+ * trusted only when it is one this server opened. Returns 1 when the packet was
+ * answered here. */
+static int handle_size_fsetstat(sh_sftp_t *s, const uint8_t *packet, size_t len)
+{
+    reader_t r = { packet + 5, len - 5 };
+    uint32_t raw_id, handle_len, flags, hi, lo;
+    ssh_string handle;
+    libssh_handle_head_t *h;
+    struct stat st;
+    int ok;
+
+    if (len < 9 || packet[4] != SSH_FXP_FSETSTAT) {
+        return 0;
+    }
+    memcpy(&raw_id, r.p, sizeof(raw_id));
+    r.p += sizeof(raw_id);
+    r.left -= sizeof(raw_id);
+    if (read_u32(&r, &handle_len) != 0 || handle_len != sizeof(uint32_t) ||
+        handle_len > r.left) {
+        return 0;
+    }
+    handle = ssh_string_new(handle_len);
+    if (handle == NULL) {
+        return 0;
+    }
+    memcpy(ssh_string_data(handle), r.p, handle_len);
+    h = sftp_handle(s->sftp, handle);
+    ssh_string_free(handle);
+    r.p += handle_len;
+    r.left -= handle_len;
+    if (read_u32(&r, &flags) != 0 || flags != SSH_FILEXFER_ATTR_SIZE ||
+        read_u32(&r, &hi) != 0 || read_u32(&r, &lo) != 0 || r.left != 0) {
+        return 0;
+    }
+    if (h == NULL || file_slot(h->fd) == NULL || fstat(h->fd, &st) != 0) {
+        return 0;
+    }
+    ok = (uint64_t)st.st_size == (((uint64_t)hi << 32) | lo);
+    sh_console_log("sftp: fsetstat size %u:%u, file has %u: %s", hi, lo,
+                   (unsigned)st.st_size, ok ? "accepted" : "refused");
+    if (!ok) {
+        return 0;
+    }
+    reply_status(s, raw_id, SSH_FX_OK, "");
+    return 1;
+}
+
 static int feed_packet(sh_sftp_t *s, const sh_fsctx_t *fs, void *packet,
                        uint32_t len)
 {
@@ -853,7 +910,8 @@ static int feed_packet(sh_sftp_t *s, const sh_fsctx_t *fs, void *packet,
     active = s;
     active_fs = fs;
     if (handle_rename(s, fs, packet, len) ||
-        handle_perm_setstat(s, packet, len)) {
+        handle_perm_setstat(s, packet, len) ||
+        handle_size_fsetstat(s, packet, len)) {
         active = NULL;
         active_fs = NULL;
         return 0;
