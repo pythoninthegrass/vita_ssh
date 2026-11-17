@@ -4,6 +4,7 @@ title: Back env with real session state and add printenv
 status: To Do
 assignee: []
 created_date: '2026-11-17 03:40'
+updated_date: '2026-11-17T18:43:00Z'
 labels:
   - shell
   - coreutils
@@ -59,3 +60,23 @@ PATH stays what its own comment says it is -- decorative, since commands come fr
 - [ ] #2 Verified on a device with two different clients (the Vita client and OpenSSH) showing different TERM values
 - [ ] #3 The env-request callback return convention is quoted from the installed libssh header, not assumed
 <!-- DOD:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+No dependencies; TASK-020 depends on this task's table and should not start before it lands.
+
+Researched 2026-11-17 against src/sshd_builtins.c, src/sshd_session.c and the libssh header installed under $VITASDK:
+- cmd_env() walks static_env[] and then prints HOME, PWD, USER and LOGNAME from the session; nothing calls getenv/setenv.
+- sshd_session.c installs only the pty, shell, exec and subsystem request callbacks, so the env requests src/ssh_client.c sends (TERM, COLUMNS, LINES) are dropped silently.
+
+Steps:
+1. Read the declaration of the env-request callback in the installed libssh `callbacks.h` (`ssh_channel_env_request_function`) and quote its return convention in the task notes (DoD3); do not assume it matches the pty family.
+2. Table: add a small per-session variable table next to sh_fsctx_t in src/sshd_session.c (heap, bounded count and lengths) with accessors in include/sshd.h, shaped so TASK-020 extends it with set/unset and read-only flags instead of building a second table.
+3. Seed at session setup: HOME, USER, LOGNAME from the session; TERM only from the client's env request, with the server default (xterm-256color) used and marked as a default when the client sent nothing (AC2). PWD is not stored: read it from the session's fsctx at print time so it cannot disagree with `cd` (AC5).
+4. Install the env-request callback. Accept an allowlist only (TERM, COLUMNS, LINES, LANG); every other name is refused with a line in sshd.log naming it (AC6). Strip bytes below 0x20 and 0x7F from values and cap length before storing or logging them (AC7); a value is never used as a path without sh_path_resolve().
+5. Window-size authority: the pty request, via sh_session_cols(). A COLUMNS or LINES env request is logged and not stored, with a code comment saying so (AC6).
+6. cmd_env() prints the table, always exit 0. Add cmd_printenv(): bare value for one name, one per line for several, no arguments matches env, exit 1 when a named variable is unset (AC3, AC4). Rows alphabetical (AC8).
+7. Document in code and README that PATH is decorative (AC9); drop static_env[] once nothing reads it.
+8. Verify with the Vita client and OpenSSH showing different TERM (DoD2); measure arm-vita-eabi-size before and after (size ceiling, AGENTS.md).
+<!-- SECTION:PLAN:END -->

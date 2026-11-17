@@ -4,10 +4,11 @@ title: 'Chain commands with ;, && and ||'
 status: To Do
 assignee: []
 created_date: '2026-11-17 05:45'
-updated_date: '2026-11-17T17:36:00Z'
+updated_date: '2026-11-17T18:43:00Z'
 labels:
   - shell
-dependencies: []
+dependencies:
+  - TASK-030
 references:
   - src/sshd_session.c
   - src/sshd_builtins.c
@@ -68,6 +69,29 @@ This also unblocks ssh-copy-id only if the shell grows sh -c; chaining alone doe
 - [ ] #1 task build produces both VPKs
 - [ ] #2 Verified on a device over a real ssh session, including a one-shot exec with ;, && and ||
 <!-- DOD:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+Depends on TASK-030 (true, false) so ACs 2-4 are checked with commands whose status is known rather than a side effect such as `ls /nope`.
+
+Researched 2026-11-17 against src/sshd_builtins.c at a3a9224 plus the TASK-012 merge:
+- sh_execute_line() (~line 3836) calls split_line() once, counts unquoted `|` words with is_pipe_word() (~3753), and dispatches to run_command() (~3626) or run_pipeline() (~3778). Both take MAX_WORDS arrays and own/free them.
+- split_line() (~439) records one `quoted` bit per word; an operator is an unquoted word that is exactly the operator. `||` is a different word from `|`, so is_pipe_word() must stay an exact match or `a || b` will be read as a pipe.
+
+Steps:
+1. Add is_chain_word(word, quoted) beside is_pipe_word(): true for an unquoted word exactly `;`, `&&` or `||`. Keep the separate-words rule shared with `>`, `<`, `|`; glued `a;b` stays text. Decide and write in help and README that spaces are required.
+2. Validate before running anything: a leading, trailing or doubled chain operator prints `sh: syntax error near unexpected token `X'` and returns 2 (reuse the has_empty_segment shape); more than CHAIN_MAX items prints a readable error naming the limit and runs none (pick CHAIN_MAX small, e.g. 16, and state it).
+3. Extract the existing pipe-or-command dispatch into one static helper (run_item) that takes one item's words, so the no-operator fast path keeps calling it unchanged.
+4. When any chain word is present, walk the items left to right: copy each item's words into its own MAX_WORDS arrays (as run_pipeline copies segments), run it through run_item, keep `status`, and use the operator that precedes the item to decide whether to run or skip (`&&` runs on status 0, `||` on nonzero, `;` always). A skipped item is freed with free_args and leaves status unchanged.
+5. Check sh_session_interrupted() before each item and stop the chain when it is true; this also gives `exit ; echo never` (AC8) because sh_session_request_exit() sets the flag the check reads.
+6. Redirect, stdin and capture state are per item: confirm the redirect is closed and stdin cleared after every item, as run_pipeline does after every segment.
+7. history already stores the raw line, so AC11 needs a test, not code.
+8. Add chain checks to scripts/smoke.sh exec (including `uname -a ; pwd` as a one-shot) and update help and README, replacing the sentence that says there is no chaining.
+9. Run `arm-vita-eabi-size build/ssh_server_vita` before and after and record the cost, as the server is near the size ceiling (AGENTS.md, Build).
+
+Risks: the chain operators bind looser than `|`, so split on them first and hand each item to the pipeline path, never the reverse. TASK-018 and TASK-020 edit the same function: they depend on this task so aliases and variables are expanded per chain item and an operator produced by expansion is never re-split.
+<!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
 
