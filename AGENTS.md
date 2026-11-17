@@ -8,6 +8,11 @@
   credited in README.md. Upstream is effectively unmaintained and is not a seam to keep
   clean: this repo is canonical, so fix cruft rather than working around it.
 
+## Machine-local context
+
+- Personal and environment identifiers — the maintainer's name, the Vita endpoints, the host key fingerprint, the devbox hostnames — live in the gitignored `CLAUDE.local.md` and nowhere else. Read it before any device run; if it is missing, ask for the endpoint rather than guessing one.
+- Never write those values into tracked files, backlog task notes and commit messages included. Tasks refer to them generically (`the user`, `the home Vita`, `the work Vita`, `devbox A`/`devbox B`) and point at `CLAUDE.local.md` for the real values.
+
 ## Build
 
 - `task` (Taskfile, <https://taskfile.dev>) is the entry point — never run `cmake` directly.

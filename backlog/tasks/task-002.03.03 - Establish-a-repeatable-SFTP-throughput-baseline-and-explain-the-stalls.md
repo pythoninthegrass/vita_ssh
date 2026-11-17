@@ -50,13 +50,13 @@ scripts/smoke.sh sftp prints THROUGHPUT lines, but WiFi runs vary too much to us
 2. Card vs crypto (AC4), measured in this order: (a) on-device `cp` of the 12 MB file within ux0 timed from the client via `ssh host "cp ..."`: card read+write with no network and no SSH crypto in the data path, so a floor on card speed; (b) exec `cat` of the file with `-c` set to aes128-ctr, aes256-ctr, chacha20-poly1305: if rates do not move with the cipher, crypto is not the limit; (c) compare both against the sftp/scp rates. State the conclusion with the numbers.
 3. Stall cause (AC3): run the sftp get repeatedly while sampling, in parallel, a ping/latency probe to the Vita and the server log's READ markers. A stall that lines up with ping loss or latency spikes is recorded as a network effect with that evidence; a stall with clean ping while the server is idle points back at the server (window/pump) and gets a follow-up question rather than a silent code change.
 4. Write the procedure and the recorded baseline (numbers plus conditions) into `docs/throughput.md`, link it from README and docs/development.md (AC5). Update smoke.sh header comment only if the THROUGHPUT format needs to be referenced.
-5. No server source changes planned. Device runs need Lance's terminal (agent sandbox cannot reach the Vita); Lance runs the script and pastes the output, I fill in docs and the task record.
+5. No server source changes planned. Device runs need the user's terminal (agent sandbox cannot reach the Vita); the user runs the script and pastes the output, I fill in docs and the task record.
 <!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-2026-11-16 device runs from the Mac (wired en7) to any@10.5.121.57 on the Work network, VPK sha256 09edf6a8b78d, tree 5624021-dirty. bench RUNS=5: scp-up 0.67 (0.65-0.69), scp-down 0.65 (0.38-1.06), sftp-put 0.66 (0.65-0.66), sftp-get 0.99 (0.59-1.04) MB/s. limit RUNS=2: card cp 5.71 MB/s (read+write); exec cat aes-ctr 0.46, aes-gcm 0.66, chacha20 1.05 MB/s on a 0%-loss link. Full tables and conditions in docs/throughput.md.
+2026-11-16 device runs from the Mac (wired en7) to the work Vita, VPK sha256 09edf6a8b78d, tree 5624021-dirty. bench RUNS=5: scp-up 0.67 (0.65-0.69), scp-down 0.65 (0.38-1.06), sftp-put 0.66 (0.65-0.66), sftp-get 0.99 (0.59-1.04) MB/s. limit RUNS=2: card cp 5.71 MB/s (read+write); exec cat aes-ctr 0.46, aes-gcm 0.66, chacha20 1.05 MB/s on a 0%-loss link. Full tables and conditions in docs/throughput.md.
 
 AC3 left unchecked: the 83-94 s transfers of the shakedown coincided with ping loss 0.2-0.4% and rtt avg 57-133 ms (max 960 ms), and the same build then ran at 1.0 MB/s, so it reads as a network effect, but nothing shows it caused them. The baseline's moderate slow gets (0.59 MB/s twice, 0.46, 0.38) have no link signature and are unexplained, as is why uploads sit at 0.66 against a 1.05 download ceiling.
 <!-- SECTION:NOTES:END -->

@@ -38,7 +38,7 @@ The three children are independent routes and any one of them removes the need t
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
-Breakdown agreed with Lance on 2026-11-16, all three approved for creation and none started.
+Breakdown agreed with the user on 2026-11-16, all three approved for creation and none started.
 
 - TASK-013.01 Read the ~/.ssh/authorized_keys that ssh-copy-id -s uploads — candidate-list change in sshd_hostkey.c shared by load_authorized_keys() and stat_keys_identity(), plus the narrow chmod/chown OK rule for .ssh and authorized_keys. Decided: OK only under the server's own data dir, OP_UNSUPPORTED elsewhere.
 - TASK-013.02 Give the shell an authkey command — add/list/del, writing auth_state.keys_path, validating with the loader's own ssh_pki_import_pubkey_base64, lockout warning plus confirm flag on the first key.

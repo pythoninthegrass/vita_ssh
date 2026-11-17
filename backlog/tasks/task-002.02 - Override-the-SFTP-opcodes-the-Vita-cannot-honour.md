@@ -54,9 +54,9 @@ Plan:
 4. Document each overridden opcode and its reason in a block comment in sftp_server.c and in AGENTS.md (AC6); update the README 'sftp refused' lines only if they are now false (TASK-004 owns README scope, so leave unless stale).
 5. Verification: no test harness exists and nothing runs on the host. task build of both VPKs is the check; AC4 and device behaviour belong to TASK-002.03. Will say so plainly.
 
-Open questions for Lance before implementing: (a) chmod/chown => OP_UNSUPPORTED vs a quiet success; (b) interception in sh_sftp_data() instead of a libssh callback; (c) AC5 'removing ... across devices' read as rename only, since unlink has no cross-device case.
+Open questions for the user before implementing: (a) chmod/chown => OP_UNSUPPORTED vs a quiet success; (b) interception in sh_sftp_data() instead of a libssh callback; (c) AC5 'removing ... across devices' read as rename only, since unlink has no cross-device case.
 
-Final design, where it departed from the plan above: permission-only SETSTAT and FSETSTAT are answered OK when they ask for the mode already reported (decided with Lance as option 1), because scp sends one after every upload; anything else, including times, stays unsupported. The overrides sit in two seams only, --wrap of the libc calls the stock handlers make and handle_rename()/handle_perm_setstat() answering packets in sh_sftp_data() before the stock callback, since libssh 0.12.2 exposes no handler callbacks.
+Final design, where it departed from the plan above: permission-only SETSTAT and FSETSTAT are answered OK when they ask for the mode already reported (decided with the user as option 1), because scp sends one after every upload; anything else, including times, stays unsupported. The overrides sit in two seams only, --wrap of the libc calls the stock handlers make and handle_rename()/handle_perm_setstat() answering packets in sh_sftp_data() before the stock callback, since libssh 0.12.2 exposes no handler callbacks.
 
 AC1 was verified with scripts/sftp_probe.py: chmod and chown are refused (smoke.sh), and a SETSTAT with times either fails or reads back the time that was sent; on the device it succeeded and read back within 2 s, so utime is honoured, not faked.
 <!-- SECTION:PLAN:END -->
@@ -64,7 +64,7 @@ AC1 was verified with scripts/sftp_probe.py: chmod and chown are refused (smoke.
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-Lance approved intercept + wrap (no libssh fork) and OP_UNSUPPORTED for chmod/chown.
+The user approved intercept + wrap (no libssh fork) and OP_UNSUPPORTED for chmod/chown.
 
 Implemented in src/sftp_server.c: stat/lstat normalised (uid/gid 0, nlink 1, plain file/dir mode, never a link); __wrap_chmod/chown/statvfs answer ENOSYS; __wrap_truncate translates and reads the size back; utimes stays honoured; handle_rename() answers RENAME and posix-rename@openssh.com in sh_sftp_data() before the stock callback (cross-device => SSH_FX_FAILURE, device root/read-only refused, plain RENAME onto existing fails, posix-rename unlinks a file target first). CMakeLists.txt gained --wrap=chown,truncate,statvfs. AGENTS.md documents every override.
 
@@ -90,7 +90,7 @@ Device verification, scripts/smoke.sh sftp against the Vita (server code built N
 - AC5: cross-device rename is refused with the source kept and no copy left; rename onto an existing directory and onto /os0 are refused; rename onto an existing file replaces it (posix-rename).
 - AC1 stays unchecked: chmod and chown are verified refused, but utimes is not exercised by any stock client (sftp and scp set times with FSETSTAT, which stays unsupported), so its honoured path has not run on a device.
 
-Support added along the way: permission-only SETSTAT/FSETSTAT is answered OK when it asks for the mode already reported (decided with Lance as option 1), because scp sends one after every upload. Consequence: scp of a file whose mode is not 0644 reports failure by design.
+Support added along the way: permission-only SETSTAT/FSETSTAT is answered OK when it asks for the mode already reported (decided with the user as option 1), because scp sends one after every upload. Consequence: scp of a file whose mode is not 0644 reports failure by design.
 
 Transport lessons recorded in AGENTS.md: no blocking libssh calls from a callback (reply queue + non-blocking session), --wrap also catches calls made inside libc (opendir), wait for the channel close before dropping the transport, and every stat handed to libssh needs a time localtime_r accepts.
 <!-- SECTION:NOTES:END -->

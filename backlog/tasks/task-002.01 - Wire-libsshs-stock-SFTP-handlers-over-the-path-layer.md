@@ -57,7 +57,7 @@ Approach: adapt at the boundary with link-time symbol wrapping, no libssh fork.
 5. sshd_session.c: on_subsystem_request accepts "sftp" only (others keep the rejection and leave the channel usable, AC5); constructs the sftp session via sftp_channel_default_subsystem_request into a per-session sftp_session*; channel_data_function dispatches to sftp_channel_default_data_callback when the sftp session exists, else to the shell feeder; channel close/eof/free path calls the sftp teardown then sftp_server_free.
 6. TDD limits: nothing runs on host (arm-vita-eabi cross build, no test suite). Verification is task build of both VPKs plus host-side unit tests only if the wrapper path logic can be built against sh_path.c natively; otherwise on-device checks via TASK-002.03 and scripts/smoke.sh. Will state this plainly in the final summary.
 
-Open decision for Lance: confirm --wrap approach, and whether AC7 .part naming is acceptable (alternatives: hidden dotfile name; or leave AC7 to TASK-002.02).
+Open decision for the user: confirm --wrap approach, and whether AC7 .part naming is acceptable (alternatives: hidden dotfile name; or leave AC7 to TASK-002.02).
 
 Plan addition (found while reading sftp_decode_channel_data_to_packet): the stock data callback requires each channel chunk to hold whole SFTP packets and returns SSH_ERROR otherwise, so a 32 KB write split across SSH packets fails. sh_sftp_data() reassembles by the 4-byte length prefix (cap 256 KB) and feeds the stock callback one packet at a time.
 
@@ -69,7 +69,7 @@ AC5 was verified with scripts/sftp_probe.py (paramiko): an unknown subsystem is 
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-Lance approved --wrap and the .part upload approach.
+The user approved --wrap and the .part upload approach.
 
 Implemented: include/sftp_server.h, src/sftp_server.c (wrappers for open/close/opendir/readdir/closedir/stat/lstat/mkdir/rmdir/unlink/chmod/utimes/realpath, packet reassembly, teardown), sshd_session.c (accepts only 'sftp', routes channel data, frees on session free), CMakeLists.txt (source + --wrap link options on ssh_server_vita only). task build links and produces both VPKs; nm shows process_open calling __wrap_open/__wrap_close.
 

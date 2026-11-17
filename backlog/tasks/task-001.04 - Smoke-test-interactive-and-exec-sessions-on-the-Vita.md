@@ -50,11 +50,11 @@ Complete. All nine criteria verified on hardware, including AC4's cross-device m
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-Password login confirmed manually by Lance before the smoke script existed (AC1). Cross-device mv skipped in scripts/smoke.sh: no second writable device mounted (AC4 open). Linux devbox not yet run (AC9 open).
+Password login confirmed manually by the user before the smoke script existed (AC1). Cross-device mv skipped in scripts/smoke.sh: no second writable device mounted (AC4 open). Linux devbox not yet run (AC9 open).
 
 AC8 proven by scripts/smoke.sh pty on macOS: tab completion, !!, Ctrl-A/C/D/E/U/W/L, Left/Right, mid-line insert and backspace all pass (16/16).
 
-2026-11-16 AC9 (work Vita any@10.5.121.57:2222): scripts/smoke.sh exec and pty from macOS OpenSSH_10.6p1 and from Linux (ubuntu:24.04 aarch64 in Docker, OpenSSH_9.6p1). Both: exec 21 pass 0 fail, pty 16 pass 0 fail, 1 skip (cross-device mv). The per-check PASS/FAIL/SKIP lists are identical (diffed). No divergence. Windows clients not tried. No scratch left on the device.
+2026-11-16 AC9 (work Vita): scripts/smoke.sh exec and pty from macOS OpenSSH_10.6p1 and from Linux (ubuntu:24.04 aarch64 in Docker, OpenSSH_9.6p1). Both: exec 21 pass 0 fail, pty 16 pass 0 fail, 1 skip (cross-device mv). The per-check PASS/FAIL/SKIP lists are identical (diffed). No divergence. Windows clients not tried. No scratch left on the device.
 
 2026-11-16 AC4 by hand, ux0 (not checked, cross-device mv could not be run): du of a 3-file tree (4+7+11 bytes) printed 22B for the tree and 18B for the subdirectory, matching; cp -r copied the tree and the deepest file read back; cp of a directory without -r fails 'Is a directory' rc 1; cp of a missing source fails 'No such file or directory' rc 1; rm of a directory without -r fails 'Is a directory' rc 1; rm -r removed both trees, ls then says 'No such file or directory'; rm -r on /os0 says 'Read-only file system'. Cross-device mv: no second writable device. uma0 lists as present but writes fail Permission denied ('no device info' from df); pd0, tm0 and ur0 are Permission denied; grw0 is 'No such device'; sd0, xmc0 and imc0 are not mounted. The refused mv left the source file in place. Wart seen on that refusal: mv prints 'cp: uma0:/ac4-f1.txt: Permission denied', naming cp, not mv, and the sceIo path instead of the POSIX one. Not changed (out of this task's scope). The scratch files were removed. smoke.sh's cross-device mv check only passes when some device accepts a write and otherwise SKIPs, so it has never exercised the success path.
 
@@ -62,13 +62,13 @@ AC8 proven by scripts/smoke.sh pty on macOS: tab completion, !!, Ctrl-A/C/D/E/U/
 
 2026-11-16: Back to To Do. Only AC4 is open, blocked on hardware: the cross-device mv success path needs a second writable device (SD2Vita or USB drive mounted as sd0, uma0 or xmc0).
 
-2026-11-16 home Vita (any@192.168.8.57:22, USB drive mounted as uma0): the cross-device mv success path ran at last. smoke.sh exec 28 pass 0 fail 0 skip; the mv check was tightened in the same pass to grade bytes at the destination and the source being removed, not just the exit code. Hand-verified beyond the harness: ux0 -> uma0 and uma0 -> ux0 both preserve content and delete the source; mv of a missing source exits 1; a cross-device mv onto an existing file replaces it. No scratch left on either device. The cd /os0 and cd /vs0 checks added after TASK-001 closed both pass, so that task's one ungraded atom is graded now.
+2026-11-16 home Vita (USB drive mounted as uma0): the cross-device mv success path ran at last. smoke.sh exec 28 pass 0 fail 0 skip; the mv check was tightened in the same pass to grade bytes at the destination and the source being removed, not just the exit code. Hand-verified beyond the harness: ux0 -> uma0 and uma0 -> ux0 both preserve content and delete the source; mv of a missing source exits 1; a cross-device mv onto an existing file replaces it. No scratch left on either device. The cd /os0 and cd /vs0 checks added after TASK-001 closed both pass, so that task's one ungraded atom is graded now.
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary
 
 <!-- SECTION:FINAL_SUMMARY:BEGIN -->
-On-device smoke pass for the server's shell, path layer and session handling, against a real OpenSSH client from both devboxes (macOS OpenSSH_10.6p1 and Linux ubuntu:24.04 aarch64 in Docker, OpenSSH_9.6p1). scripts/smoke.sh exec: 28 pass, 0 fail, 0 skip on the home Vita (192.168.8.57:22), which has a USB drive mounted as uma0; 24 pass with 1 skip on the work Vita, which has no second writable device. scripts/smoke.sh pty: 16 pass, 0 fail. The Linux client's per-check PASS/FAIL/SKIP lists are identical to macOS (diffed), so no platform divergence. No scratch left on the device.
+On-device smoke pass for the server's shell, path layer and session handling, against a real OpenSSH client from both devboxes (macOS OpenSSH_10.6p1 and Linux ubuntu:24.04 aarch64 in Docker, OpenSSH_9.6p1). scripts/smoke.sh exec: 28 pass, 0 fail, 0 skip on the home Vita, which has a USB drive mounted as uma0; 24 pass with 1 skip on the work Vita, which has no second writable device. scripts/smoke.sh pty: 16 pass, 0 fail. The Linux client's per-check PASS/FAIL/SKIP lists are identical to macOS (diffed), so no platform divergence. No scratch left on the device.
 
 What was verified on hardware:
 - Password login with the passphrase shown on the Vita screen, any username; public-key login once the key is installed, and a throwaway key refused.
