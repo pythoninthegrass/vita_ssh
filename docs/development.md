@@ -29,7 +29,7 @@ Nothing here runs on the host: the apps are cross-compiled for the Vita, so ever
    scripts/throughput.sh bench any@<ip>   # repeatable throughput figures, see throughput.md
    ```
 
-   The scripts need key auth and a terminal on the same LAN as the Vita. The authoring agent's sandbox cannot reach the device, so run them yourself. On-card (storage-side) speed is affected by the Turbo Storage plugin installed on the test device; its setup, headless controls and card benchmarks are in [turbo-storage.md](turbo-storage.md).
+   The scripts need key auth and a terminal on the same LAN as the Vita. The authoring agent's sandbox cannot reach the device, so run them yourself. On-card (storage-side) speed is affected by the Turbo Storage plugin installed on the test device; its setup, headless controls and card benchmarks are in [turbo-storage.md](turbo-storage.md). On the radio side the device also runs Wi-Fi Turbo, power save off and 40 MHz on; its install, its unauthenticated `:1339` control port and what the profiles measured here are in [turbo-wifi.md](turbo-wifi.md), and `vcmd` is how you drive that port from a session ([vcmd.md](vcmd.md)).
 
 ## Debugging
 

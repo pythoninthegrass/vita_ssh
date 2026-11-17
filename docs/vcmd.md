@@ -69,10 +69,15 @@ is the same on both: connect, send a line ending in `\n`, read until EOF.
 ### Wi-Fi Turbo — port 1339
 
 Requires **Settings → Network → Wi-Fi Turbo → Developer mode** to be on; with it off
-there is no listener at all. `vcmd status` is the only one of these verified on a device
-in the writing of this document — the rest are transcribed from the plugin's own `help`
-output and `user/dispatch.c`, and were not executed because several reassociate the
-radio.
+there is no listener at all, and nothing sendable over the socket turns it back on.
+`help`, `status`, `selftest`, `log dump`, `profile`, `confirm`, `keepwifi`,
+`autoreconnect`, `mac status` and `roam status` were each run on a device; `ht40` is
+reportedly applied on this device (its patch appears in the kernel log) but was not
+exercised through the socket during that pass. The rest are transcribed from the
+plugin's own `help` output and `user/dispatch.c` and were not executed, because several
+reassociate the radio or move the MAC. Installation, the Developer-mode caveat about
+that `INADDR_ANY` bind, and what the power profiles measured are in
+[turbo-wifi.md](turbo-wifi.md).
 
 | Command | Effect | Risk to your session |
 | --- | --- | --- |
