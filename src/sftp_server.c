@@ -30,6 +30,7 @@
 #include <libssh/sftp.h>
 #include <libssh/sftpserver.h>
 
+#include "sftp_open_policy.h"
 #include "sftp_server.h"
 #include "sshd.h"
 
@@ -249,7 +250,7 @@ int __wrap_open(const char *path, int flags, ...)
         errno = EMFILE;
         return -1;
     }
-    if ((flags & O_CREAT) && (flags & O_TRUNC)) {
+    if (sftp_open_stages(flags)) {
         size_t len = strlen(t.sce);
 
         part = malloc(len + sizeof(PART_SUFFIX));
@@ -262,7 +263,7 @@ int __wrap_open(const char *path, int flags, ...)
         }
         memcpy(part, t.sce, len);
         memcpy(part + len, PART_SUFFIX, sizeof(PART_SUFFIX));
-        fd = __real_open(part, flags, mode);
+        fd = __real_open(part, flags | O_TRUNC, mode);
     } else {
         fd = __real_open(t.sce, flags, mode);
     }
