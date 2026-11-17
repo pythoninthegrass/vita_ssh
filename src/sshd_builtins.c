@@ -3620,11 +3620,12 @@ static int extract_redirect(sh_session_t *s, int *argc, char **argv,
     return 0;
 }
 
-int sh_execute_line(sh_session_t *s, const char *line)
+/* Runs one command from its already split words, which it takes ownership of and
+ * frees on every path. argv and quoted hold MAX_WORDS entries: glob expansion grows
+ * the list in place. */
+static int run_command(sh_session_t *s, char **argv, int *quoted, int argc)
 {
-    char *argv[MAX_WORDS];
-    int quoted[MAX_WORDS];
-    int argc, i, status = 0;
+    int i, status = 0;
     const sh_builtin_t *cmd;
     char *redir_path = NULL; /* owns the filename word extract_redirect took
                               * out of argv; freed on every path below */
@@ -3632,7 +3633,6 @@ int sh_execute_line(sh_session_t *s, const char *line)
     char *in_path = NULL; /* the `<` filename, owned the same way */
     int in_started = 0;
 
-    argc = split_line(line, argv, quoted, MAX_WORDS);
     if (argc == 0) {
         return 0;
     }
@@ -3732,7 +3732,7 @@ int sh_execute_line(sh_session_t *s, const char *line)
 
     cmd = sh_builtin_lookup(argv[0]);
     if (cmd == NULL) {
-        sh_eprintf(s, "%s: command not found\n", argv[0]);
+        sh_eprintf(s, "sh: %s: command not found\n", argv[0]);
         status = 127;
     } else {
         status = cmd->fn(s, argc, argv);
@@ -3748,4 +3748,108 @@ out:
     free(redir_path);
     free_args(argv, argc);
     return status;
+}
+
+static int is_pipe_word(const char *word, int quoted)
+{
+    return !quoted && strcmp(word, "|") == 0;
+}
+
+/* The `|` words must be separate and unquoted, like `>` and `<`: a glued `a|b` stays one
+ * word and a quoted "|" is an argument. Returns 1 when a segment would be empty. */
+static int has_empty_segment(char **argv, int *quoted, int argc)
+{
+    int i;
+
+    for (i = 0; i < argc; i++) {
+        if (is_pipe_word(argv[i], quoted[i]) &&
+            (i == 0 || i == argc - 1 || is_pipe_word(argv[i + 1], quoted[i + 1]))) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Runs the segments left to right. Each one but the last has its stdout captured and
+ * handed to the next as stdin: there is no fork and nothing may block, so this is not a
+ * streaming pipe, and a segment cannot start before the one before it has finished. A
+ * segment that is not the last cannot change session state, as in a subshell: `exit` is
+ * skipped and `cd` is undone. Returns the last segment's status. */
+static int run_pipeline(sh_session_t *s, char **argv, int *quoted, int argc)
+{
+    char *seg[MAX_WORDS];
+    int segq[MAX_WORDS];
+    int start = 0, i, n, status = 0, stop = 0;
+
+    for (i = 0; i <= argc && !stop; i++) {
+        int last = (i == argc);
+
+        if (!last && !is_pipe_word(argv[i], quoted[i])) {
+            continue;
+        }
+        n = i - start;
+        memcpy(seg, argv + start, n * sizeof(*seg));
+        memcpy(segq, quoted + start, n * sizeof(*segq));
+        if (!last) {
+            free(argv[i]);
+        }
+        start = i + 1;
+
+        if (sh_session_interrupted(s)) {
+            free_args(seg, n);
+            sh_session_stdin_end(s);
+            status = 130;
+            stop = 1;
+        } else if (last) {
+            status = run_command(s, seg, segq, n);
+            sh_session_stdin_end(s);
+        } else if (strcmp(seg[0], "exit") == 0) {
+            free_args(seg, n);
+            sh_session_stdin_end(s);
+            status = 0;
+        } else {
+            sh_fsctx_t fs;
+            char cwd[SH_POSIX_PATH_MAX];
+            char name[NAME_MAX + 1];
+
+            fs_of(s, &fs);
+            snprintf(cwd, sizeof(cwd), "%s", fs.cwd);
+            snprintf(name, sizeof(name), "%s", seg[0]);
+            sh_session_capture_start(s);
+            status = run_command(s, seg, segq, n);
+            sh_session_stdin_end(s); /* before capture_end hands the output over as the next stdin */
+            sh_session_set_cwd(s, cwd);
+            if (sh_session_capture_end(s) != 0) {
+                sh_eprintf(s, "sh: %s: output too large for a pipe (limit %d bytes)\n",
+                           name, SSHD_STDIN_MAX);
+                status = 1;
+                stop = 1;
+            }
+        }
+    }
+    if (start < argc) {
+        free_args(argv + start, argc - start);
+    }
+    return status;
+}
+
+int sh_execute_line(sh_session_t *s, const char *line)
+{
+    char *argv[MAX_WORDS];
+    int quoted[MAX_WORDS];
+    int argc, i, pipes = 0;
+
+    argc = split_line(line, argv, quoted, MAX_WORDS);
+    for (i = 0; i < argc; i++) {
+        pipes += is_pipe_word(argv[i], quoted[i]);
+    }
+    if (pipes == 0) {
+        return run_command(s, argv, quoted, argc);
+    }
+    if (has_empty_segment(argv, quoted, argc)) {
+        sh_eprintf(s, "sh: syntax error near unexpected token `|'\n");
+        free_args(argv, argc);
+        return 2;
+    }
+    return run_pipeline(s, argv, quoted, argc);
 }

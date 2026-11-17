@@ -91,6 +91,50 @@ int main(void)
     fclose(f);
     CHECK(sh_stdin_read(&in, one, sizeof(one)) == 0);
 
+    /* append grows across chunk boundaries and reads back in order */
+    sh_stdin_free(&in);
+    for (i = 0; i < n; i += 1000) {
+        CHECK(sh_stdin_append(&in, (const char *)big + i, n - i < 1000 ? n - i : 1000, 1024 * 1024) == 0);
+    }
+    CHECK(drain(&in, back, n) == n);
+    CHECK(memcmp(big, back, n) == 0);
+
+    /* exactly max fits; one more byte is EFBIG and leaves the source empty */
+    sh_stdin_free(&in);
+    CHECK(sh_stdin_append(&in, (const char *)big, 100, 100) == 0);
+    errno = 0;
+    CHECK(sh_stdin_append(&in, (const char *)big, 1, 100) == -1);
+    CHECK(errno == EFBIG);
+    CHECK(sh_stdin_read(&in, one, sizeof(one)) == 0);
+    errno = 0;
+    CHECK(sh_stdin_append(&in, (const char *)big, 101, 100) == -1);
+    CHECK(errno == EFBIG);
+
+    /* an empty append is a no-op and the source stays empty */
+    sh_stdin_free(&in);
+    CHECK(sh_stdin_append(&in, "", 0, 100) == 0);
+    CHECK(sh_stdin_read(&in, one, sizeof(one)) == 0);
+
+    /* move hands the bytes over unread, empties the source, and replaces the target */
+    {
+        sh_stdin_t dst;
+
+        sh_stdin_init(&dst);
+        CHECK(sh_stdin_append(&dst, "old", 3, 100) == 0);
+        sh_stdin_free(&in);
+        CHECK(sh_stdin_append(&in, "hello", 5, 100) == 0);
+        CHECK(sh_stdin_read(&in, one, 2) == 2);
+        sh_stdin_move(&dst, &in);
+        CHECK(sh_stdin_read(&in, one, sizeof(one)) == 0);
+        CHECK(sh_stdin_read(&dst, one, sizeof(one)) == 5);
+        CHECK(memcmp(one, "hello", 5) == 0);
+        CHECK(sh_stdin_append(&in, "x", 1, 100) == 0);
+        CHECK(sh_stdin_read(&in, one, sizeof(one)) == 1);
+        sh_stdin_move(&dst, &in);
+        sh_stdin_free(&dst);
+        sh_stdin_free(&in);
+    }
+
     sh_stdin_free(&in);
     sh_stdin_free(&in);
     CHECK(sh_stdin_read(&in, one, sizeof(one)) == 0);

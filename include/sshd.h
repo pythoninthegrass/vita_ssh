@@ -93,7 +93,8 @@ int sh_session_redirect_start(sh_session_t *s, const char *sce_path,
                               int append);
 void sh_session_redirect_end(sh_session_t *s);
 
-/* The largest source `command < file` will take as stdin. */
+/* The largest source `command < file` will take as stdin, and the most one pipeline
+ * segment can hand the next. */
 #define SSHD_STDIN_MAX (1024 * 1024)
 
 /* Gives one command everything rd produces as stdin -- the `command < file` form.
@@ -103,6 +104,13 @@ void sh_session_redirect_end(sh_session_t *s);
 int sh_session_stdin_start(sh_session_t *s, sh_stdin_reader_t rd, void *ctx);
 size_t sh_session_stdin_read(sh_session_t *s, char *buf, size_t n);
 void sh_session_stdin_end(sh_session_t *s);
+
+/* Holds what sh_write() puts out instead of sending it, for one pipeline segment; a `>`
+ * redirect still wins. _end makes the held bytes the session's stdin and returns 0, or
+ * returns -1 (stdin left empty) when more than SSHD_STDIN_MAX bytes came out. Every
+ * path that calls _start calls _end. sh_eprintf is not captured. */
+void sh_session_capture_start(sh_session_t *s);
+int sh_session_capture_end(sh_session_t *s);
 
 void sh_prompt(sh_session_t *s);
 

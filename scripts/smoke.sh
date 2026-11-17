@@ -124,6 +124,26 @@ run_exec() {
   $V "ls /ux0/data/$T"  >/dev/null 2>&1; RC=$?; check "rm -r removes the tree"      1 "$RC"
   $V "rm /nosuchfile"   >/dev/null 2>&1; RC=$?; check "rm missing errs honestly"    1 "$RC"
 
+  # --- TASK-015.02: pipelines ----------------------------------------------
+  # Segments run one after another in the server; the `|` word must stand alone, like `>`.
+  OUT=$($V "echo x | cat" 2>/dev/null);               check "pipe: echo x | cat" x "$OUT"
+  OUT=$($V "echo a | cat | cat | cat" 2>/dev/null);   check "pipe: three segments chain" a "$OUT"
+  OUT=$($V 'echo "a|b"' 2>/dev/null);                 check "pipe: quoted | stays literal" 'a|b' "$OUT"
+  OUT=$($V "ls /ux0 | grep -c data" 2>/dev/null);     check "pipe: ls | grep finds data" 1 "$OUT"
+  $V "echo hi | cat > /ux0/data/$T-pipe.txt" >/dev/null 2>&1
+  OUT=$($V "cat /ux0/data/$T-pipe.txt" 2>/dev/null);  check "pipe: last segment honours >" hi "$OUT"
+  OUT=$($V "echo mid > /ux0/data/$T-pipe.txt | cat" 2>/dev/null)
+  check "pipe: redirect on a middle segment wins" "" "$OUT"
+  OUT=$($V "cat /ux0/data/$T-pipe.txt | head -n 1" 2>/dev/null); check "pipe: file contents reach the next segment" mid "$OUT"
+  $V "echo x | nosuchcommand"  >/dev/null 2>&1; RC=$?; check "pipe: status is the last segment's (-> 127)" 127 "$RC"
+  OUT=$($V "nosuchcommand | echo after" 2>&1 | grep -v "closed by remote host")
+  check "pipe: unknown command reports once, later segments run" "sh: nosuchcommand: command not found after" "$(printf '%s' "$OUT" | tr '\n' ' ' | sed 's/ $//')"
+  check "pipe: cd mid-pipeline leaves the cwd" "$($V pwd 2>/dev/null)" "$($V "cd /ux0 | pwd" 2>/dev/null)"
+  OUT=$($V "exit | echo still" 2>/dev/null);          check "pipe: exit mid-pipeline does not end the session" still "$OUT"
+  $V "| cat"      >/dev/null 2>&1; RC=$?; check "pipe: leading | is a syntax error (-> 2)" 2 "$RC"
+  $V "echo x |"   >/dev/null 2>&1; RC=$?; check "pipe: trailing | is a syntax error (-> 2)" 2 "$RC"
+  $V "rm /ux0/data/$T-pipe.txt" >/dev/null 2>&1
+
   # --- AC2: a key that is not installed is refused -------------------------
   # The verdict comes from stderr, not the exit code: 255 is also what a
   # network failure returns, which once made this check pass while the

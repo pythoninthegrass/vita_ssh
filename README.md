@@ -282,8 +282,8 @@ sessions keep running while it waits. Loopback is asymmetric: `:1339` answers be
 lives on the plugin's own thread, but `127.0.0.1:22` is this server waiting on itself, so
 it just spends the deadline.
 
-`grep PATTERN [FILE...]` prints the lines that match, and is the reason pipes will be
-worth having once they exist. **Pattern syntax: POSIX basic regular expressions** — `.`,
+`grep PATTERN [FILE...]` prints the lines that match, and reads a pipe as well as files
+(`ls /ux0 | grep data`). **Pattern syntax: POSIX basic regular expressions** — `.`,
 `[ ]`, `^`, `$`, and the operators `\( \)`, `\{m,n\}`, `\|`, `\+`, `\?`. This is real
 regex, not literal substring matching; unescaped `+ ? ( ) { } |` are ordinary bytes, the
 way BRE defines them. Options: `-i` case-insensitive, `-v` invert, `-n` line numbers,
@@ -408,7 +408,7 @@ After the updater has exited, `/ux0/data/vitasshd-update` can be removed to recl
 space; subsequent installs also replace the previous stage. Do not delete it during a handoff.
 The server and updater are built UNSAFE for system installation and app launch.
 
-One command per line. There are **no pipes and no `;`, `&&` or `||` chaining**; those characters are ordinary text to the tokenizer. Redirection exists in one form: `>` or `>>` as a separate, unquoted word followed by a file name (`echo hi > /ux0/data/x.txt`), and it redirects stdout only. `echo hi>x` is just text.
+A line is one command, or commands joined with `|`. There is **no `;`, `&&` or `||` chaining**; those characters are ordinary text to the tokenizer. A pipeline runs its commands one after another, not at the same time: each command's output is held in memory (up to 1 MB, past which the pipeline stops with an error naming the limit) and becomes the next command's stdin, so `ls /ux0 | grep data` works. The `|` must be a separate, unquoted word (`echo a|b` is just text, as is `"|"`), and `exit` or `cd` before the last command of a pipeline has no effect. A command name the shell does not know prints `sh: NAME: command not found` and exits 127; a malformed pipeline (`| cat`, `echo x |`) prints `sh: syntax error near unexpected token `|'` and exits 2. Redirection exists in one form: `>` or `>>` as a separate, unquoted word followed by a file name (`echo hi > /ux0/data/x.txt`), and it redirects stdout only. `echo hi>x` is just text.
 
 ---
 

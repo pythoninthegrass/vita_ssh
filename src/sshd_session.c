@@ -119,6 +119,12 @@ struct sh_session {
     /* What a command reads as stdin while `command < file` runs; empty otherwise. */
     sh_stdin_t in;
 
+    /* While capturing, sh_write() lands here, so the next pipeline segment can read it as
+     * stdin. A `>` redirect is checked first and wins; cap_over records that the bound broke. */
+    sh_stdin_t cap;
+    int capturing;
+    int cap_over;
+
     /* Escape-sequence state so arrow keys and terminal reports never land in
      * the line: 0 normal, 1 after ESC, 2 after "ESC [", 3 after "ESC O". */
     int esc;
@@ -253,6 +259,12 @@ void sh_write(sh_session_t *s, const char *data, size_t len)
         fflush(s->out_fp);
         return;
     }
+    if (s->capturing) {
+        if (!s->cap_over && sh_stdin_append(&s->cap, data, len, SSHD_STDIN_MAX) != 0) {
+            s->cap_over = 1;
+        }
+        return;
+    }
     chan_write(s, data, len);
 }
 
@@ -291,6 +303,27 @@ void sh_session_redirect_end(sh_session_t *s)
     fflush(s->out_fp);
     fclose(s->out_fp);
     s->out_fp = NULL;
+}
+
+void sh_session_capture_start(sh_session_t *s)
+{
+    sh_stdin_free(&s->cap);
+    s->capturing = 1;
+    s->cap_over = 0;
+}
+
+int sh_session_capture_end(sh_session_t *s)
+{
+    int over = s->cap_over;
+
+    s->capturing = 0;
+    s->cap_over = 0;
+    if (over) {
+        sh_stdin_free(&s->cap);
+        return -1;
+    }
+    sh_stdin_move(&s->in, &s->cap);
+    return 0;
 }
 
 int sh_session_stdin_start(sh_session_t *s, sh_stdin_reader_t rd, void *ctx)
@@ -1504,6 +1537,7 @@ void sh_session_free(sh_session_t *s)
     }
     sh_sftp_free(s->sftp);
     sh_stdin_free(&s->in);
+    sh_stdin_free(&s->cap);
     for (i = 0; i < s->hist_len; i++) {
         free(s->history[i]);
     }
