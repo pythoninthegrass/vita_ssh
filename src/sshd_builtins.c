@@ -16,6 +16,7 @@
 #include "sshd.h"
 #include "sh_grep.h"
 #include "sh_headtail.h"
+#include "sh_textops.h"
 
 #include <dirent.h>
 #include <errno.h>
@@ -1526,6 +1527,521 @@ static int cmd_tail(sh_session_t *s, int argc, char **argv)
     return ht_command(s, "tail", 1, argc, argv);
 }
 
+/* ------------------------------------------------------------------ */
+/* wc, sort, uniq                                                       */
+/* ------------------------------------------------------------------ */
+
+/* The counting, ordering and collapsing live in src/sh_textops.c and are driven directly
+ * by scripts/test_sh_textops.c on the host; nothing here reimplements them. What is here
+ * is the byte source, the answer sink and the columns, all of which are session concerns.
+ * Like head and tail, an input is held whole before the tool runs: a walk may not park the
+ * poll loop reading the socket a byte at a time, and both bounds are enforced by the tool,
+ * which refuses an oversized input rather than answering short. */
+
+/* A source is either one already-open file (fd) or the session's stdin pulled into a
+ * bounded buffer, because sort and uniq need random access the stdin queue cannot give. */
+typedef struct {
+    int fd;         /* >= 0 for a file, -1 for the buffer */
+    char *buf;      /* the bytes: stdin's copy, or a file read into this */
+    size_t len;     /* how many are valid */
+    size_t off;     /* how far the fill has handed out */
+} to_src_t;
+
+static ssize_t to_fill(void *vctx, char *p, size_t want)
+{
+    to_src_t *src = vctx;
+    size_t left;
+
+    if (src->off >= src->len) {
+        return 0;
+    }
+    left = src->len - src->off;
+    if (want > left) {
+        want = left;
+    }
+    memcpy(p, src->buf + src->off, want);
+    src->off += want;
+    return (ssize_t)want;
+}
+
+/* Reads a whole file into a fresh buffer, refusing anything past the bound rather than
+ * handing the tool a truncated input it would then report as if it were the truth. */
+static int to_load_fd(int fd, char **out, size_t *out_len)
+{
+    char *b;
+    size_t used = 0;
+
+    b = malloc(SH_TEXTOPS_BYTES_MAX);
+    if (b == NULL) {
+        errno = ENOMEM;
+        return -1;
+    }
+    for (;;) {
+        ssize_t n = read(fd, b + used, SH_TEXTOPS_BYTES_MAX - used);
+
+        if (n < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            free(b);
+            return -1;
+        }
+        if (n == 0) {
+            break;
+        }
+        used += (size_t)n;
+        if (used == SH_TEXTOPS_BYTES_MAX) {
+            free(b);
+            errno = EFBIG;
+            return -1;
+        }
+    }
+    *out = b;
+    *out_len = used;
+    return 0;
+}
+
+/* Pulls the session's stdin into a fresh buffer, bounded and interruptible the way head
+ * and tail pull it. Over the bound the input is refused, not silently cut short. */
+static int to_load_stdin(sh_session_t *s, const char *cmd, to_src_t *src)
+{
+    src->fd = -1;
+    src->off = 0;
+    src->buf = malloc(SH_TEXTOPS_BYTES_MAX);
+    if (src->buf == NULL) {
+        sh_eprintf(s, "%s: out of memory\n", cmd);
+        return -1;
+    }
+    src->len = 0;
+    while (!sh_session_interrupted(s)) {
+        size_t n = sh_session_stdin_read(s, src->buf + src->len,
+                                         SH_TEXTOPS_BYTES_MAX - src->len);
+
+        if (n == 0) {
+            break;
+        }
+        src->len += n;
+        if (src->len == SH_TEXTOPS_BYTES_MAX) {
+            sh_eprintf(s, "%s: (standard input): input larger than %d bytes\n", cmd,
+                       SH_TEXTOPS_BYTES_MAX);
+            free(src->buf);
+            src->buf = NULL;
+            return -1;
+        }
+    }
+    return 0;
+}
+
+/* Names the tool's verdict in the tool's own voice. The cause is the tool's errno, and the
+ * wording is per cause rather than strerror's, which cannot name a sceNet code and gives
+ * nothing useful for the bounds the tools enforce themselves. */
+static void to_report_error(sh_session_t *s, const char *cmd, const char *name)
+{
+    if (errno == E2BIG) {
+        sh_eprintf(s, "%s: %s: line too long (limit %d bytes)\n", cmd, name,
+                   SH_TEXTOPS_LINE_MAX);
+    } else if (errno == EFBIG) {
+        sh_eprintf(s, "%s: %s: file too large (limit %d bytes)\n", cmd, name,
+                   SH_TEXTOPS_BYTES_MAX);
+    } else if (errno == EILSEQ) {
+        sh_eprintf(s, "%s: %s: numeric field too long (limit %d digits)\n", cmd, name,
+                   SH_TEXTOPS_DIGITS_MAX);
+    } else if (errno == ENOMEM) {
+        sh_eprintf(s, "%s: %s: out of memory\n", cmd, name);
+    } else if (errno == EIO) {
+        sh_eprintf(s, "%s: %s: Input/output error\n", cmd, name);
+    } else {
+        sh_eprintf(s, "%s: %s: %s\n", cmd, name, strerror(errno));
+    }
+}
+
+/* The lines sink: each line goes straight to the channel, terminated, with the run count
+ * prefixed the way uniq -c prints it. sh_write has no failure to report, so it always
+ * accepts what it is given; a channel that went away is noticed by the session. */
+typedef struct {
+    sh_session_t *s;
+    int with_count; /* uniq -c: prefix the seven-wide run count */
+} to_sink_t;
+
+static int to_line(void *vctx, const char *line, size_t len, unsigned long count)
+{
+    to_sink_t *sink = vctx;
+
+    if (sink->with_count) {
+        char head[16];
+        int n = snprintf(head, sizeof(head), "%7lu ", count);
+
+        if (n > 0) {
+            sh_write(sink->s, head, (size_t)n);
+        }
+    }
+    sh_write(sink->s, line, len);
+    sh_write(sink->s, "\n", 1);
+    return 0;
+}
+
+static int cmd_wc(sh_session_t *s, int argc, char **argv)
+{
+    int want_l = 0, want_w = 0, want_b = 0, i, files = 0, status = 0, k;
+    const char *names[MAX_ARGS];
+    sh_wc_t counts[MAX_ARGS];
+    int have[MAX_ARGS];
+    unsigned long total_l = 0, total_w = 0, total_b = 0;
+    unsigned int width;
+
+    for (i = 1; i < argc && argv[i][0] == '-' && argv[i][1] != '\0'; i++) {
+        const char *o = argv[i] + 1;
+
+        if (strcmp(o, "-") == 0) {
+            break; /* a bare -- ends the flags */
+        }
+        for (; *o; o++) {
+            switch (*o) {
+            case 'l':
+                want_l = 1;
+                break;
+            case 'w':
+                want_w = 1;
+                break;
+            case 'c':
+                want_b = 1;
+                break;
+            default:
+                sh_eprintf(s, "wc: illegal option -- %c\n", *o);
+                return 2;
+            }
+        }
+    }
+    if (!want_l && !want_w && !want_b) {
+        want_l = want_w = want_b = 1; /* no flag means all three, as wc does */
+    }
+    for (; i < argc && files < MAX_ARGS; i++) {
+        names[files++] = argv[i];
+    }
+
+    memset(counts, 0, sizeof(counts));
+    memset(have, 0, sizeof(have));
+
+    if (files == 0) {
+        to_src_t src;
+        sh_wc_t wc;
+
+        memset(&wc, 0, sizeof(wc));
+        wc.want_lines = want_l;
+        wc.want_words = want_w;
+        wc.want_bytes = want_b;
+        if (to_load_stdin(s, "wc", &src) != 0) {
+            return 1;
+        }
+        src.off = 0;
+        if (sh_wc(to_fill, &src, &wc) != 0) {
+            to_report_error(s, "wc", "(standard input)");
+            free(src.buf);
+            return 1;
+        }
+        free(src.buf);
+        /* No name to align against, so each count is right-aligned in seven. */
+        if (want_l) {
+            sh_printf(s, "%7lu", wc.lines);
+        }
+        if (want_w) {
+            sh_printf(s, "%s%7lu", want_l ? " " : "", wc.words);
+        }
+        if (want_b) {
+            sh_printf(s, "%s%7lu", (want_l || want_w) ? " " : "", wc.bytes);
+        }
+        sh_printf(s, "\n");
+        return 0;
+    }
+
+    for (k = 0; k < files; k++) {
+        sh_target_t t;
+        struct stat st;
+        int fd;
+        to_src_t src;
+
+        if (resolve_arg(s, "wc", names[k], &t) != 0) {
+            status = 1;
+            continue;
+        }
+        if (stat_target(&t, &st) == 0 && S_ISDIR(st.st_mode)) {
+            sh_eprintf(s, "wc: %s: Is a directory\n", names[k]);
+            status = 1;
+            continue;
+        }
+        fd = sh_target_open(&t);
+        if (fd == -1) {
+            sh_eprintf(s, "wc: %s: %s\n", names[k], strerror(errno));
+            status = 1;
+            continue;
+        }
+        if (to_load_fd(fd, &src.buf, &src.len) != 0) {
+            to_report_error(s, "wc", names[k]);
+            sh_target_close(fd);
+            status = 1;
+            continue;
+        }
+        sh_target_close(fd);
+        src.fd = -1;
+        src.off = 0;
+        memset(&counts[k], 0, sizeof(sh_wc_t));
+        counts[k].want_lines = want_l;
+        counts[k].want_words = want_w;
+        counts[k].want_bytes = want_b;
+        if (sh_wc(to_fill, &src, &counts[k]) != 0) {
+            to_report_error(s, "wc", names[k]);
+            free(src.buf);
+            status = 1;
+            continue;
+        }
+        free(src.buf);
+        have[k] = 1;
+        total_l += counts[k].lines;
+        total_w += counts[k].words;
+        total_b += counts[k].bytes;
+    }
+
+    /* The columns share one width: the widest count across every row printed, so the
+     * digits line up under the total. Width is in digits, not the seven of a bare wc. */
+    {
+        unsigned int maxc = 1;
+        unsigned int digits;
+
+        for (k = 0; k < files; k++) {
+            if (!have[k]) {
+                continue;
+            }
+            for (digits = 0; digits < 3; digits++) {
+                unsigned long v = digits == 0 ? counts[k].lines
+                                : digits == 1 ? counts[k].words
+                                              : counts[k].bytes;
+                unsigned int d = 1;
+                while (v >= 10) {
+                    v /= 10;
+                    d++;
+                }
+                if (d > maxc) {
+                    maxc = d;
+                }
+            }
+        }
+        width = maxc;
+    }
+
+    for (k = 0; k < files; k++) {
+        char row[SH_POSIX_PATH_MAX + 64];
+        int n = 0;
+
+        if (!have[k]) {
+            continue;
+        }
+        if (want_l) {
+            n += snprintf(row + n, sizeof(row) - n, "%*lu ", width, counts[k].lines);
+        }
+        if (want_w) {
+            n += snprintf(row + n, sizeof(row) - n, "%*lu ", width, counts[k].words);
+        }
+        if (want_b) {
+            n += snprintf(row + n, sizeof(row) - n, "%*lu ", width, counts[k].bytes);
+        }
+        snprintf(row + n, sizeof(row) - n, "%s", names[k]);
+        sh_printf(s, "%s\n", row);
+    }
+    if (files > 1) {
+        char row[64];
+        int n = 0;
+
+        if (want_l) {
+            n += snprintf(row + n, sizeof(row) - n, "%*lu ", width, total_l);
+        }
+        if (want_w) {
+            n += snprintf(row + n, sizeof(row) - n, "%*lu ", width, total_w);
+        }
+        if (want_b) {
+            n += snprintf(row + n, sizeof(row) - n, "%*lu ", width, total_b);
+        }
+        snprintf(row + n, sizeof(row) - n, "total");
+        sh_printf(s, "%s\n", row);
+    }
+    return status;
+}
+
+/* One tool over one source, in the sort/uniq shape: pull the bytes, then hand lines to the
+ * sink. A file that cannot be read is reported and the run is an error. */
+static int to_run(sh_session_t *s, const char *cmd, int is_sort, int numeric, int reverse,
+                  int uniq_or_count, int dups, int singles, to_src_t *src,
+                  const char *name)
+{
+    to_sink_t sink;
+    int r;
+
+    sink.s = s;
+    sink.with_count = is_sort ? 0 : uniq_or_count;
+    src->off = 0;
+    if (is_sort) {
+        r = sh_sort(to_fill, src, src->len, numeric, reverse, uniq_or_count, to_line, &sink);
+    } else {
+        r = sh_uniq(to_fill, src, src->len, uniq_or_count, dups, singles, to_line, &sink);
+    }
+    if (r != 0) {
+        to_report_error(s, cmd, name);
+        return 1;
+    }
+    return 0;
+}
+
+static int cmd_sort(sh_session_t *s, int argc, char **argv)
+{
+    int numeric = 0, reverse = 0, uniq = 0, i, files = 0, status = 0, k;
+    const char *names[MAX_ARGS];
+
+    for (i = 1; i < argc && argv[i][0] == '-' && argv[i][1] != '\0'; i++) {
+        const char *o = argv[i] + 1;
+
+        if (strcmp(o, "-") == 0) {
+            break;
+        }
+        for (; *o; o++) {
+            if (*o == 'n') {
+                numeric = 1;
+            } else if (*o == 'r') {
+                reverse = 1;
+            } else if (*o == 'u') {
+                uniq = 1;
+            } else {
+                sh_eprintf(s, "sort: illegal option -- %c\n", *o);
+                return 2;
+            }
+        }
+    }
+    for (; i < argc && files < MAX_ARGS; i++) {
+        names[files++] = argv[i];
+    }
+
+    if (files == 0) {
+        to_src_t src;
+        int r;
+
+        if (to_load_stdin(s, "sort", &src) != 0) {
+            return 1;
+        }
+        r = to_run(s, "sort", 1, numeric, reverse, uniq, 0, 0, &src, "(standard input)");
+        free(src.buf);
+        return r;
+    }
+    for (k = 0; k < files; k++) {
+        sh_target_t t;
+        struct stat st;
+        int fd;
+        to_src_t src;
+
+        if (resolve_arg(s, "sort", names[k], &t) != 0) {
+            status = 1;
+            continue;
+        }
+        if (stat_target(&t, &st) == 0 && S_ISDIR(st.st_mode)) {
+            sh_eprintf(s, "sort: %s: Is a directory\n", names[k]);
+            status = 1;
+            continue;
+        }
+        fd = sh_target_open(&t);
+        if (fd == -1) {
+            sh_eprintf(s, "sort: %s: %s\n", names[k], strerror(errno));
+            status = 1;
+            continue;
+        }
+        if (to_load_fd(fd, &src.buf, &src.len) != 0) {
+            to_report_error(s, "sort", names[k]);
+            sh_target_close(fd);
+            status = 1;
+            continue;
+        }
+        sh_target_close(fd);
+        src.fd = -1;
+        if (to_run(s, "sort", 1, numeric, reverse, uniq, 0, 0, &src, names[k]) != 0) {
+            status = 1;
+        }
+        free(src.buf);
+    }
+    return status;
+}
+
+static int cmd_uniq(sh_session_t *s, int argc, char **argv)
+{
+    int show_count = 0, dups = 0, singles = 0, i, files = 0, status = 0;
+    const char *names[MAX_ARGS];
+    to_src_t src_in;
+
+    for (i = 1; i < argc && argv[i][0] == '-' && argv[i][1] != '\0'; i++) {
+        const char *o = argv[i] + 1;
+
+        if (strcmp(o, "-") == 0) {
+            break;
+        }
+        for (; *o; o++) {
+            if (*o == 'c') {
+                show_count = 1;
+            } else if (*o == 'd') {
+                dups = 1;
+            } else if (*o == 'u') {
+                singles = 1;
+            } else {
+                sh_eprintf(s, "uniq: illegal option -- %c\n", *o);
+                return 2;
+            }
+        }
+    }
+    for (; i < argc && files < MAX_ARGS; i++) {
+        names[files++] = argv[i];
+    }
+
+    /* uniq reads at most one file; a second name is coreutils' usage error. */
+    if (files > 1) {
+        sh_eprintf(s, "uniq: extra operand '%s'\n", names[1]);
+        return 2;
+    }
+
+    memset(&src_in, 0, sizeof(src_in));
+    if (files == 0) {
+        if (to_load_stdin(s, "uniq", &src_in) != 0) {
+            return 1;
+        }
+        status = to_run(s, "uniq", 0, 0, 0, show_count, dups, singles, &src_in,
+                        "(standard input)");
+        free(src_in.buf);
+        return status;
+    }
+    {
+        sh_target_t t;
+        struct stat st;
+        int fd;
+        to_src_t src;
+
+        if (resolve_arg(s, "uniq", names[0], &t) != 0) {
+            return 1;
+        }
+        if (stat_target(&t, &st) == 0 && S_ISDIR(st.st_mode)) {
+            sh_eprintf(s, "uniq: %s: Is a directory\n", names[0]);
+            return 1;
+        }
+        fd = sh_target_open(&t);
+        if (fd == -1) {
+            sh_eprintf(s, "uniq: %s: %s\n", names[0], strerror(errno));
+            return 1;
+        }
+        if (to_load_fd(fd, &src.buf, &src.len) != 0) {
+            to_report_error(s, "uniq", names[0]);
+            sh_target_close(fd);
+            return 1;
+        }
+        sh_target_close(fd);
+        src.fd = -1;
+        status = to_run(s, "uniq", 0, 0, 0, show_count, dups, singles, &src, names[0]);
+        free(src.buf);
+    }
+    return status;
+}
+
 static int cmd_echo(sh_session_t *s, int argc, char **argv)
 {
     int i, nl = 1, start = 1;
@@ -2925,14 +3441,19 @@ static const sh_builtin_t builtins[] = {
     {"pwd", cmd_pwd, "pwd -- print the working directory"},
     {"rm", cmd_rm, "rm [-r] [-f] PATH... -- delete; -r for directories"},
     {"rmdir", cmd_rmdir, "rmdir DIR... -- remove an empty directory"},
+    {"sort", cmd_sort,
+     "sort [-n] [-r] [-u] [FILE] -- order lines, -n numeric, -r reverse, -u unique keys"},
     {"stat", cmd_stat, "stat PATH... -- size, mode and modification time"},
     {"tail", cmd_tail,
      "tail [-n N | -c N] [FILE] -- last N lines (10) or N bytes of a file or stdin"},
     {"touch", cmd_touch, "touch FILE... -- create a file or update its time"},
     {"uname", cmd_uname,
      "uname [-a] -- system name; -a adds the firmware the device reports"},
+    {"uniq", cmd_uniq,
+     "uniq [-c] [-d] [-u] [FILE] -- collapse adjacent repeats; -c counts, -d repeats only, -u once-only"},
     {"vcmd", cmd_vcmd, "vcmd HOST PORT [LINE] -- send one line to a TCP port and print the reply"},
     {"vpk", cmd_vpk, "vpk list FILE | vpk install FILE -- inspect or install a VPK over this app"},
+    {"wc", cmd_wc, "wc [-l] [-w] [-c] [FILE] -- count lines, words and bytes of a file or stdin"},
     {"which", cmd_which, "which COMMAND... -- report whether COMMAND is one of these builtins"},
     {"whoami", cmd_whoami, "whoami -- the name you logged in as"},
 };

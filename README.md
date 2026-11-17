@@ -264,7 +264,7 @@ than to libc, and POSIX paths are mapped onto sceIo devices at the boundary.
 
 ```
 cat  cd  cp  date  devices  df  du  echo  env  exit  grep  head  help
-ls   mkdir  mv   pwd     rm   rmdir  stat  tail  touch  uname  vcmd  vpk  whoami
+ls   mkdir  mv   pwd     rm   rmdir  sort  stat  tail  touch  uniq  uname  vcmd  vpk  wc  whoami
 ```
 
 `vcmd HOST PORT [LINE]` sends one newline-terminated line to a TCP port and prints the
@@ -318,6 +318,35 @@ a file that cannot be read is reported as `head: FILE: reason` while the others 
 printed (the exit status is then nonzero, because a partial answer you cannot tell is
 partial is the worse result). Each file is streamed in turn and none is held while the next
 is read, so several names cost no more memory than one.
+
+`wc [-l] [-w] [-c] [FILE]` counts **lines, words and bytes** of a file or (with no FILE)
+the session's stdin. A line is counted the way `grep` and `head` count one — by newline,
+so a last line without a newline is still a line and a trailing newline never comes back as
+a blank. A word is a run of non-blank bytes. With no flag all three columns print; with any
+of `-l`, `-w`, `-c` only those print. With no FILE each count is right-aligned in seven, as
+`wc` prints it; with file names the columns share one width (the widest count across every
+row) and each row ends with the name, with a `total` row when more than one file is given.
+`sort [-n] [-r] [-u] [FILE]` orders whole **lines**, and with no FILE reads stdin. Plain
+`sort` is byte order (an unsigned byte compare, a proper prefix first); `-n` compares the
+leading numeric value instead — leading blanks, an optional sign, digits and an optional
+fraction — with byte order only as the tie-break, so `9` sorts under `10` while `1`, `01`
+and `1.0` keep their byte order among themselves. `-r` reverses. `-u` keeps one line per
+key, comparing keys *without* the byte tie-break, so `sort -nu` of `1`, `01`, `1.0` prints a
+single line. The line kept from a run of equal keys is the one `sort -u` would keep: the
+first of that run in the sorted order. `uniq [-c] [-d] [-u] [FILE]` collapses runs of
+adjacent **byte-identical** lines and prints one line per run, in input order; unlike
+`sort -u` it never reorders, so unsorted input with repeats scattered through it prints
+each repeat run separately, which is why `uniq` follows `sort`. `-c` prefixes each line with
+its run count right-aligned in seven, `-d` keeps only runs of two or more, `-u` only runs of
+exactly one, and `-d` with `-u` prints nothing.
+
+All three hold the whole input in memory before answering (there is no fork, and a walk may
+not park the poll loop reading a socket a byte at a time), so an input over **4 MB** is
+refused rather than answered short — `wc: FILE: file too large (limit 4194304 bytes)` — a
+single line over **65536 bytes** by the two that keep lines is `line too long`, and a `-n`
+key with more than **32 digits** is `numeric field too long`. Those bounds are the tool's
+own; exit status is **0** on success, **1** on a read or bound failure, **2** on a bad
+option or (for `uniq`) a second file name.
 
 [`docs/vcmd.md`](docs/vcmd.md) has the arguments, the error strings, and the command
 surfaces both plugins expose on those ports.

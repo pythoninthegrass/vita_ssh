@@ -157,6 +157,7 @@ add_executable(${VITA_SERVER_NAME}
   src/sh_path.c
   src/sh_grep.c
   src/sh_headtail.c
+  src/sh_textops.c
   src/sh_stdin.c
   src/vita_shims.c
   src/network.c
