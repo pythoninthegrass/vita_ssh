@@ -1,11 +1,11 @@
 ---
 id: TASK-018
 title: 'Give the shell aliases, seeded with the usual ls shortcuts'
-status: In Progress
+status: Done
 assignee:
   - Claude
 created_date: '2026-11-17 03:28'
-updated_date: '2026-11-18T07:28:00Z'
+updated_date: '2026-11-18T07:38:00Z'
 labels:
   - shell
 dependencies:
@@ -80,6 +80,8 @@ Current code: sh_execute_line() checks the chain, then run_item() or run_chain()
 Risks: size (server text rose 1.9 KB this week; the ceiling headroom is unmeasured, so watch the link); an alias naming another alias is refused rather than followed, which differs from bash and is documented; a value containing `>` redirects like the text it stands for, as in sh. TASK-020 expands variables after aliases, so keep the expansion point as one function it can follow.
 
 Scope expanded by the user on 2026-11-18: aliases follow bash and expand through other aliases instead of refusing them. This replaces the earlier rule that a value starting with another alias is refused (step 1) and the one-level expansion (step 4). New rules: the expansion applies an alias, then looks at the first word of the result, and repeats; an alias already applied in this command is not applied again (so alias ls='ls -l' reaches the builtin), which bounds the walk at the table size. A definition that would make a ring of two or more aliases is still refused with a readable message (ELOOP, AC11), a stricter choice than bash, which allows it and fails at run time, and a loop can therefore never be defined. Bash's rule that an alias ending in a blank also expands the next word is NOT included; ask before adding it. Pure part: sh_alias_chain(t, word, out, max) returns the values to apply in order, and the ring check is the same walk, both under the host test, written first. The glue applies the values one at a time with the existing splice. README and help change from 'one level' to 'follows other aliases, each at most once'.
+
+Final solution differs from steps 1 and 4 as written: aliases follow bash (expand through other aliases, each at most once) on the user's decision of 2026-11-18, and only a definition that closes a ring is refused. The expansion lives in expand_alias() and splice_alias_value() at the top of run_command(); sh_alias_chain() in the pure module decides the order.
 <!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
@@ -91,3 +93,9 @@ Scope expanded by the user on 2026-11-18: aliases follow bash and expand through
 
 2026-11-18 scope expansion (user: follow bash for alias chaining). The one-level rule and the refusal of a value starting with another alias are replaced. sh_alias_chain(t, word, out, max) returns the values to apply in order, each alias at most once, so alias ls='ls -l' reaches the builtin; sh_alias_set now refuses only a definition that closes a ring (ELOOP; a value starting with the alias's own name is not a ring) and leaves the old value. Host test rewritten first and failed to link without sh_alias_chain; then it passed, including every sequence up to four operations over three names and five values compared against a model of the chain and the ring rule. Two expectation errors in my fixed cases (an earlier alias for ls lengthened a chain) were test bugs, fixed in the test. Mutation check: six broken versions (self counted as a ring, no visited set in the ring walk, chain ignores the applied set, max off by one, ring ignoring existing values, chain stopping after one step) each fail it. The glue splits the walk into splice_alias_value() and an expand_alias() that applies the chain's values one at a time. help, the alias usage and error text, README and AGENTS.md updated; bash's blank-ending alias rule is not implemented and the README says so. Server text 2301384 (+384 over the previous alias build, +2908 over the chaining build). Device: installed with vpk install over ssh (result.txt 'promote package: 0x00000000'); `alias m=ll` is accepted by the new build. scripts/smoke.sh exec: 102 pass 0 fail on the first run, covering AC10 and AC11 (a value starting with another alias expands through it, a name coming back around reaches the builtin, closing a ring exits 1 with 'loop of aliases' and stores nothing). A second run had 99 pass 3 fail, all three ssh exit 255 on checks that pass on the other run (ls /app0, traversal above root, closing a ring); same intermittent connection failures as noted above, rate higher in this run, cause still unknown. Possibly related to TASK-012.
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Added per-session aliases. alias lists (as alias name='value'), shows one, or defines one or more; unalias removes and reports 'unalias: NAME: not found' with status 1. A new session starts with l (ls -l), ll (ls -la), la (ls -a), .. (cd ..) and ... (cd ../..). Expansion happens only for the command word of a command, pipeline segment or chain item, before redirects are read, and follows bash: an alias whose value starts with another alias expands through it, each alias at most once per command, so alias ls='ls -l' reaches the builtin. A definition that would close a ring (alias ll=l after alias l=ll) is refused with 'that value would make a loop of aliases' and leaves the old value; this is stricter than bash. A user alias wins over a builtin, and help and which say so. Aliases live in the session struct, so sessions never share them, and history shows the line as typed. The logic is the pure module src/sh_alias.c, written test-first under ASan/UBSan against a model over every operation sequence up to four, with broken versions of the module each failing the test; the glue is in src/sshd_builtins.c and src/sshd_session.c. Verified on the Vita over ssh: exec smoke 102 pass 0 fail on one run, and two concurrent interactive sessions showed isolation and as-typed history. Server text grew 2,908 bytes over the chaining build. Caveats: a later exec run had three ssh exit-255 failures on checks that pass on other runs (intermittent connection failures, cause unknown, possibly TASK-012); bash's rule that an alias ending in a blank also expands the next word is not implemented.
+<!-- SECTION:FINAL_SUMMARY:END -->
