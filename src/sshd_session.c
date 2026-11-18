@@ -20,6 +20,7 @@
  * tree walks are bounded by their own depth and read limits instead.
  */
 #include "sftp_server.h"
+#include "sh_lineq.h"
 #include "sshd.h"
 
 #include <dirent.h>
@@ -114,9 +115,10 @@ struct sh_session {
     time_t sftp_closing; /* when the sftp channel close was started, 0 before */
     unsigned long long last_yield_us; /* system time of the last sh_session_yield() slice */
 
-    /* Set by the editor on Enter, consumed by sh_session_pump(). */
-    int pending_ready;
-    char pending[SSHD_LINE_MAX];
+    /* Completed lines, pushed by the editor on Enter (or by exec) and popped by sh_session_pump(). */
+    sh_lineq_t lineq;
+    int after_cr; /* the previous byte was CR, so an LF now is the tail of a CRLF pair */
+    int eof_seen; /* the client sent EOF with lines still queued: finish once they have run */
 
     /* While set, sh_write() lands here instead of the channel: `command > file`
      * and `command >> file`, opened and closed by sh_execute_line around one
@@ -995,17 +997,6 @@ static void finish_line(sh_session_t *s)
 {
     char expanded[SSHD_LINE_MAX];
 
-    /* A line ending \r\n delivers LF right after CR: the CR already queued
-     * the command, and this LF arrives before the pump consumes it -- without
-     * this guard it would overwrite the queued text with an empty line and
-     * the command would never run. Every output line of a scripted pty
-     * session would vanish; the user's own terminal sends \r only, which is
-     * why interactive sessions never showed it. Enter on an empty line means
-     * "nothing to do" anyway, so when a command is still queued, a bare LF is
-     * the tail of the one before it: swallow it. */
-    if (s->line[0] == '\0' && s->pending_ready) {
-        return;
-    }
     sh_printf(s, "\n");
     if (expand_history_ref((const char **)s->history, s->hist_len, s->line,
                            expanded, sizeof(expanded)) != 0) {
@@ -1016,17 +1007,20 @@ static void finish_line(sh_session_t *s)
         write_prompt(s);
         return;
     }
+    if (sh_lineq_push(&s->lineq, expanded) != 0) {
+        /* Refusing is the only honest answer: overwriting an earlier line is the failure the
+         * queue exists to prevent, and a refused line is not remembered. */
+        sh_eprintf(s, "sh: input queue full, line discarded\n");
+        clear_line(s);
+        s->hist_pos = SSHD_HISTORY;
+        return;
+    }
     if (strcmp(expanded, s->line) != 0) {
         /* The line that will run is not the line that was typed: show it,
          * bash-style, so `!12` is never a surprise. */
         sh_printf(s, "%s\n", expanded);
-        snprintf(s->pending, sizeof(s->pending), "%s", expanded);
-        history_push(s, expanded);
-    } else {
-        snprintf(s->pending, sizeof(s->pending), "%s", s->line);
-        history_push(s, s->line);
     }
-    s->pending_ready = 1;
+    history_push(s, expanded);
     clear_line(s);
     s->hist_pos = SSHD_HISTORY;
 }
@@ -1137,6 +1131,9 @@ static int feed_escape(sh_session_t *s, unsigned char c)
 
 static void feed_byte(sh_session_t *s, unsigned char c)
 {
+    int was_cr = s->after_cr;
+
+    s->after_cr = 0;
     if (feed_escape(s, c)) {
         return;
     }
@@ -1146,8 +1143,15 @@ static void feed_byte(sh_session_t *s, unsigned char c)
     }
     switch (c) {
     case KEY_CR:
-    case KEY_LF:
+        s->after_cr = 1;
         finish_line(s);
+        return;
+    case KEY_LF:
+        /* A line ending \r\n delivers LF right after CR, which already completed the line;
+         * running it again would add an empty line per output line of a scripted pty session. */
+        if (!was_cr) {
+            finish_line(s);
+        }
         return;
     case KEY_BS:
     case KEY_DEL:
@@ -1335,19 +1339,21 @@ static int on_exec_request(ssh_session session, ssh_channel channel,
     /* `ssh vita 'ls /ux0/vita'` has to work or the server is only good for an
      * interactive terminal. It runs from the pump, like a typed line, so the
      * poll loop stays in charge; the exit status goes back when it finishes. */
-    if (strlen(command) >= sizeof(s->pending)) {
+    if (strlen(command) >= SSHD_LINE_MAX) {
         /* Truncating and running would be worse than refusing: `rm -r` with
          * its last path component cut off still runs. The client sees the
          * refusal as a failed exit status and this as its output. */
         sh_console_log("exec from %s refused: %zu bytes, line limit is %zu",
                        sh_session_peer(s), strlen(command),
-                       sizeof(s->pending));
+                       (size_t)SSHD_LINE_MAX);
         sh_eprintf(s, "exec: command too long (max %u bytes)\n",
-                   (unsigned)(sizeof(s->pending) - 1));
+                   (unsigned)(SSHD_LINE_MAX - 1));
         return 1;
     }
-    snprintf(s->pending, sizeof(s->pending), "%s", command);
-    s->pending_ready = 1;
+    if (sh_lineq_push(&s->lineq, command) != 0) {
+        sh_eprintf(s, "exec: %s\n", strerror(errno));
+        return 1;
+    }
     s->shell = 0;
     sh_console_log("exec \"%s\" from %s", command, sh_session_peer(s));
     return 0;
@@ -1363,7 +1369,7 @@ static int on_subsystem_request(ssh_session session, ssh_channel channel,
     }
     sh_console_log("subsystem \"%s\" from %s", what, sh_session_peer(s));
     if (strcmp(what, "sftp") == 0 && s->sftp == NULL && !s->shell &&
-        !s->pending_ready) {
+        sh_lineq_len(&s->lineq) == 0) {
         s->sftp = sh_sftp_new(session, channel);
         if (s->sftp != NULL) {
             return 0;
@@ -1418,6 +1424,10 @@ static void on_channel_eof(ssh_session session, ssh_channel channel,
     if (s != NULL && (s->sftp != NULL || s->shell)) {
         if (s->sftp != NULL && !s->finished) {
             sh_console_log("sftp: client sent EOF");
+        }
+        if (s->shell && sh_lineq_len(&s->lineq) > 0) {
+            s->eof_seen = 1; /* a piped script's last lines are still waiting to run */
+            return;
         }
         note_end(s, "client sent EOF");
         s->finished = 1;
@@ -1634,6 +1644,7 @@ void sh_session_free(sh_session_t *s)
     sh_stdin_free(&s->cap);
     sh_alias_free(s->aliases);
     sh_env_free(s->env);
+    sh_lineq_clear(&s->lineq);
     for (i = 0; i < s->hist_len; i++) {
         free(s->history[i]);
     }
@@ -1688,16 +1699,12 @@ int sh_session_pump(sh_session_t *s)
         return ssh_channel_is_closed(s->channel) ||
                now - s->sftp_closing >= SFTP_CLOSE_WAIT_S;
     }
-    if (!s->pending_ready) {
-        return 0;
-    }
     {
         char line[SSHD_LINE_MAX];
 
-        snprintf(line, sizeof(line), "%s", s->pending);
-        s->pending_ready = 0;
-        s->pending[0] = '\0';
-        clear_line(s);
+        if (sh_lineq_pop(&s->lineq, line, sizeof(line)) != 0) {
+            return 0;
+        }
         {
             int status;
 
@@ -1735,6 +1742,11 @@ int sh_session_pump(sh_session_t *s)
                 s->finished = 1;
                 return 1;
             }
+            if (s->exit_requested || (s->eof_seen && sh_lineq_len(&s->lineq) == 0)) {
+                /* The session is freed right after this, and queued commands can run back to
+                 * back: what libssh still holds has to reach the socket first. */
+                wait_for_room(s, 0);
+            }
             s->in_pump = 0;
             ssh_set_blocking(s->ssh, 1);
         }
@@ -1742,6 +1754,15 @@ int sh_session_pump(sh_session_t *s)
     if (s->exit_requested || s->finished) {
         return 1;
     }
-    write_prompt(s);
+    if (s->eof_seen && sh_lineq_len(&s->lineq) == 0) {
+        note_end(s, "client sent EOF");
+        s->finished = 1;
+        return 1;
+    }
+    if (s->linelen > 0) {
+        redraw_line(s); /* typed ahead while the command ran: put the prompt before it */
+    } else {
+        write_prompt(s);
+    }
     return 0;
 }
