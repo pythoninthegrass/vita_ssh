@@ -14,6 +14,7 @@
  * string handed to libc comes out of sh_path.c.
  */
 #include "sshd.h"
+#include "sh_chain.h"
 #include "sh_grep.h"
 #include "sh_headtail.h"
 #include "sh_textops.h"
@@ -3151,7 +3152,8 @@ static int cmd_help(sh_session_t *s, int argc, char **argv)
         sh_printf(s, " %s", table[i].name);
     }
     sh_printf(s, "\nType `help COMMAND` for one line of usage. Paths start at"
-                 " `/`: `/` lists the devices, `/ux0` is the memory card.\n");
+                 " `/`: `/` lists the devices, `/ux0` is the memory card. Join up to %d commands"
+                 " with ; && || (each a separate word, as with | and >).\n", SH_CHAIN_MAX);
     return 0;
 }
 
@@ -3857,13 +3859,12 @@ static int run_pipeline(sh_session_t *s, char **argv, int *quoted, int argc)
     return status;
 }
 
-int sh_execute_line(sh_session_t *s, const char *line)
+/* One chain item: a pipeline when it holds an unquoted `|`, otherwise a single command.
+ * Takes ownership of the words. */
+static int run_item(sh_session_t *s, char **argv, int *quoted, int argc)
 {
-    char *argv[MAX_WORDS];
-    int quoted[MAX_WORDS];
-    int argc, i, pipes = 0;
+    int i, pipes = 0;
 
-    argc = split_line(line, argv, quoted, MAX_WORDS);
     for (i = 0; i < argc; i++) {
         pipes += is_pipe_word(argv[i], quoted[i]);
     }
@@ -3876,4 +3877,90 @@ int sh_execute_line(sh_session_t *s, const char *line)
         return 2;
     }
     return run_pipeline(s, argv, quoted, argc);
+}
+
+/* Runs the items of a line joined with ; && and || left to right with equal precedence, so
+ * `a && b || c` is `(a && b) || c`. They bind looser than `|`: each item is a whole pipeline.
+ * A skipped item leaves the status of the last item that ran. Every item's `|` is checked
+ * before the first one runs, so a bad line runs nothing. An `exit` item ends the session, and
+ * sh_session_interrupted() then stops the chain. Takes ownership of the words and returns the
+ * status of the last item that ran. */
+static int run_chain(sh_session_t *s, char **argv, int *quoted, int argc)
+{
+    char *item[MAX_WORDS];
+    int itemq[MAX_WORDS];
+    int start = 0, i, n, status = 0, stop = 0;
+    sh_chain_op_t before = SH_CHAIN_SEQ;
+
+    for (i = 0; i <= argc; i++) {
+        if ((i == argc || sh_chain_op(argv[i], quoted[i]) != SH_CHAIN_NONE) &&
+            has_empty_segment(argv + start, quoted + start, i - start)) {
+            sh_eprintf(s, "sh: syntax error near unexpected token `|'\n");
+            free_args(argv, argc);
+            return 2;
+        }
+        if (i < argc && sh_chain_op(argv[i], quoted[i]) != SH_CHAIN_NONE) {
+            start = i + 1;
+        }
+    }
+
+    start = 0;
+    for (i = 0; i <= argc && !stop; i++) {
+        sh_chain_op_t op = i < argc ? sh_chain_op(argv[i], quoted[i]) : SH_CHAIN_NONE;
+
+        if (i < argc && op == SH_CHAIN_NONE) {
+            continue;
+        }
+        n = i - start;
+        memcpy(item, argv + start, n * sizeof(*item));
+        memcpy(itemq, quoted + start, n * sizeof(*itemq));
+        if (i < argc) {
+            free(argv[i]);
+        }
+        start = i + 1;
+
+        if (sh_session_interrupted(s)) {
+            free_args(item, n);
+            stop = 1;
+        } else if (!sh_chain_should_run(before, status)) {
+            free_args(item, n);
+        } else {
+            status = run_item(s, item, itemq, n);
+        }
+        before = op;
+    }
+    if (start < argc) {
+        free_args(argv + start, argc - start);
+    }
+    return status;
+}
+
+int sh_execute_line(sh_session_t *s, const char *line)
+{
+    char *argv[MAX_WORDS];
+    int quoted[MAX_WORDS];
+    sh_chain_op_t bad = SH_CHAIN_NONE;
+    int argc, items, n;
+
+    argc = split_line(line, argv, quoted, MAX_WORDS);
+    items = sh_chain_check(argv, quoted, argc, &bad);
+    if (items == SH_CHAIN_SYNTAX) {
+        sh_eprintf(s, "sh: syntax error near unexpected token `%s'\n", sh_chain_op_name(bad));
+        free_args(argv, argc);
+        return 2;
+    }
+    if (items == SH_CHAIN_TOO_LONG) {
+        sh_eprintf(s, "sh: too many commands on one line (limit %d)\n", SH_CHAIN_MAX);
+        free_args(argv, argc);
+        return 2;
+    }
+    n = sh_chain_words(argv, quoted, argc);
+    if (n < argc) {
+        free(argv[n]); /* the trailing ; */
+        argc = n;
+    }
+    if (items == 1) {
+        return run_item(s, argv, quoted, argc);
+    }
+    return run_chain(s, argv, quoted, argc);
 }

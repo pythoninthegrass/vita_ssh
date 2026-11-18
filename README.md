@@ -198,7 +198,7 @@ ssh -i ~/.ssh/id_ed25519 vita@192.168.1.50 'ls /ux0/vita'
 ssh -p 2222 -i ~/.ssh/id_ed25519 vita@192.168.1.50
 ```
 
-`ssh-copy-id` will not work yet: it sends a compound `sh -c` command line, and this shell has no `sh` and no `;`, `&&` or `||` chaining, so install
+`ssh-copy-id` will not work yet: it sends a compound `sh -c` command line, and this shell has no `sh`, so install
 `authorized_keys` yourself — VitaShell, a USB copy, or any route that writes a file to
 `ux0:data/vitasshd/` — and restart the server so it re-reads it.
 
@@ -408,7 +408,7 @@ After the updater has exited, `/ux0/data/vitasshd-update` can be removed to recl
 space; subsequent installs also replace the previous stage. Do not delete it during a handoff.
 The server and updater are built UNSAFE for system installation and app launch.
 
-A line is one command, or commands joined with `|`. There is **no `;`, `&&` or `||` chaining**; those characters are ordinary text to the tokenizer. A pipeline runs its commands one after another, not at the same time: each command's output is held in memory (up to 1 MB, past which the pipeline stops with an error naming the limit) and becomes the next command's stdin, so `ls /ux0 | grep data` works. The `|` must be a separate, unquoted word (`echo a|b` is just text, as is `"|"`), and `exit` or `cd` before the last command of a pipeline has no effect. A command name the shell does not know prints `sh: NAME: command not found` and exits 127; a malformed pipeline (`| cat`, `echo x |`) prints `sh: syntax error near unexpected token `|'` and exits 2. Redirection exists in one form: `>` or `>>` as a separate, unquoted word followed by a file name (`echo hi > /ux0/data/x.txt`), and it redirects stdout only. `echo hi>x` is just text.
+A line is one command, or commands joined with `|`, and lines can be chained with `;` (run the next), `&&` (run the next only after status 0) and `||` (run the next only after a nonzero status). Chain operators run left to right with equal precedence, so `a && b || c` is `(a && b) || c`, and they bind looser than `|`, so `a | b && c` is `(a | b) && c`. The line's status is that of the last command that ran; a skipped command leaves it unchanged. Like `|` and `>`, a chain operator must be a separate, unquoted word: `echo a;b` and `"&&"` are just text. A line takes at most 16 commands. A leading or doubled operator, or a trailing `&&` or `||`, prints `sh: syntax error near unexpected token` with the operator and exits 2 without running anything; as in sh, one trailing `;` is accepted and ignored. `exit` in a chain ends the session and nothing after it runs. A pipeline runs its commands one after another, not at the same time: each command's output is held in memory (up to 1 MB, past which the pipeline stops with an error naming the limit) and becomes the next command's stdin, so `ls /ux0 | grep data` works. The `|` must be a separate, unquoted word (`echo a|b` is just text, as is `"|"`), and `exit` or `cd` before the last command of a pipeline has no effect. A command name the shell does not know prints `sh: NAME: command not found` and exits 127; a malformed pipeline (`| cat`, `echo x |`) prints `sh: syntax error near unexpected token `|'` and exits 2. Redirection exists in one form: `>` or `>>` as a separate, unquoted word followed by a file name (`echo hi > /ux0/data/x.txt`), and it redirects stdout only. `echo hi>x` is just text.
 
 ---
 
