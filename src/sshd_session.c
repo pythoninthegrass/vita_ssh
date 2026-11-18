@@ -604,7 +604,7 @@ static void redraw_line(sh_session_t *s)
     }
     /* Carriage return, erase to end of line, then the whole line again: cheap
      * and it works without knowing the prompt's rendered width, which the
-     * colour codes would otherwise make impossible. */
+     * color codes would otherwise make impossible. */
     sh_printf(s, "\r");
     write_prompt(s);
     sh_write(s, s->line, s->linelen);

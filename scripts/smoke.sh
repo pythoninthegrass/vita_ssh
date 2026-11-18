@@ -438,7 +438,7 @@ ls $REMOTE" >/dev/null
     check "scp -s download completes (-> 0)" 0 $?
     check "scp round trip identical" ok "$(same "$LOCAL/small.txt" "$LOCAL/scp1.back")"
     scp -s -p -q $SSHO -P "$PORT" "$LOCAL/small.txt" "$HOST:$REMOTE/scp2.txt" 2>"$ERRF"
-    # -p sends file times, which the Vita cannot honour, so a nonzero exit is the
+    # -p sends file times, which the Vita cannot honor, so a nonzero exit is the
     # designed answer; the line records it without failing the run.
     skip "scp -s -p upload" "exit $?, times cannot be honoured by design"
 

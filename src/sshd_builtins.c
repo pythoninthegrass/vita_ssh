@@ -2450,7 +2450,7 @@ static int cmd_rmdir(sh_session_t *s, int argc, char **argv)
 /* ------------------------------------------------------------------ */
 
 /* src and dst are sceIo paths for the calls; src_name and dst_name are the
- * POSIX spellings the user typed or would recognise, for errors. cmd names the
+ * POSIX spellings the user typed or would recognize, for errors. cmd names the
  * command speaking, since mv copies across devices too. */
 static int copy_file(sh_session_t *s, const char *cmd, const char *src,
                      const char *src_name, const char *dst,
