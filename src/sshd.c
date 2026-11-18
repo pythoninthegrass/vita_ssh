@@ -103,14 +103,9 @@ typedef struct {
 
 static ssh_event poll_event;
 
-void sh_server_poll_slice(int ms)
-{
-    if (poll_event != NULL) {
-        ssh_event_dopoll(poll_event, ms);
-    }
-}
-
 static slot_t slots[SSHD_MAX_SESSIONS];
+/* The slot whose command is running inside sh_session_pump(), or -1; a poll slice must not free it. */
+static int pumping_slot = -1;
 static int listen_port;
 static volatile int quit_requested;
 
@@ -390,6 +385,54 @@ static void slot_free(int i)
     memset(&slots[i], 0, sizeof(slots[i]));
 }
 
+/* Frees the slot if libssh saw its transport close; `when` is appended to the log line. Returns 1 if freed. */
+static int slot_reap_closed(int i, const char *when)
+{
+    int status;
+
+    if (!slots[i].used) {
+        return 0;
+    }
+    status = ssh_get_status(slots[i].ssh);
+    if ((status & (SSH_CLOSED | SSH_CLOSED_ERROR)) != 0) {
+        /* The two bits mean different failures -- a peer that hung up
+         * versus a protocol or crypto error on our side -- and libssh's
+         * own error string names the reason. Without both, a dropped
+         * session says nothing that the client did not already show.
+         * Protocol text only: libssh never puts secrets in its error
+         * buffer. */
+        const char *why = ssh_get_error(slots[i].ssh);
+        int has_why = why != NULL && why[0] != '\0';
+
+        sh_console_log("session %s dropped: %s 0x%X%s%s%s",
+                       sh_session_peer(slots[i].sh),
+                       (status & SSH_CLOSED_ERROR) ? "error" : "peer closed",
+                       status,
+                       has_why ? " -- " : "",
+                       has_why ? why : "",
+                       when);
+        slot_free(i);
+        return 1;
+    }
+    return 0;
+}
+
+/* One poll of every session's socket. Called from a running command's yield, so a client that went away meanwhile is freed now, not when the command ends. */
+void sh_server_poll_slice(int ms)
+{
+    int i;
+
+    if (poll_event == NULL) {
+        return;
+    }
+    ssh_event_dopoll(poll_event, ms);
+    for (i = 0; i < SSHD_MAX_SESSIONS; i++) {
+        if (i != pumping_slot) {
+            slot_reap_closed(i, " (while a command ran)");
+        }
+    }
+}
+
 /* The slot that has waited longest without a login, or -1 when every open session has logged in. */
 static int slot_oldest_preauth(void)
 {
@@ -635,7 +678,7 @@ static void server_loop(ssh_bind bind, const sh_auth_t *auth, vita2d_pgf *font)
              * nothing to do here but keep going. */
         }
         for (i = 0; i < SSHD_MAX_SESSIONS; i++) {
-            int status;
+            int pumped;
 
             if (!slots[i].used) {
                 continue;
@@ -654,32 +697,24 @@ static void server_loop(ssh_bind bind, const sh_auth_t *auth, vita2d_pgf *font)
                     continue;
                 }
             }
-            if (sh_session_pump(slots[i].sh) != 0) {
+            /* Before the pump, which would start a queued command for a client that is already gone. */
+            if (slot_reap_closed(i, "")) {
+                continue;
+            }
+            pumping_slot = i;
+            pumped = sh_session_pump(slots[i].sh);
+            pumping_slot = -1;
+            /* A command that yielded the whole time is not a suspend: skip the stall line for its duration only. */
+            if (sceKernelGetSystemTimeWide() - woke >= RESUME_GAP_US) {
+                last_wake = sceKernelGetSystemTimeWide();
+            }
+            if (pumped != 0) {
                 sh_console_log("session %s closed: %s", sh_session_peer(slots[i].sh),
                                sh_session_end_reason(slots[i].sh));
                 slot_free(i);
                 continue;
             }
-            status = ssh_get_status(slots[i].ssh);
-            if ((status & (SSH_CLOSED | SSH_CLOSED_ERROR)) != 0) {
-                /* The two bits mean different failures -- a peer that hung up
-                 * versus a protocol or crypto error on our side -- and libssh's
-                 * own error string names the reason. Without both, a dropped
-                 * session says nothing that the client did not already show.
-                 * Protocol text only: libssh never puts secrets in its error
-                 * buffer. */
-                const char *why = ssh_get_error(slots[i].ssh);
-                int has_why = why != NULL && why[0] != '\0';
-
-                sh_console_log("session %s dropped: %s 0x%X%s%s",
-                               sh_session_peer(slots[i].sh),
-                               (status & SSH_CLOSED_ERROR) ? "error"
-                                                           : "peer closed",
-                               status,
-                               has_why ? " -- " : "",
-                               has_why ? why : "");
-                slot_free(i);
-            }
+            slot_reap_closed(i, "");
         }
         if (start_pressed()) {
             sh_console_log("START held: stopping");
