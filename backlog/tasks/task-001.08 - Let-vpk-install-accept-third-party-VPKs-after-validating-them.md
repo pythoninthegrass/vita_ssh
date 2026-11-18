@@ -1,11 +1,11 @@
 ---
 id: TASK-001.08
 title: Let vpk install accept third-party VPKs after validating them
-status: In Progress
+status: Done
 assignee:
   - Claude
 created_date: '2026-11-18T07:14:00Z'
-updated_date: '2026-11-18T08:41:00Z'
+updated_date: '2026-11-18T08:44:00Z'
 labels:
   - shell
   - deploy
@@ -102,3 +102,9 @@ AC2 stays open. A running third-party title cannot be arranged on the device: th
 
 2026-11-18: AC2 reworded by the user to what can be shown: the running-title decision is covered by the host test and the running check by `vpk list` on the server's own package, since a running third-party title cannot be arranged on the device. Checked on that basis; the refusal message itself has not been seen on a device.
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+`vpk install` now installs a third-party VPK that is not running. The decision is the pure module src/vpk_policy.c, written test-first under ASan/UBSan against a literal table over thirteen title kinds, with nine broken versions each failing the test. The server's own title keeps the updater handoff; the updater title, NPXS system apps, a malformed title ID and a running title are refused; an already installed title is refused unless the command is `vpk install --reinstall FILE` (`-r` for short), which replaces the whole package and removes files the new one omits. Package contents are validated before the system installer is called (archive CRC, param.sfo TITLE_ID, eboot.bin with the SCE magic and at least 4 KiB), and every refusal leaves the staging directory clean. The third-party path stages in ux0:data/vitasshd-update/third, writes head.bin and calls vpk_promote() directly, with no updater. `vpk list` reports this app, another title, installed and running; staging yields to the poll loop per chunk. Verified on the Vita over ssh: the sister project's smoke package MBVK00001 installed in about five seconds and is present in /ux0/app, a second install was refused naming --reinstall, --reinstall replaced it, the own-title self-install still handed off cleanly after the refactor, and exec smoke ran 114 to 117 passes with the only failures being intermittent ssh exit 255 (cause unknown, also seen on other tasks). Caveats: a running third-party title cannot be arranged on the device (the server is the one foreground app), so AC2 was reworded to the host test plus `vpk list` reporting the server's own title as running, and the running-title refusal message has not been seen on a device; the promoter call blocks the server, and so every session, until the system finishes; replacing an installed title cannot be rolled back by the app. Server text grew 1,850 bytes.
+<!-- SECTION:FINAL_SUMMARY:END -->
