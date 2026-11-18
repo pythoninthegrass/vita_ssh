@@ -62,39 +62,21 @@
  */
 int scePowerSetIdleTimerCount(int count);
 
-/* The timers the server keeps off; dimming is left alone, so the panel may dim but not turn off or suspend. */
-#define POWER_HOLD_TYPES 2
-static const SceKernelPowerTickType power_hold_types[POWER_HOLD_TYPES] = {
+/* The timers the server ticks; dimming is left alone, so the panel may dim but not turn off or suspend. */
+#define POWER_TICK_TYPES 2
+static const SceKernelPowerTickType power_tick_types[POWER_TICK_TYPES] = {
     SCE_KERNEL_POWER_TICK_DISABLE_AUTO_SUSPEND,
     SCE_KERNEL_POWER_TICK_DISABLE_OLED_OFF,
 };
-static int power_locked;
 
-/* Belt and braces: hold the kernel's own locks and tick the timers too, because the idle-count reset alone let the panel turn off. */
-static void power_hold(int on)
-{
-    int i;
-
-    if (on == power_locked) {
-        return;
-    }
-    for (i = 0; i < POWER_HOLD_TYPES; i++) {
-        int rc = on ? sceKernelPowerLock(power_hold_types[i])
-                    : sceKernelPowerUnlock(power_hold_types[i]);
-
-        sh_console_log("power: %s type %d -> 0x%X", on ? "lock" : "unlock",
-                       (int)power_hold_types[i], (unsigned)rc);
-    }
-    power_locked = on;
-}
-
+/* Ticks only, never sceKernelPowerLock: a lock outlives an app the system kills from the PS menu and hangs every later app launch. */
 static void power_tick(void)
 {
     int i;
 
     scePowerSetIdleTimerCount(0);
-    for (i = 0; i < POWER_HOLD_TYPES; i++) {
-        sceKernelPowerTick(power_hold_types[i]);
+    for (i = 0; i < POWER_TICK_TYPES; i++) {
+        sceKernelPowerTick(power_tick_types[i]);
     }
 }
 
@@ -715,10 +697,7 @@ static void server_loop(ssh_bind bind, const sh_auth_t *auth, vita2d_pgf *font)
              * and the device sleeps on its own schedule, rather than the
              * server holding it awake until the battery is flat. */
             if (now >= next_power_tick) {
-                int hold = count_sessions() > 0 || !scePowerIsLowBattery();
-
-                power_hold(hold);
-                if (hold) {
+                if (count_sessions() > 0 || !scePowerIsLowBattery()) {
                     power_tick();
                 }
                 next_power_tick = now + POWER_TICK_US;
@@ -826,10 +805,9 @@ static int server_thread(SceSize args, void *argp)
             sh_console_log("poll loop starting");
             /* So the log explains the next mystery too: why the device stayed
              * awake with nobody touching it. */
-            sh_console_log("power: idle timer reset 1/s plus kernel locks (results above once held); "
+            sh_console_log("power: idle timer reset and power ticks 1/s; "
                            "the device stays awake while the server runs");
             server_loop(bind, &auth, font);
-            power_hold(0);
         }
     }
 
