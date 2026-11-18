@@ -22,6 +22,7 @@
 #include <libssh/libssh.h>
 
 #include "sh_alias.h"
+#include "sh_env.h"
 #include "sh_path.h"
 #include "sh_stdin.h"
 
@@ -121,6 +122,10 @@ void sh_session_get_fsctx(const sh_session_t *s, sh_fsctx_t *fs);
 void sh_session_set_cwd(sh_session_t *s, const char *posix);
 /* This session's aliases, never shared with another session; NULL if memory was short at setup. */
 sh_alias_table_t *sh_session_aliases(const sh_session_t *s);
+/* This session's variables, never shared with another session; NULL if memory was short at
+ * setup. USER, LOGNAME, TERM, HOME and the rest live here; PWD is not stored and is read from
+ * the session's cwd when printed, so it cannot disagree with `cd`. */
+sh_env_table_t *sh_session_env(const sh_session_t *s);
 void sh_session_request_exit(sh_session_t *s);
 const char *sh_session_user(const sh_session_t *s);
 const char *sh_session_peer(const sh_session_t *s);

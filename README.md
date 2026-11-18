@@ -264,8 +264,14 @@ than to libc, and POSIX paths are mapped onto sceIo devices at the boundary.
 
 ```
 :  alias  cat  cd  cp  date  devices  df  du  echo  env  exit  false  grep  head  help
-ls   mkdir  mv   pwd     rm   rmdir  sort  stat  tail  touch  true  unalias  uname  uniq  vcmd  vpk  wc  whoami
+ls   mkdir  mv   printenv  pwd     rm   rmdir  sort  stat  tail  touch  true  unalias  uname  uniq  vcmd  vpk  wc  whoami
 ```
+
+`env` and `printenv [NAME...]` report this session's own variables, so two sessions never
+see each other's. `TERM` is what the client's pty request named (`dumb` until then), and
+`LANG` is also taken from a client env request; `COLUMNS` and `LINES` are refused, because
+the pty request is the one authority for window size. `PATH` is decorative: commands come
+from the builtin table, never from a search path.
 
 `vcmd HOST PORT [LINE]` sends one newline-terminated line to a TCP port and prints the
 reply, which is how you drive a plugin's debug socket from a session you are already

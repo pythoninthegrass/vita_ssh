@@ -157,6 +157,7 @@ add_executable(${VITA_SERVER_NAME}
   src/sftp_server.c
   src/sh_path.c
   src/sh_alias.c
+  src/sh_env.c
   src/sh_chain.c
   src/sh_grep.c
   src/sh_headtail.c

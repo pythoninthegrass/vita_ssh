@@ -96,6 +96,7 @@ struct sh_session {
     size_t cursor; /* insertion point within line, 0..linelen */
 
     sh_alias_table_t *aliases;
+    sh_env_table_t *env;
 
     char *history[SSHD_HISTORY];
     int hist_len;
@@ -428,6 +429,11 @@ void sh_eprintf(sh_session_t *s, const char *fmt, ...)
 sh_alias_table_t *sh_session_aliases(const sh_session_t *s)
 {
     return s == NULL ? NULL : s->aliases;
+}
+
+sh_env_table_t *sh_session_env(const sh_session_t *s)
+{
+    return s == NULL ? NULL : s->env;
 }
 
 void sh_session_get_fsctx(const sh_session_t *s, sh_fsctx_t *fs)
@@ -1234,6 +1240,14 @@ static int on_channel_data(ssh_session session, ssh_channel channel,
     return (int)len;
 }
 
+/* A table that is full or missing leaves the variable out; env then shows less, never something false. */
+static void set_env(sh_session_t *s, const char *name, const char *value)
+{
+    if (s->env != NULL && sh_env_set(s->env, name, value) != 0) {
+        sh_console_log("env %s from %s not stored: %s", name, sh_session_peer(s), strerror(errno));
+    }
+}
+
 static int on_pty_request(ssh_session session, ssh_channel channel,
                           const char *term, int cols, int rows, int pxw,
                           int pxh, void *userdata)
@@ -1250,9 +1264,38 @@ static int on_pty_request(ssh_session session, ssh_channel channel,
     s->pty = 1;
     s->cols = cols;
     s->rows = rows;
+    if (term != NULL && term[0] != '\0') {
+        set_env(s, "TERM", term);
+    }
     sh_console_log("pty %s %dx%d from %s", term ? term : "?", cols, rows,
                    sh_session_peer(s));
     return 0; /* 0 accepts; nonzero makes libssh send the failure */
+}
+
+/* The window size has one authority, the pty request (s->cols, read by sh_session_cols()), so
+ * COLUMNS and LINES are refused rather than stored: a stored copy would go stale on a resize.
+ * TERM is stored because the pty request is the only other place it arrives, and an exec
+ * session has no pty. Every other name is refused too, and every refusal is logged. */
+static int on_env_request(ssh_session session, ssh_channel channel,
+                          const char *name, const char *value, void *userdata)
+{
+    sh_session_t *s = userdata;
+    int ok = name != NULL && value != NULL && (strcmp(name, "TERM") == 0 || strcmp(name, "LANG") == 0);
+
+    (void)session;
+    (void)channel;
+    if (s == NULL) {
+        return 1;
+    }
+    if (ok) {
+        if (sh_env_set(s->env, name, value) == 0) {
+            return 0;
+        }
+        sh_console_log("env %s from %s refused: %s", name, sh_session_peer(s), strerror(errno));
+        return 1;
+    }
+    sh_console_log("env %s from %s refused: not accepted", name != NULL ? name : "?", sh_session_peer(s));
+    return 1; /* 0 accepts, 1 denies (libssh/callbacks.h) */
 }
 
 static void write_banner(sh_session_t *s)
@@ -1415,6 +1458,8 @@ static void remember_user(sh_session_t *s, const char *user)
 {
     if (user != NULL && user[0] != '\0') {
         snprintf(s->user, sizeof(s->user), "%s", user);
+        set_env(s, "USER", sh_session_user(s));
+        set_env(s, "LOGNAME", sh_session_user(s));
     }
 }
 
@@ -1539,6 +1584,7 @@ sh_session_t *sh_session_new(ssh_session ssh, const char *peer)
     s->channel_cbs.userdata = s;
     s->channel_cbs.channel_data_function = on_channel_data;
     s->channel_cbs.channel_pty_request_function = on_pty_request;
+    s->channel_cbs.channel_env_request_function = on_env_request;
     s->channel_cbs.channel_shell_request_function = on_shell_request;
     s->channel_cbs.channel_exec_request_function = on_exec_request;
     s->channel_cbs.channel_subsystem_request_function = on_subsystem_request;
@@ -1548,6 +1594,18 @@ sh_session_t *sh_session_new(ssh_session ssh, const char *peer)
     if (ssh_set_server_callbacks(ssh, &s->server_cbs) != SSH_OK) {
         free(s);
         return NULL;
+    }
+    s->env = sh_env_new();
+    if (s->env != NULL) {
+        /* PATH is decorative: commands come from the builtins table, never from a search path. */
+        set_env(s, "PATH", "/bin:/usr/bin");
+        set_env(s, "SHELL", "/bin/sh");
+        set_env(s, "HOSTNAME", "vita");
+        set_env(s, "LANG", "C");
+        set_env(s, "HOME", s->home);
+        set_env(s, "USER", sh_session_user(s));
+        set_env(s, "LOGNAME", sh_session_user(s));
+        set_env(s, "TERM", "dumb"); /* until the client names a terminal */
     }
     s->aliases = sh_alias_new();
     if (s->aliases != NULL) {
@@ -1575,6 +1633,7 @@ void sh_session_free(sh_session_t *s)
     sh_stdin_free(&s->in);
     sh_stdin_free(&s->cap);
     sh_alias_free(s->aliases);
+    sh_env_free(s->env);
     for (i = 0; i < s->hist_len; i++) {
         free(s->history[i]);
     }

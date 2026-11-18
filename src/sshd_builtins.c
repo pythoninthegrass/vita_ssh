@@ -2963,36 +2963,51 @@ static int cmd_du(sh_session_t *s, int argc, char **argv)
 /* system information                                                   */
 /* ------------------------------------------------------------------ */
 
-static const struct {
-    const char *name;
-    const char *value;
-} static_env[] = {
-    /* PATH is decorative: commands come from the table below, never from a
-     * search path. It exists so a program that inspects its environment sees
-     * something sane -- a-Shell rewrites it for the same reason. */
-    {"PATH", "/bin:/usr/bin"},
-    {"SHELL", "/bin/sh"},
-    {"TERM", "xterm-256color"},
-    {"LANG", "C"},
-    {"HOSTNAME", "vita"},
-};
+/* env and printenv read the session's table (sshd_session.c); PWD is the one
+ * variable computed here, from the cwd, so it cannot disagree with `cd`. */
+static const char *env_lookup(sh_session_t *s, const char *name, const sh_fsctx_t *fs)
+{
+    if (strcmp(name, "PWD") == 0) {
+        return fs->cwd;
+    }
+    return sh_env_get(sh_session_env(s), name);
+}
 
 static int cmd_env(sh_session_t *s, int argc, char **argv)
 {
+    sh_env_table_t *t = sh_session_env(s);
     sh_fsctx_t fs;
-    size_t i;
+    int i;
 
     (void)argc;
     (void)argv;
     fs_of(s, &fs);
-    for (i = 0; i < sizeof(static_env) / sizeof(static_env[0]); i++) {
-        sh_printf(s, "%s=%s\n", static_env[i].name, static_env[i].value);
+    for (i = 0; i < sh_env_count(t); i++) {
+        sh_printf(s, "%s=%s\n", sh_env_name_at(t, i), sh_env_value_at(t, i));
     }
-    sh_printf(s, "HOME=%s\n", fs.home);
     sh_printf(s, "PWD=%s\n", fs.cwd);
-    sh_printf(s, "USER=%s\n", sh_session_user(s));
-    sh_printf(s, "LOGNAME=%s\n", sh_session_user(s));
     return 0;
+}
+
+static int cmd_printenv(sh_session_t *s, int argc, char **argv)
+{
+    sh_fsctx_t fs;
+    int i, status = 0;
+
+    if (argc == 1) {
+        return cmd_env(s, argc, argv);
+    }
+    fs_of(s, &fs);
+    for (i = 1; i < argc; i++) {
+        const char *v = env_lookup(s, argv[i], &fs);
+
+        if (v == NULL) {
+            status = 1;
+        } else {
+            sh_printf(s, "%s\n", v);
+        }
+    }
+    return status;
 }
 
 static int cmd_vpk(sh_session_t *s, int argc, char **argv)
@@ -3028,7 +3043,7 @@ static int cmd_which(sh_session_t *s, int argc, char **argv)
         return 1;
     }
     for (i = 1; i < argc; i++) {
-        /* PATH is decorative (see static_env): everything this shell can run
+        /* PATH is decorative (see the table seeded in sh_session_new): everything this shell can run
          * is in the builtin table, so "found" and "builtin" are the same
          * event. Saying so beats the traditional "in (/bin:/usr/bin)", which
          * would claim a search that would find nothing. */
@@ -3591,6 +3606,7 @@ static const sh_builtin_t builtins[] = {
     {"ls", cmd_ls, "ls [-l] [-a] [PATH] -- list a directory (no argument: .)"},
     {"mkdir", cmd_mkdir, "mkdir [-p] DIR... -- create directories"},
     {"mv", cmd_mv, "mv SRC... DST -- rename, copying across devices"},
+    {"printenv", cmd_printenv, "printenv [NAME...] -- print variable values (all of env with no NAME; status 1 if one is unset)"},
     {"pwd", cmd_pwd, "pwd -- print the working directory"},
     {"rm", cmd_rm, "rm [-r] [-f] PATH... -- delete; -r for directories"},
     {"rmdir", cmd_rmdir, "rmdir DIR... -- remove an empty directory"},
