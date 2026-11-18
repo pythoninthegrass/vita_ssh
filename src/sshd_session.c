@@ -20,6 +20,7 @@
  * tree walks are bounded by their own depth and read limits instead.
  */
 #include "sftp_server.h"
+#include "sh_defer.h"
 #include "sh_lineq.h"
 #include "sshd.h"
 
@@ -112,6 +113,8 @@ struct sh_session {
     int finished;
     const char *end_reason; /* why the session ended, first cause wins; NULL until it does */
     int in_pump; /* set while sh_session_pump() runs a command: only then may a write wait on the poll loop */
+    int in_cb; /* set while on_channel_data() feeds the editor: a libssh callback, so no write may wait on the poll loop */
+    sh_defer_t defer; /* what the editor wrote from a callback while a command ran; sh_session_pump() sends it when the command ends */
     time_t sftp_closing; /* when the sftp channel close was started, 0 before */
     unsigned long long last_yield_us; /* system time of the last sh_session_yield() slice */
 
@@ -230,6 +233,12 @@ static void chan_write(sh_session_t *s, const char *data, size_t len)
     if (s == NULL || s->channel == NULL || s->finished || len == 0) {
         return;
     }
+    if (s->in_cb && s->in_pump) {
+        /* A command is streaming and this came from a libssh callback, which must not wait on the
+         * poll loop. A write that does not fit is dropped: it is echo, and the editor state is intact. */
+        sh_defer_add(&s->defer, data, len);
+        return;
+    }
     if (!s->pty) {
         chan_write_raw(s, data, len);
         return;
@@ -260,6 +269,11 @@ static void chan_write(sh_session_t *s, const char *data, size_t len)
 
 void sh_write(sh_session_t *s, const char *data, size_t len)
 {
+    if (s->in_cb) {
+        /* The editor's echo belongs on the terminal, never in the file or pipe a running command has open. */
+        chan_write(s, data, len);
+        return;
+    }
     if (s->out_fp != NULL) {
         /* Flushed per write, for the same reason sh_log_line flushes: a ^C or a
          * dropped channel mid-command must not leave the buffered half of the
@@ -1235,9 +1249,11 @@ static int on_channel_data(ssh_session session, ssh_channel channel,
         }
         return (int)len;
     }
+    s->in_cb = 1;
     for (i = 0; i < len; i++) {
         feed_byte(s, p[i]);
     }
+    s->in_cb = 0;
     /* Return what we took: anything left over is re-delivered on the next poll,
      * and the editor consumes everything, so claiming the whole buffer is the
      * truthful answer. */
@@ -1749,6 +1765,8 @@ int sh_session_pump(sh_session_t *s)
             }
             s->in_pump = 0;
             ssh_set_blocking(s->ssh, 1);
+            chan_write(s, sh_defer_data(&s->defer), sh_defer_len(&s->defer));
+            sh_defer_reset(&s->defer);
         }
     }
     if (s->exit_requested || s->finished) {
