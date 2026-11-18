@@ -2,6 +2,8 @@
 #ifndef SH_ENV_H
 #define SH_ENV_H
 
+#include <stddef.h>
+
 /* Most variables one session holds. */
 #define SH_ENV_MAX 32
 
@@ -17,6 +19,11 @@ void sh_env_free(sh_env_table_t *t);
 
 /* A name is 1 to SH_ENV_NAME_MAX letters, digits or underscores, and does not start with a digit. */
 int sh_env_name_ok(const char *name);
+
+/* Copies src into dst (size bytes, terminator included) without the bytes below 0x20 and 0x7F,
+ * truncating at size - 1. Returns the length written; a NULL src or a size of 0 writes nothing
+ * beyond an empty string. For text that came from a client and reaches a terminal or a log. */
+size_t sh_env_strip_ctrl(char *dst, size_t size, const char *src);
 
 /* Defines or replaces name. Bytes below 0x20 and 0x7F are dropped from value, because a value
  * can come from a client and reaches the terminal. Returns 0, or -1 with errno: EINVAL (bad name,

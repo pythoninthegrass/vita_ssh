@@ -53,6 +53,24 @@ static int find(const sh_env_table_t *t, const char *name)
     return -1;
 }
 
+size_t sh_env_strip_ctrl(char *dst, size_t size, const char *src)
+{
+    size_t n = 0;
+
+    if (size == 0) {
+        return 0;
+    }
+    for (; src != NULL && *src != '\0' && n < size - 1; src++) {
+        unsigned char c = (unsigned char)*src;
+
+        if (c >= 0x20 && c != 0x7F) {
+            dst[n++] = (char)c;
+        }
+    }
+    dst[n] = '\0';
+    return n;
+}
+
 int sh_env_set(sh_env_table_t *t, const char *name, const char *value)
 {
     char clean[SH_ENV_VALUE_MAX + 1];

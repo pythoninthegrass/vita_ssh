@@ -1482,17 +1482,28 @@ static ssh_channel on_open_session(ssh_session session, void *userdata)
 
 static void remember_user(sh_session_t *s, const char *user)
 {
-    if (user != NULL && user[0] != '\0') {
-        snprintf(s->user, sizeof(s->user), "%s", user);
+    char clean[sizeof(s->user)];
+
+    if (sh_env_strip_ctrl(clean, sizeof(clean), user) > 0) {
+        memcpy(s->user, clean, sizeof(s->user));
         set_env(s, "USER", sh_session_user(s));
         set_env(s, "LOGNAME", sh_session_user(s));
     }
+}
+
+/* The login name as the logs show it: control bytes dropped, "?" when the client sent none. */
+static const char *loggable_user(char *buf, size_t size, const char *user)
+{
+    sh_env_strip_ctrl(buf, size, user);
+    return buf[0] != '\0' ? buf : "?";
 }
 
 static int on_auth_password(ssh_session session, const char *user,
                             const char *password, void *userdata)
 {
     sh_session_t *s = userdata;
+    char whobuf[64];
+    const char *who = loggable_user(whobuf, sizeof(whobuf), user);
 
     (void)session;
     if (s == NULL) {
@@ -1501,11 +1512,11 @@ static int on_auth_password(ssh_session session, const char *user,
     if (sh_auth_check_password(sh_server_auth(), user, password) == 0) {
         remember_user(s, user);
         s->authenticated = 1;
-        sh_console_log("password login: %s@%s", user ? user : "?",
+        sh_console_log("password login: %s@%s", who,
                        sh_session_peer(s));
         return SSH_AUTH_SUCCESS;
     }
-    sh_console_log("password rejected: %s@%s", user ? user : "?",
+    sh_console_log("password rejected: %s@%s", who,
                    sh_session_peer(s));
     return SSH_AUTH_DENIED;
 }
@@ -1515,6 +1526,8 @@ static int on_auth_pubkey(ssh_session session, const char *user,
                           void *userdata)
 {
     sh_session_t *s = userdata;
+    char whobuf[64];
+    const char *who = loggable_user(whobuf, sizeof(whobuf), user);
 
     (void)session;
     if (s == NULL) {
@@ -1531,19 +1544,19 @@ static int on_auth_pubkey(ssh_session session, const char *user,
     if (signature_state != SSH_PUBLICKEY_STATE_NONE &&
         signature_state != SSH_PUBLICKEY_STATE_VALID) {
         sh_console_log("publickey rejected (bad signature): %s@%s",
-                       user ? user : "?", sh_session_peer(s));
+                       who, sh_session_peer(s));
         return SSH_AUTH_DENIED;
     }
     if (sh_auth_check_pubkey(sh_server_auth(), user, pubkey) == 0) {
         if (signature_state == SSH_PUBLICKEY_STATE_VALID) {
             remember_user(s, user);
             s->authenticated = 1;
-            sh_console_log("publickey login: %s@%s", user ? user : "?",
+            sh_console_log("publickey login: %s@%s", who,
                            sh_session_peer(s));
         }
         return SSH_AUTH_SUCCESS;
     }
-    sh_console_log("publickey rejected: %s@%s", user ? user : "?",
+    sh_console_log("publickey rejected: %s@%s", who,
                    sh_session_peer(s));
     return SSH_AUTH_DENIED;
 }

@@ -98,6 +98,27 @@ static void test_clean(void)
     sh_env_free(t);
 }
 
+static void test_strip_ctrl(void)
+{
+    char buf[8];
+
+    CHECK(sh_env_strip_ctrl(buf, sizeof(buf), "alice") == 5);
+    CHECK(strcmp(buf, "alice") == 0);
+    CHECK(sh_env_strip_ctrl(buf, sizeof(buf), "a\033[2Jb\x07\n\r\t\x7f" "c") == 6);
+    CHECK(strcmp(buf, "a[2Jbc") == 0);
+    CHECK(sh_env_strip_ctrl(buf, sizeof(buf), "caf\xc3\xa9") == 5);
+    CHECK(strcmp(buf, "caf\xc3\xa9") == 0);
+    CHECK(sh_env_strip_ctrl(buf, sizeof(buf), "\033\x01\x7f") == 0);
+    CHECK(buf[0] == '\0');
+    CHECK(sh_env_strip_ctrl(buf, sizeof(buf), "") == 0);
+    CHECK(sh_env_strip_ctrl(buf, sizeof(buf), "\033abcdefghij") == 7);
+    CHECK(strcmp(buf, "abcdefg") == 0);
+    CHECK(sh_env_strip_ctrl(buf, 1, "abc") == 0);
+    CHECK(buf[0] == '\0');
+    CHECK(sh_env_strip_ctrl(buf, sizeof(buf), NULL) == 0);
+    CHECK(buf[0] == '\0');
+}
+
 static void test_errors(void)
 {
     sh_env_table_t *t = sh_env_new();
@@ -137,6 +158,7 @@ int main(void)
     test_set_get();
     test_order();
     test_clean();
+    test_strip_ctrl();
     test_errors();
     test_isolation();
     if (failures == 0) {
