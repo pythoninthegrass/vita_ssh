@@ -7,6 +7,13 @@
       "skillPath": "skills/compilers/clang/SKILL.md",
       "computedHash": "ce8646f185a03b05b6349903a24de7e9d4ca40db8d4c481b76b94c238d24f845"
     },
+    "vita-port": {
+      "source": "Yannis100/vita-port-skill",
+      "commit": "ca53ae098d5a82b52386e097b78515bb256d045a",
+      "sourceType": "github",
+      "skillPath": "skills/vita-port/SKILL.md",
+      "computedHash": "814d853c5ea281be665035c9f933720495431d231245dde99f6d8f071fce6e6c"
+    },
     "zig-best-practices": {
       "source": "alleneubank/claude-code",
       "sourceType": "github",
