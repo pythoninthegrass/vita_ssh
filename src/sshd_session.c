@@ -573,7 +573,7 @@ static void clear_line(sh_session_t *s)
     s->line[0] = '\0';
 }
 
-/* Moves the terminal cursor left n columns with backspaces, which every terminal honours. */
+/* Moves the terminal cursor left n columns with backspaces, which every terminal honors. */
 static void cursor_back(sh_session_t *s, size_t n)
 {
     char bs[32];

@@ -8,7 +8,7 @@
   installer refuses tiles that are not 8-bit palette PNGs (install fails with
   0x8010113D), so the render must go through scripts/convert_png.py, which quantizes,
   strips ancillary chunks, and reads the file back to prove IHDR,PLTE,IDAT,IEND at
-  colour type 3 / bit depth 8. "-depth 8" on its own means 8 bits *per channel*: a
+  color type 3 / bit depth 8. "-depth 8" on its own means 8 bits *per channel*: a
   PNG24: write looks right to `magick identify` and is still rejected.
   The console geometry (pill, screen, dot clusters, wordmark baseline) is measured off the
   client's sce_sys/icon0.png so the two tiles read as one family; the field hue and the
@@ -27,7 +27,7 @@
   <!-- console body -->
   <rect x="20" y="24" width="88" height="45" rx="22.5" fill="#ffffff"/>
 
-  <!-- screen: the field colour, like the client's -->
+  <!-- screen: the field color, like the client's -->
   <rect x="36" y="28" width="56" height="35" rx="2" fill="#0d5057"/>
 
   <!-- controls: dot diamond per side, analog stick below each -->

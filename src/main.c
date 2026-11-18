@@ -107,7 +107,7 @@ void get_ssh_credentials_from_profile(SshProfile *profile) {
 }
 
 /* network.c is shared with the sshd app, which has no stdout, so it logs through
- * this hook. The client keeps upstream's behaviour: one line per message on
+ * this hook. The client keeps upstream's behavior: one line per message on
  * stdout, which a debug plugin can still pick up. The newline the call sites no
  * longer carry is added back here, and flushed, so the stream looks exactly as it
  * did when network.c called printf() directly. */

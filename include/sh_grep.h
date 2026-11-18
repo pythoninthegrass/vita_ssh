@@ -32,7 +32,7 @@ typedef struct sh_grep_re sh_grep_t;
 sh_grep_t *sh_grep_compile(const char *pattern, int flags);
 void sh_grep_free(sh_grep_t *re);
 
-/* Matches one line, honouring -v: 1 to print, 0 to skip, -1 with errno EAGAIN on step limit. */
+/* Matches one line, honoring -v: 1 to print, 0 to skip, -1 with errno EAGAIN on step limit. */
 int sh_grep_match(const sh_grep_t *re, const char *line, int invert);
 
 /* Why sh_grep_compile failed, for the error line. Valid after a NULL return. */

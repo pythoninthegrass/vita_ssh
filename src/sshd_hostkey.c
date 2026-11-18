@@ -33,7 +33,7 @@
  *      status line says so in as many words.
  *   3. authorized_keys -- the first candidate that has the file is the one read,
  *      never a merge of all of them. Two files that both claim to be the
- *      authority is how a card you forgot about starts authorising you.
+ *      authority is how a card you forgot about starts authorizing you.
  *
  * The directory that received the host key, the file authorized_keys was read
  * from, and the directory a session lands in are each reported on the console.
@@ -109,7 +109,7 @@
  *
  * The list being exactly 2^10 long is the point, not a coincidence: the generator
  * takes ten bits per word, which is uniform by construction, where indexing an
- * arbitrary alphabet by `raw[i] % alphabet` silently favours the first
+ * arbitrary alphabet by `raw[i] % alphabet` silently favors the first
  * (256 mod alphabet) symbols. One entry short of 2^10 is not a weaker passphrase
  * either, it is a read past the end of this array.
  *
@@ -609,7 +609,7 @@ static int generate_host_key(void)
 {
     int rc;
     /* ssh_pki_generate_key() is deprecated in this libssh. Its replacement takes
-     * a pki context, which carries the FIDO2/security-key enrolment options an
+     * a pki context, which carries the FIDO2/security-key enrollment options an
      * ed25519 host key has no use for -- but it is still a required argument, so
      * one is created, used and dropped right here. */
     ssh_pki_ctx ctx = ssh_pki_ctx_new();
@@ -783,7 +783,7 @@ static int parse_key_line(char *line, int lineno, int *logged,
 
     /*
      * OpenSSH allows option prefixes (from="…", command="…", no-pty). This
-     * server honours none of them, but discarding the key because of one is how
+     * server honors none of them, but discarding the key because of one is how
      * a person locks themselves out of a device they configured themselves:
      * skip tokens until one names an algorithm we can parse, and say we did.
      */
@@ -929,7 +929,7 @@ static void load_authorized_keys(char *used_path, size_t usedlen)
 
 /*
  * libssh's ssh_get_random does NOT follow the SSH_OK convention of its
- * neighbours. getrandom_crypto.c documents "@return 1 on success, 0 on error",
+ * neighbors. getrandom_crypto.c documents "@return 1 on success, 0 on error",
  * and every caller inside libssh itself writes `if (!ok)` or `if (rc != 1)`
  * (server.c:112, kex.c:815, pki_sk.c:320). Testing it against SSH_OK inverts the
  * check: it fails on a working RNG and passes on a dead one. That inversion is

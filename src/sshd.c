@@ -139,7 +139,7 @@ static int count_sessions(void)
 /*
  * Status goes here, and from here to two places: the on-screen ring below, and
  * the log file sh_log_line() mirrors each line into (sshd_hostkey.c). printf() on
- * this SDK reaches a debug screen that the app never initialises (there is no
+ * this SDK reaches a debug screen that the app never initializes (there is no
  * sceDebugScreenInit in these headers), so a message sent there is a message
  * nobody will ever read. That is also why every failure path below calls
  * sh_console_log rather than fprintf.
@@ -188,7 +188,7 @@ void sh_console_log(const char *fmt, ...)
     /* now is milliseconds: minutes are /60000, and the right-hand field is the
      * millisecond remainder. The first version divided the microsecond count by
      * 1e6 -- seconds -- and then printed the remainder of that under a field
-     * labelled milliseconds, so [0.037] meant thirty-seven seconds. */
+     * labeled milliseconds, so [0.037] meant thirty-seven seconds. */
     snprintf(log_ring[log_head], CONSOLE_WIDTH, "[%3llu.%03llu] %s",
              (now / 60000) % 1000, now % 1000, body);
     mirror_to_file(log_ring[log_head]); /* same entry, before the head moves on */

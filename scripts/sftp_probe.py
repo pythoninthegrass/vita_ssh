@@ -6,7 +6,7 @@
 # ///
 
 """
-Probes the two SFTP behaviours the stock OpenSSH clients cannot reach.
+Probes the two SFTP behaviors the stock OpenSSH clients cannot reach.
 
 One is a refused subsystem request followed by a good one on the same channel:
 `ssh -s` sends exactly one request per channel, so the server's promise that a

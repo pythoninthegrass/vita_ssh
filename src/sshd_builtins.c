@@ -3545,7 +3545,7 @@ static int cmd_vcmd(sh_session_t *s, int argc, char **argv)
             }
             /* sh_write, not sh_printf: a reply is arbitrary bytes and must never
              * be read as a format string, and this is the one output call that
-             * also honours `vcmd ... > /ux0/data/x`. */
+             * also honors `vcmd ... > /ux0/data/x`. */
             sh_write(s, buf, (size_t)got);
             total += (size_t)got;
             if (total >= NET_REPLY_MAX) {

@@ -220,7 +220,7 @@ int sh_cmp(const char *a, size_t al, const char *b, size_t bl, int numeric)
     return al < bl ? -1 : 1;
 }
 
-/* Whether neighbouring lines are one line for -u: same bytes, or same number with -n. */
+/* Whether neighboring lines are one line for -u: same bytes, or same number with -n. */
 static int key_equal(const char *a, size_t al, const char *b, size_t bl, int numeric)
 {
     numkey_t ka, kb;
@@ -241,7 +241,7 @@ typedef struct {
     char *acc;
     size_t len;
     size_t cap;
-    size_t total; /* bytes attributed to lines, which is the bound the caller honours */
+    size_t total; /* bytes attributed to lines, which is the bound the caller honors */
     size_t chunk_cap; /* how many bytes chunk can hold, which is also the most asked for */
     size_t seen;    /* every byte taken from the source */
     size_t lines;   /* lines handed back so far, which is what the line bound counts */

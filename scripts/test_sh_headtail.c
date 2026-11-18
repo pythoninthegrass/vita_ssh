@@ -484,7 +484,7 @@ static void test_bounds_and_errors(void)
         CHECK(sh_head_bytes(mem_read_at, &f, 4, case_got, SCRATCH) == 4);
         CHECK(f.max_once <= 4);
     }
-    /* The output cap is honoured rather than overrun. */
+    /* The output cap is honored rather than overrun. */
     {
         mem_file_t f = {"abcdef", 6, 0, 0};
 

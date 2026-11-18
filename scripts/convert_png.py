@@ -37,7 +37,7 @@ Note:
     squared error per channel, lower is better): on the icon Pillow scores 0.034 and pngquant
     0.027; on the livearea gradient Pillow scores 0.0006 against pngquant's 0.077, and an
     ImageMagick `PNG8:` write — what this tree shipped before — scores 1.48 and 1.01. No
-    `--quality` range is passed to pngquant on purpose: asked for 256 colours it still chose 62
+    `--quality` range is passed to pngquant on purpose: asked for 256 colors it still chose 62
     for the gradient, and the quality floor is what lets it. Encoding runs into a sibling
     temporary file renamed into place, so a rejected conversion leaves the original untouched,
     and the rename only happens after the written file has been read back and verified.
@@ -139,8 +139,8 @@ def pngquant_command(source: Path, target: Path, colors: int, dither: str) -> li
     argv = ["pngquant", "--speed", "1", "--force"]
     if dither == "none":
         argv.append("--nofs")
-    # No --quality range: it lets pngquant decide it needs fewer colours than asked (the
-    # gradient came back with 62 of 256, 300x the error of Pillow). The colour count is
+    # No --quality range: it lets pngquant decide it needs fewer colors than asked (the
+    # gradient came back with 62 of 256, 300x the error of Pillow). The color count is
     # positional and belongs before --; after it pngquant reads another input file.
     return [*argv, "--output", str(target), str(colors), "--", str(source)]
 
@@ -165,7 +165,7 @@ def run_pillow(source: Path, target: Path, colors: int, dither: str) -> None:
         except ValueError:
             continue  # this Pillow build lacks that quantizer; official wheels ship no libimagequant
         # Pad the palette to the full 256 entries. Pillow derives the bit depth from how many
-        # entries the palette has, so a flat-fill tile quantizes to one colour and comes out a
+        # entries the palette has, so a flat-fill tile quantizes to one color and comes out a
         # 1-bit colormap PNG, which the installer has never been asked to accept. Unused entries
         # are never indexed, so the padding is invisible; it costs 768 bytes and guarantees depth 8.
         padded = result.copy()

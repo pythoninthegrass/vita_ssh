@@ -187,7 +187,7 @@ tasks:
 
       CMake reads CFLAGS/CPPFLAGS/LDFLAGS from the environment the way configure
       does, so they are unset here for the same Homebrew-OpenSSL reason as
-      libssh2, and OPENSSL_ROOT_DIR is pinned as a second line of defence. Skips
+      libssh2, and OPENSSL_ROOT_DIR is pinned as a second line of defense. Skips
       itself once the SDK has libssh; --force rebuilds.
     preconditions:
       - sh: test -f "{{.VITASDK}}/arm-vita-eabi/lib/libssl.a"
