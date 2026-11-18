@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - Claude
 created_date: '2026-11-17T18:42:00Z'
-updated_date: '2026-11-17T23:45:00Z'
+updated_date: '2026-11-18T05:54:00Z'
 labels:
   - shell
   - coreutils
@@ -30,17 +30,25 @@ Context for whoever picks this up: the server is close to the size ceiling `vita
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 `true` and `:` print nothing and exit 0; `false` prints nothing and exits 1; each ignores any arguments it is given, as POSIX specifies.
-- [ ] #2 `ssh host true`, `ssh host false` and `ssh host :` return exit statuses 0, 1 and 0 to the client.
-- [ ] #3 `:` is recognised as a command name by the tokenizer and dispatcher, so `: foo bar` and `:` alone both run it instead of answering command not found.
-- [ ] #4 help lists all three with a one-line usage string, in alphabetical position in builtins[], and which reports each of them.
-- [ ] #5 A pipeline segment that is one of them behaves as in sh: `true | cat` and `false | cat` both print nothing and take the status of cat.
-- [ ] #6 README's builtin list names the three commands.
-- [ ] #7 The server still links, and the byte headroom before the size ceiling, read with arm-vita-eabi-size before and after, is recorded in the task notes.
+- [x] #1 `true` and `:` print nothing and exit 0; `false` prints nothing and exits 1; each ignores any arguments it is given, as POSIX specifies.
+- [x] #2 `ssh host true`, `ssh host false` and `ssh host :` return exit statuses 0, 1 and 0 to the client.
+- [x] #3 `:` is recognised as a command name by the tokenizer and dispatcher, so `: foo bar` and `:` alone both run it instead of answering command not found.
+- [x] #4 help lists all three with a one-line usage string, in alphabetical position in builtins[], and which reports each of them.
+- [x] #5 A pipeline segment that is one of them behaves as in sh: `true | cat` and `false | cat` both print nothing and take the status of cat.
+- [x] #6 README's builtin list names the three commands.
+- [x] #7 The server still links, and the change in server text size, read with arm-vita-eabi-size before and after, is recorded in the task notes.
 <!-- AC:END -->
 
 ## Definition of Done
 <!-- DOD:BEGIN -->
-- [ ] #1 task build produces both VPKs
-- [ ] #2 Verified on a device over a real ssh session, including a one-shot exec
+- [x] #1 task build produces both VPKs
+- [x] #2 Verified on a device over a real ssh session, including a one-shot exec
 <!-- DOD:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+2026-11-17 device run over ssh (the one Vita, home network, build installed through VitaShell over USB, eboot.bin byte-identical to the working tree at b8b3d14): true, false, ':', ': foo bar', 'true extra args' and 'false extra args' exit 0, 1, 0, 0, 0, 1 and print nothing; 'true | cat' and 'false | cat' print nothing and exit 0 (cat's status; cat on empty stdin cannot tell a swallowed nonzero from cat's own, so only the zero case is shown); 'which true false :' reports each as a shell builtin; 'help true', 'help false' and 'help :' print their usage; bare help lists ':' first and false, true in alphabetical position. Sizes of the server ELF text from arm-vita-eabi-size: 2297612 at 6fb5c0e, 2297824 with the three builtins on top of the same code (+212 bytes), 2297512 after TASK-035 removed the power locks. AC7 stays open: the byte headroom before the vita-elf-create ceiling was not measured, only the text size, so a later builtin still does not know what is left.
+
+AC7 reworded from 'byte headroom before the size ceiling' to 'change in server text size' on the user's decision: the headroom would have needed padding the build until vita-elf-create failed, and the ceiling figure in AGENTS.md is stale. The size readings are in the notes above (+212 bytes for the three builtins).
+<!-- SECTION:NOTES:END -->
