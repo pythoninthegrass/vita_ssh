@@ -227,6 +227,40 @@ run_exec() {
   OUT=$($V "help ll" 2>/dev/null);                             check "alias: help reports an alias" 'll is an alias for `ls -la`' "$OUT"
   OUT=$($V "alias ls='ls -l' ; help ls" 2>/dev/null);          check "alias: help says an alias wins over a builtin" 'ls is an alias for `ls -l`; it wins over the builtin of the same name' "$OUT"
 
+  # --- TASK-001.08: what `vpk install` accepts -----------------------------
+  # Small generated packages (scripts/make_vpk_fixture.py) that are never installed: each is refused
+  # before the system installer is called. Installing a real third-party title and replacing an
+  # installed one are checked by hand, since they leave an app on the device. A running third-party
+  # title cannot be arranged here, because the server is the one foreground app.
+  FIX=$(mktemp -d)
+  local SSHO="-o BatchMode=yes -o ConnectTimeout=5"
+  fixture() { # TITLE [make_vpk_fixture.py options...]: uploads it as /ux0/data/$T-fix.vpk
+    local title=$1; shift
+    python3 -I "$(dirname "$0")/make_vpk_fixture.py" "$FIX/f.vpk" --title "$title" "$@" &&
+      scp -s -q $SSHO -P "$PORT" "$FIX/f.vpk" "$HOST:/ux0/data/$T-fix.vpk" 2>/dev/null
+  }
+  vpk_out() { $V "$1 /ux0/data/$T-fix.vpk" 2>&1 | grep -v 'closed by remote host'; }
+  fixture ZZZZ99999 && OUT=$(vpk_out "vpk list");      case "$OUT" in *"Title ID: ZZZZ99999 (not this app)"*) check "vpk: list reports another title" ok ok ;; *) check "vpk: list reports another title: got \"$OUT\"" ok fail ;; esac
+  fixture ROM000070 && OUT=$(vpk_out "vpk list");      case "$OUT" in *"Title ID: ROM000070 (this app, running)"*) check "vpk: list reports this app as running" ok ok ;; *) check "vpk: list reports this app as running: got \"$OUT\"" ok fail ;; esac
+  fixture ROM000072 && OUT=$(vpk_out "vpk install");   case "$OUT" in *"bundled updater"*) check "vpk: the updater title is refused" ok ok ;; *) check "vpk: the updater title is refused: got \"$OUT\"" ok fail ;; esac
+  $V "vpk install /ux0/data/$T-fix.vpk" >/dev/null 2>&1; RC=$?;     check "vpk: the updater title exits 1" 1 "$RC"
+  fixture NPXS99999 && OUT=$(vpk_out "vpk install");   case "$OUT" in *"system app"*) check "vpk: a system title is refused" ok ok ;; *) check "vpk: a system title is refused: got \"$OUT\"" ok fail ;; esac
+  $V "ls /ux0/app/NPXS99999" >/dev/null 2>&1; RC=$?;              check "vpk: a refused system title installs nothing" 1 "$RC"
+  fixture bad-title && OUT=$(vpk_out "vpk install");   case "$OUT" in *"is not a title ID"*) check "vpk: a malformed title ID is refused" ok ok ;; *) check "vpk: a malformed title ID is refused: got \"$OUT\"" ok fail ;; esac
+  fixture ZZZZ99998 --magic XXXX && OUT=$(vpk_out "vpk install"); case "$OUT" in *"SCE magic"*) check "vpk: a bad eboot magic is refused" ok ok ;; *) check "vpk: a bad eboot magic is refused: got \"$OUT\"" ok fail ;; esac
+  fixture ZZZZ99997 --eboot-size 100 && OUT=$(vpk_out "vpk install"); case "$OUT" in *"too small"*) check "vpk: an undersized eboot is refused" ok ok ;; *) check "vpk: an undersized eboot is refused: got \"$OUT\"" ok fail ;; esac
+  $V "ls /ux0/app/ZZZZ99998" >/dev/null 2>&1; RC=$?;              check "vpk: a refused package is not installed" 1 "$RC"
+  OUT=$($V "ls /ux0/data/vitasshd-update" 2>/dev/null | grep -c third); check "vpk: refusals leave no staged directory" 0 "$OUT"
+  $V "vpk install -r" >/dev/null 2>&1; RC=$?;                      check "vpk: install -r with no file is a usage error (-> 2)" 2 "$RC"
+  $V "vpk install --reinstall" >/dev/null 2>&1; RC=$?;             check "vpk: install --reinstall with no file is a usage error (-> 2)" 2 "$RC"
+  $V "vpk list --reinstall /ux0/data/x.vpk" >/dev/null 2>&1; RC=$?;  check "vpk: list takes no --reinstall (-> 2)" 2 "$RC"
+  # ROM000069 (the client) is installed: without --reinstall a package for it is refused, and the refusal names the option.
+  # Never run this fixture with --reinstall; it would replace the client with a package that is not runnable.
+  fixture ROM000069 && OUT=$(vpk_out "vpk install"); case "$OUT" in *"already installed"*"--reinstall"*) check "vpk: an installed title is refused and names --reinstall" ok ok ;; *) check "vpk: an installed title is refused and names --reinstall: got \"$OUT\"" ok fail ;; esac
+  $V "vpk install /ux0/data/$T-fix.vpk" >/dev/null 2>&1; RC=$?;     check "vpk: an installed title exits 1 without --reinstall" 1 "$RC"
+  $V "rm /ux0/data/$T-fix.vpk" >/dev/null 2>&1
+  rm -rf "$FIX"
+
   # --- AC2: a key that is not installed is refused -------------------------
   # The verdict comes from stderr, not the exit code: 255 is also what a
   # network failure returns, which once made this check pass while the
