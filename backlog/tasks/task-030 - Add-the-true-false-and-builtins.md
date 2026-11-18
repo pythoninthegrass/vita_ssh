@@ -1,11 +1,11 @@
 ---
 id: TASK-030
 title: 'Add the true, false and : builtins'
-status: In Progress
+status: Done
 assignee:
   - Claude
 created_date: '2026-11-17T18:42:00Z'
-updated_date: '2026-11-18T05:54:00Z'
+updated_date: '2026-11-18T05:55:00Z'
 labels:
   - shell
   - coreutils
@@ -45,6 +45,12 @@ Context for whoever picks this up: the server is close to the size ceiling `vita
 - [x] #2 Verified on a device over a real ssh session, including a one-shot exec
 <!-- DOD:END -->
 
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+Add cmd_true and cmd_false to src/sshd_builtins.c and three builtins[] rows (":" sharing cmd_true, "false", "true") in table order; list them in README's builtin list. No tokenizer change was needed: ":" is an ordinary word. Verified on a device over ssh; the server size change is recorded in the notes.
+<!-- SECTION:PLAN:END -->
+
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
@@ -52,3 +58,9 @@ Context for whoever picks this up: the server is close to the size ceiling `vita
 
 AC7 reworded from 'byte headroom before the size ceiling' to 'change in server text size' on the user's decision: the headroom would have needed padding the build until vita-elf-create failed, and the ceiling figure in AGENTS.md is stale. The size readings are in the notes above (+212 bytes for the three builtins).
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Added the true, false and : builtins (0b3d828). true and : exit 0, false exits 1, each ignores its arguments; ":" shares cmd_true. They give chained commands a known status to test && and || against (TASK-025). Verified on a device over ssh against an installed build identical to the working tree: exit statuses 0/1/0, arguments ignored, true|cat and false|cat print nothing, which and help report them, bare help lists them in order. Server text grew 212 bytes. AC7 was reworded from byte headroom to the size change, because measuring the headroom needs the build padded until vita-elf-create fails. Caveat: `false | cat` exits 0 because cat does, so the pipeline test does not show a nonzero status being swallowed. The device runs for this task exposed a separate regression in the power locks, tracked and fixed in TASK-035.
+<!-- SECTION:FINAL_SUMMARY:END -->
