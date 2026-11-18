@@ -32,7 +32,7 @@ Context for whoever picks this up: the server is close to the size ceiling `vita
 <!-- AC:BEGIN -->
 - [x] #1 `true` and `:` print nothing and exit 0; `false` prints nothing and exits 1; each ignores any arguments it is given, as POSIX specifies.
 - [x] #2 `ssh host true`, `ssh host false` and `ssh host :` return exit statuses 0, 1 and 0 to the client.
-- [x] #3 `:` is recognised as a command name by the tokenizer and dispatcher, so `: foo bar` and `:` alone both run it instead of answering command not found.
+- [x] #3 `:` is recognized as a command name by the tokenizer and dispatcher, so `: foo bar` and `:` alone both run it instead of answering command not found.
 - [x] #4 help lists all three with a one-line usage string, in alphabetical position in builtins[], and which reports each of them.
 - [x] #5 A pipeline segment that is one of them behaves as in sh: `true | cat` and `false | cat` both print nothing and take the status of cat.
 - [x] #6 README's builtin list names the three commands.
