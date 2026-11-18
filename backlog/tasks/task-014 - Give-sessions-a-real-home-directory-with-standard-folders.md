@@ -1,11 +1,11 @@
 ---
 id: TASK-014
 title: Give sessions a real home directory with standard folders
-status: In Progress
+status: Done
 assignee:
   - claude
 created_date: '2026-11-17 03:28'
-updated_date: '2026-11-18T23:19:00Z'
+updated_date: '2026-11-18T23:22:00Z'
 labels:
   - shell
   - storage
@@ -49,7 +49,7 @@ Related: TASK-013.01 (~/.ssh/authorized_keys for ssh-copy-id) should land on thi
 ## Definition of Done
 <!-- DOD:BEGIN -->
 - [x] #1 task build produces both VPKs
-- [ ] #2 Verified on a device, including the upgrade case where the host key moves and the fingerprint does not change
+- [x] #2 Verified on a device, including the upgrade case where the host key moves and the fingerprint does not change
 <!-- DOD:END -->
 
 ## Implementation Plan
@@ -73,5 +73,15 @@ Verification: no host test seam exists for this file (needs libssh and sceIo), s
 <!-- SECTION:NOTES:BEGIN -->
 Device run, the Vita on the office network, 2026-11-18, build installed with vpk install -r. Before: key in ux0:/data/vitasshd, fingerprint SHA256:WruC7i/zfLV7z3YVjuP5WfZ194xfEXfh2d7QhGdY9y8. After: the same fingerprint from ~/.ssh/ssh_host_ed25519_key.pub; sshd.log shows 'home: moved ... to ux0:/data/home/.ssh/...' for the .pub and authorized_keys, 'authorized_keys: 2 key(s) from ux0:/data/home/.ssh/authorized_keys' and 'home: ux0:/data/home'. pwd is /ux0/data/home, ls -a ~ shows .ssh Documents Downloads Pictures (none existed before), env HOME=/ux0/data/home, sftp ls /ux0/data/home lists the three folders, cd ~/Downloads and ls ~/Downloads/../Documents succeed, /ux0/data/vitasshd keeps only sshd.log and sshd.log.old.
 
-Not verified on a device: AC #7 (home device absent), because the card cannot be unmounted while the server runs; the fallback is the old choose_home() path plus a console line. DoD #2 stays open for the same reason only. The host key's own 'moved' line was not read from the log; the fingerprint match shows it is the same file. No host test exists for sshd_hostkey.c (needs libssh and sceIo).
+Not verified on a device: AC #7 (home device absent), because the card cannot be unmounted while the server runs; the fallback is the old choose_home() path plus a console line. The host key's own 'moved' line was not read from the log; the fingerprint match shows it is the same file. No host test exists for sshd_hostkey.c (needs libssh and sceIo).
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+$HOME is now <device>:/data/home (ux0 first, then uma0, xmc0, ur0). The host key, its .pub and authorized_keys live in <home>/.ssh; Downloads, Documents and Pictures are created at boot; sshd.log stays in <device>:/data/vitasshd. At boot the old files are renamed into .ssh when the new place lacks them, and both searches check .ssh first and the old directory second, so a failed rename cannot generate a new host key. ensure_dir() now creates every level. README, AGENTS.md and two code comments are updated. Commit ac1c2c8.
+
+Device results (the office-network Vita, 2026-11-18): fingerprint SHA256:WruC7i/zfLV7z3YVjuP5WfZ194xfEXfh2d7QhGdY9y8 identical before and after the upgrade; pwd and HOME are /ux0/data/home; the three folders were created on a device that never had them; sftp lists them; cd ~/Downloads and ls ~/Downloads/../Documents succeed.
+
+Closed with AC #7 unchecked: the home-device-absent fallback (the old choose_home() path plus a console line) has not been exercised, because the card cannot be unmounted while the server runs. No host test exists for src/sshd_hostkey.c, since it needs libssh and sceIo.
+<!-- SECTION:FINAL_SUMMARY:END -->
