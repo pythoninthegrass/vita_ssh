@@ -105,6 +105,7 @@
   Check with `file tile.png` → must say `8-bit colormap`; `magick identify` cannot tell you this
   (it reports 8-bit depth per channel and calls a TrueColor render a `Palette` image). Note that
   "-depth 8" alone means 8 bits *per channel*, which looks correct and is not.
+- Where the server's files live (`src/sshd_hostkey.c`, `data_dirs[]`): per device (`ux0`, `uma0`, `xmc0`, `ur0`, in that order) the host key and `authorized_keys` are in `<device>:/data/home/.ssh`, `$HOME` is `<device>:/data/home` (with `Downloads`, `Documents`, `Pictures` made at boot), and `sshd.log` stays in `<device>:/data/vitasshd`. The host key and `authorized_keys` searches look in `.ssh` first and the old `vitasshd` directory second, and boot renames the old files into `.ssh` when the new place lacks them; the second place is what keeps the fingerprint when a rename fails, so do not drop it. New keys are saved only to `.ssh`.
 - With no `authorized_keys`, the server prints a generated **passphrase** instead: `PASSPHRASE_WORDS`
   words from a 1024-entry table in `src/sshd_hostkey.c`, concatenated with no separators. The table's
   three properties — exactly 2^10 entries (the generator indexes it with 10 random bits, so a short
@@ -222,7 +223,7 @@ You MUST read the overview resource to understand the complete workflow. The inf
   launches the helper and immediately exits. The helper targets only ROM000070 for shutdown,
   promotes the stage, records `result.txt`, and relaunches the server even on failure.
   `include/vpk_update.h` is the shared path contract. Never reuse VitaShell's `ux0:data/pkg`
-  or the host-key/authorized_keys directory for staging. The `ready` marker is one-shot:
+  or `ux0:data/home/.ssh` (the host key and authorized_keys) for staging. The `ready` marker is one-shot:
   manually launching the updater must not replay an installation.
 - The server VPK has an explicit dependency on the helper VPK target as well as its own
   SELF target; retain both so a helper change is bundled in the same build pass.

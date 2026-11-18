@@ -184,7 +184,7 @@ typedef struct {
      * path a session types. */
     char key_path[SH_SCE_PATH_MAX];  /* host key on storage; "" if it is only in memory */
     char keys_path[SH_SCE_PATH_MAX]; /* the authorized_keys that was read; "" if none */
-    char home[SH_POSIX_PATH_MAX];    /* where a session lands: the server's data dir */
+    char home[SH_POSIX_PATH_MAX];    /* where a session lands: the user's home, <device>/data/home */
     int keys_loaded;    /* authorized_keys entries accepted */
     int keys_rejected;  /* lines in that file that were not usable */
     int key_persisted;  /* the host key is on storage: same fingerprint next boot */

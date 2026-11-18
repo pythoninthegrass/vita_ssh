@@ -22,7 +22,10 @@
  * is the obvious candidate and the one every file manager can reach, but it is
  * not guaranteed to be there (a PCH-2000 with no card), not guaranteed to be
  * writable, and not guaranteed to have room. So the server owns an ordered list
- * of candidate directories and applies three rules to it:
+ * of candidate devices and applies three rules to it. On each, the host key and
+ * authorized_keys live in <device>:/data/home/.ssh; the server's own directory,
+ * <device>:/data/vitasshd, holds sshd.log and is searched second for those two
+ * files, because an upgrade moves them out of it at boot:
  *
  *   1. host key IN  -- the first candidate holding a readable private key wins.
  *      Nothing is generated while a key exists anywhere, because a second
@@ -273,20 +276,27 @@ typedef char wordlist_is_the_right_size[
  * is the reverse mapping the shell prints. A file manager takes the friendlier
  * ux0:data/vitasshd; both name the same directory. */
 typedef struct {
-    const char *sce; /* directory, in the syscall spelling */
-    int ram;         /* backed by RAM: nothing in it survives a reboot */
+    const char *sce;  /* the server's own directory (sshd.log; where the SSH files used to be) */
+    const char *home; /* the user's home on the same device */
+    const char *ssh;  /* <home>/.ssh: the host key and authorized_keys */
+    int ram;          /* backed by RAM: nothing in it survives a reboot */
 } sh_datadir_t;
 
 static const sh_datadir_t data_dirs[] = {
-    { "ux0:/data/vitasshd",  0 }, /* the documented one: VitaShell and every file manager reach it */
-    { "uma0:/data/vitasshd", 0 }, /* a USB drive in the host port, while one is plugged in */
-    { "xmc0:/data/vitasshd", 0 }, /* the Vita TV's own card */
-    { "ur0:/data/vitasshd",  1 }, /* RAM disk: writable on every device, forgotten on reboot */
+    { "ux0:/data/vitasshd",  "ux0:/data/home",  "ux0:/data/home/.ssh",  0 }, /* the documented one: VitaShell and every file manager reach it */
+    { "uma0:/data/vitasshd", "uma0:/data/home", "uma0:/data/home/.ssh", 0 }, /* a USB drive in the host port, while one is plugged in */
+    { "xmc0:/data/vitasshd", "xmc0:/data/home", "xmc0:/data/home/.ssh", 0 }, /* the Vita TV's own card */
+    { "ur0:/data/vitasshd",  "ur0:/data/home",  "ur0:/data/home/.ssh",  1 }, /* RAM disk: writable on every device, forgotten on reboot */
 };
+
+/* Folders boot creates in the home, so a fresh device can cd into them. */
+static const char *const home_folders[] = { "Downloads", "Documents", "Pictures" };
+#define N_HOME_FOLDERS (sizeof(home_folders) / sizeof(home_folders[0]))
 #define N_DATA_DIRS (sizeof(data_dirs) / sizeof(data_dirs[0]))
 
 static sh_auth_t auth_state;
 static ssh_key host_key;
+static char host_key_path[SH_SCE_PATH_MAX]; /* the file the key was read from or saved to */
 static ssh_key authorized[MAX_AUTHORIZED_KEYS];
 static int n_authorized;
 
@@ -358,10 +368,10 @@ static int sce_to_posix(const char *sce, char *dst, size_t dstlen)
 }
 
 /*
- * Create a candidate directory, and the "data" directory above it.
+ * Create a candidate directory, and every directory above it.
  *
  * mkdir() makes one level and "<dev>:data" is missing on a card that has never
- * had homebrew write to it, so both are attempted. Then the answer is read back
+ * had homebrew write to it, so each level is attempted. Then the answer is read back
  * with stat rather than trusted from the return code: mkdir's own idea of
  * success on a read-only partition is not consistent enough to make a
  * persistence decision with, and "is that directory there" is the only question
@@ -369,26 +379,81 @@ static int sce_to_posix(const char *sce, char *dst, size_t dstlen)
  */
 static int ensure_dir(const char *sce_dir)
 {
-    char parent[SH_SCE_PATH_MAX];
-    const char *slash = strrchr(sce_dir, '/');
-    size_t plen;
+    char buf[SH_SCE_PATH_MAX];
+    const char *colon = strchr(sce_dir, ':');
+    char *p;
 
-    if (slash == NULL) {
+    if (colon == NULL || colon[1] != '/' || strlen(sce_dir) >= sizeof(buf)) {
         return -1;
     }
-    plen = (size_t)(slash - sce_dir);
-    if (plen == 0 || plen >= sizeof(parent)) {
-        return -1;
-    }
-    memcpy(parent, sce_dir, plen);
-    parent[plen] = '\0';
-
     if (is_directory(sce_dir)) {
         return 0;
     }
-    mkdir_quiet(parent); /* may exist, may be read-only: the child decides */
-    mkdir_quiet(sce_dir);
-    return is_directory(sce_dir) ? 0 : -1;
+    strcpy(buf, sce_dir);
+    /* Every level below the device root, outermost first: each may exist or be
+     * read-only, and only the last one decides. */
+    for (p = buf + (colon - sce_dir) + 2; *p != '\0'; p++) {
+        if (*p == '/') {
+            *p = '\0';
+            mkdir_quiet(buf);
+            *p = '/';
+        }
+    }
+    mkdir_quiet(buf);
+    return is_directory(buf) ? 0 : -1;
+}
+
+/* ------------------------------------------------------------------ */
+/* the SSH files: <home>/.ssh, with the old server directory behind it */
+/* ------------------------------------------------------------------ */
+
+/* Finds `name` for candidate i: in <home>/.ssh, else in the server directory
+ * the files lived in before ~ existed. Returns 1 and fills path when found. The
+ * second place is what keeps a host key's fingerprint when the move below could
+ * not happen: generating a new key because the old one was a directory away is
+ * the failure this order exists to prevent. */
+static int locate_ssh_file(size_t i, const char *name, char *path, size_t len)
+{
+    if (join(path, len, data_dirs[i].ssh, name) == 0 && path_exists(path)) {
+        return 1;
+    }
+    if (join(path, len, data_dirs[i].sce, name) == 0 && path_exists(path)) {
+        return 1;
+    }
+    return 0;
+}
+
+/* Moves one file from the old server directory into <home>/.ssh when the new
+ * place does not have it. A rename on one device keeps every byte, so the host
+ * key's fingerprint cannot change; a failure is logged and the search above
+ * still finds the file where it was. */
+static void migrate_ssh_file(const sh_datadir_t *d, const char *name)
+{
+    char from[SH_SCE_PATH_MAX];
+    char to[SH_SCE_PATH_MAX];
+
+    if (join(from, sizeof(from), d->sce, name) != 0 ||
+        join(to, sizeof(to), d->ssh, name) != 0 ||
+        !path_exists(from) || path_exists(to)) {
+        return;
+    }
+    if (ensure_dir(d->ssh) != 0 || rename(from, to) != 0) {
+        sh_console_log("home: could not move %s to %s (using it in place)",
+                       from, to);
+        return;
+    }
+    sh_console_log("home: moved %s to %s", from, to);
+}
+
+static void migrate_ssh_files(void)
+{
+    size_t i;
+
+    for (i = 0; i < N_DATA_DIRS; i++) {
+        migrate_ssh_file(&data_dirs[i], HOSTKEY_NAME);
+        migrate_ssh_file(&data_dirs[i], HOSTKEY_PUB_NAME);
+        migrate_ssh_file(&data_dirs[i], KEYS_NAME);
+    }
 }
 
 /* ------------------------------------------------------------------ */
@@ -581,14 +646,12 @@ static const sh_datadir_t *import_any_host_key(void)
     for (i = 0; i < N_DATA_DIRS; i++) {
         char path[SH_SCE_PATH_MAX];
 
-        if (join(path, sizeof(path), data_dirs[i].sce, HOSTKEY_NAME) != 0) {
-            return NULL;
-        }
-        if (!path_exists(path)) {
+        if (!locate_ssh_file(i, HOSTKEY_NAME, path, sizeof(path))) {
             continue;
         }
         if (ssh_pki_import_privkey_file(path, NULL, NULL, NULL, &host_key) ==
                 SSH_OK && host_key != NULL) {
+            snprintf(host_key_path, sizeof(host_key_path), "%s", path);
             /* Read back from the RAM disk is still a new key every boot, so the
              * same warning belongs here as on the save path. */
             sh_console_log("host key: read %s%s", path,
@@ -675,18 +738,19 @@ static const sh_datadir_t *save_host_key(void)
         char path[SH_SCE_PATH_MAX];
         char pub[SH_SCE_PATH_MAX];
 
-        if (join(path, sizeof(path), data_dirs[i].sce, HOSTKEY_NAME) != 0 ||
-            join(pub, sizeof(pub), data_dirs[i].sce, HOSTKEY_PUB_NAME) != 0) {
+        if (join(path, sizeof(path), data_dirs[i].ssh, HOSTKEY_NAME) != 0 ||
+            join(pub, sizeof(pub), data_dirs[i].ssh, HOSTKEY_PUB_NAME) != 0) {
             return NULL;
         }
-        if (ensure_dir(data_dirs[i].sce) != 0) {
+        if (ensure_dir(data_dirs[i].ssh) != 0) {
             continue; /* read-only, not mounted, no room: try the next one */
         }
         if (ssh_pki_export_privkey_file(host_key, NULL, NULL, NULL, path) !=
             SSH_OK) {
             continue;
         }
-        sh_console_log("host key: new ed25519 key in %s%s", data_dirs[i].sce,
+        snprintf(host_key_path, sizeof(host_key_path), "%s", path);
+        sh_console_log("host key: new ed25519 key in %s%s", data_dirs[i].ssh,
                        data_dirs[i].ram
                            ? " (RAM disk: new fingerprint each boot)" : "");
         /* The private half is what makes the server work, so a public half that
@@ -905,12 +969,12 @@ static void load_authorized_keys(char *used_path, size_t usedlen)
         char path[SH_SCE_PATH_MAX];
         FILE *fp;
 
-        if (join(path, sizeof(path), data_dirs[i].sce, KEYS_NAME) != 0) {
-            return;
+        if (!locate_ssh_file(i, KEYS_NAME, path, sizeof(path))) {
+            continue; /* not there: another candidate may have one */
         }
         fp = fopen(path, "r");
         if (fp == NULL) {
-            continue; /* not there: another candidate may have one */
+            continue;
         }
         parse_authorized_keys(fp, path);
         fclose(fp);
@@ -920,7 +984,7 @@ static void load_authorized_keys(char *used_path, size_t usedlen)
     /* No file anywhere is the normal first run, and the expected one: the
      * password this leaves live is what the bootstrap is for. */
     sh_console_log("authorized_keys: none found (tried %u directories, first"
-                   " is %s)", (unsigned)N_DATA_DIRS, data_dirs[0].sce);
+                   " is %s)", (unsigned)N_DATA_DIRS, data_dirs[0].ssh);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1039,23 +1103,47 @@ static void generate_passphrase(char *dst, size_t dstlen)
 /* the directory a session lands in                                   */
 /* ------------------------------------------------------------------ */
 
+/* The standard folders are made on every boot; one that exists is not news and
+ * one that cannot be made is not a reason to refuse the home. */
+static void make_home_folders(const char *home_sce)
+{
+    size_t i;
+
+    for (i = 0; i < N_HOME_FOLDERS; i++) {
+        char path[SH_SCE_PATH_MAX];
+
+        if (join(path, sizeof(path), home_sce, home_folders[i]) == 0) {
+            mkdir_quiet(path);
+        }
+    }
+}
+
 /*
- * Where ~ points. Same order as everything else above: the directory the host
- * key came from or went to -- the one place the search has proved is there, and
- * the one place a session's `cat ~/authorized_keys` means something -- else the
- * first candidate that exists at all, else ux0's root, which the shell can list
- * even when nothing on it can be written. A session that lands somewhere real is
- * worth more than one that lands on a path it only thinks it has.
+ * Where ~ points: the home of the first candidate device that can have one
+ * created, in the same order as everything else above, with ~/.ssh and the
+ * standard folders made in it. When no device can, the first server directory
+ * that exists at all, else ux0's root, which the shell can list even when
+ * nothing on it can be written -- and the console says the home is missing. A
+ * session that lands somewhere real is worth more than one that lands on a path
+ * it only thinks it has.
  */
-static void choose_home(const sh_datadir_t *key_dir)
+static void choose_home(void)
 {
     char posix[SH_POSIX_PATH_MAX];
     size_t i;
 
-    if (key_dir != NULL && sce_to_posix(key_dir->sce, posix, sizeof(posix)) == 0) {
-        snprintf(auth_state.home, sizeof(auth_state.home), "%s", posix);
-        return;
+    for (i = 0; i < N_DATA_DIRS; i++) {
+        if (ensure_dir(data_dirs[i].home) == 0 &&
+            sce_to_posix(data_dirs[i].home, posix, sizeof(posix)) == 0) {
+            ensure_dir(data_dirs[i].ssh);
+            make_home_folders(data_dirs[i].home);
+            snprintf(auth_state.home, sizeof(auth_state.home), "%s", posix);
+            sh_console_log("home: %s", data_dirs[i].home);
+            return;
+        }
     }
+    sh_console_log("home: no device accepts one, sessions land in the first"
+                   " directory that exists");
     for (i = 0; i < N_DATA_DIRS; i++) {
         if (is_directory(data_dirs[i].sce) &&
             sce_to_posix(data_dirs[i].sce, posix, sizeof(posix)) == 0) {
@@ -1130,7 +1218,7 @@ static void stat_keys_identity(int *found, long long *mtime, long long *size)
         char path[SH_SCE_PATH_MAX];
         struct stat st;
 
-        if (join(path, sizeof(path), data_dirs[i].sce, KEYS_NAME) != 0) {
+        if (!locate_ssh_file(i, KEYS_NAME, path, sizeof(path))) {
             continue;
         }
         if (stat(path, &st) == 0) {
@@ -1170,6 +1258,7 @@ int sh_auth_prepare(sh_auth_t *auth)
                        "cannot make a host key");
         return -1;
     }
+    migrate_ssh_files();
     if (load_or_create_host_key(&key_dir) != 0) {
         sh_console_log("error: could not obtain a host key");
         return -1;
@@ -1183,11 +1272,9 @@ int sh_auth_prepare(sh_auth_t *auth)
      * the RAM disk does not. The screen says which of the three cases this is:
      * saved on storage, kept in RAM, or nowhere. */
     auth_state.key_persisted = (key_dir != NULL && !key_dir->ram);
-    if (key_dir != NULL &&
-        join(auth_state.key_path, sizeof(auth_state.key_path), key_dir->sce,
-             HOSTKEY_NAME) != 0) {
-        auth_state.key_path[0] = '\0';
-        auth_state.key_persisted = 0;
+    if (key_dir != NULL) {
+        snprintf(auth_state.key_path, sizeof(auth_state.key_path), "%s",
+                 host_key_path);
     }
 
     load_authorized_keys(auth_state.keys_path, sizeof(auth_state.keys_path));
@@ -1208,7 +1295,7 @@ int sh_auth_prepare(sh_auth_t *auth)
         generate_passphrase(auth_state.password, sizeof(auth_state.password));
         auth_state.password_used = (auth_state.password[0] != '\0');
     }
-    choose_home(key_dir);
+    choose_home();
     *auth = auth_state;
     return 0;
 }

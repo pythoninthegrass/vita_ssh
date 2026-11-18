@@ -111,38 +111,28 @@ connections, logins and commands. <kbd>START</kbd> stops the server.
 
 ### Where its files live
 
-Four directories, tried in the order below, each one the same relative path under the
-device's own `data` directory. The first the server can create and write is the one it
-uses.
+Each device has two directories under its own `data` directory: the server's, `vitasshd`, which holds `sshd.log`, and the user's home, `home`, which holds `.ssh` (the host key and `authorized_keys`) and the folders `Downloads`, `Documents` and `Pictures`. Devices are tried in the order below, and the first the server can create and write is the one it uses.
 
 | Device | Path in a file manager | Path in the shell | Survives a reboot |
 | --- | --- | --- | --- |
-| `ux0:` internal storage or memory card | `ux0:data/vitasshd` | `/ux0/data/vitasshd` | yes — **use this one** |
-| `uma0:` a USB drive in the host port | `uma0:data/vitasshd` | `/uma0/data/vitasshd` | yes, while plugged in |
-| `xmc0:` the Vita TV's own card | `xmc0:data/vitasshd` | `/xmc0/data/vitasshd` | yes, while mounted |
-| `ur0:` RAM disk | `ur0:data/vitasshd` | `/ur0/data/vitasshd` | no — it is RAM |
+| `ux0:` internal storage or memory card | `ux0:data/home` | `/ux0/data/home` | yes — **use this one** |
+| `uma0:` a USB drive in the host port | `uma0:data/home` | `/uma0/data/home` | yes, while plugged in |
+| `xmc0:` the Vita TV's own card | `xmc0:data/home` | `/xmc0/data/home` | yes, while mounted |
+| `ur0:` RAM disk | `ur0:data/home` | `/ur0/data/home` | no — it is RAM |
 
-Why a list rather than one path: which partition a homebrew app can actually write is
-something only the device knows. `ux0:` is the one every file manager reaches, but it is
-not guaranteed to be present (a PCH-2000 with no card), writable, or roomy. So:
+Why a list rather than one path: which partition a homebrew app can actually write is something only the device knows. `ux0:` is the one every file manager reaches, but it is not guaranteed to be present (a PCH-2000 with no card), writable, or roomy. So:
 
-- **The host key is read from the first directory that has one.** Nothing is generated while
-  a key exists anywhere on the device — a second identity is worse than a slow boot.
-- **A new host key is saved in the first directory that accepts it.** If none does, the key
-  lives in memory, the server still runs, and the status line reads
-  `not saved: new fingerprint each boot` so you hear it from the Vita rather than from your
-  client.
-- **`authorized_keys` is read from the first directory that has the file** — never a merge of
-  all four. Two files both claiming to authorize you is how a card you forgot about starts
-  letting people in.
-- **`~` is the directory the server could write**, or the first that exists at all, or
-  `/ux0`.
+- **The host key is read from the first device that has one**, in `<home>/.ssh`. Nothing is generated while a key exists anywhere on the device — a second identity is worse than a slow boot.
+- **A new host key is saved in the first device's `.ssh` that accepts it.** If none does, the key lives in memory, the server still runs, and the status line reads `not saved: new fingerprint each boot` so you hear it from the Vita rather than from your client.
+- **`authorized_keys` is read from the first device that has the file** — never a merge of all four. Two files both claiming to authorize you is how a card you forgot about starts letting people in.
+- **`~` is the home of the first device that can have one.** If none can, it is the first server directory that exists, or `/ux0`, and the console says so.
+- **Upgrading from a build that kept those files in `<device>:data/vitasshd`:** at boot the host key, its `.pub` and `authorized_keys` are moved into `<home>/.ssh` when the new place lacks them. It is a rename on one device, so the host key's fingerprint does not change. If a move fails, the file is read where it is.
 
 Nothing about that search is silent: the screen and its log say where the key came from or
 went to, which `authorized_keys` was read, how many of its lines were keys, and how many
 were not. Read the screen once and you know which directory your device is using.
 
-The screen prints a path the way the server hands it to the device — `ux0:/data/vitasshd`,
+The screen prints a path the way the server hands it to the device — `ux0:/data/home`,
 the first column's directory with the slash moved one character. Both spell the same place;
 a file manager takes either.
 
@@ -163,7 +153,7 @@ There are two sign-in states, and the console tells you which one you are in:
    `ssh-ed25519 AAAA… comment` form, `#` comments allowed, up to 32 keys; a malformed line
    is skipped, named on the console with its line number, and counted on the screen rather
    than losing you the file. **Any username is accepted; the key is the credential.** The
-   console reads `N key(s) in ux0:/data/vitasshd/authorized_keys`. Option prefixes
+   console reads `N key(s) in ux0:/data/home/.ssh/authorized_keys`. Option prefixes
    (`from="…"`, `no-pty`) are accepted and ignored — this server has no use for them.
    Trailing `\r` from a Windows editor is tolerated; a line over 4 KB is not.
 2. **No `authorized_keys`** — the server generates a 12-character password and prints it on
@@ -188,7 +178,7 @@ Install `ssh_server_vita.vpk`, launch it, and note the IP and the sign-in line.
 # bootstrap: any username, password as shown on the Vita's screen
 ssh vita@192.168.1.50
 
-# once your public key is in ux0:data/vitasshd/authorized_keys
+# once your public key is in ux0:data/home/.ssh/authorized_keys
 ssh -i ~/.ssh/id_ed25519 vita@192.168.1.50
 
 # one command, no shell
@@ -200,7 +190,7 @@ ssh -p 2222 -i ~/.ssh/id_ed25519 vita@192.168.1.50
 
 `ssh-copy-id` will not work yet: it sends a compound `sh -c` command line, and this shell has no `sh`, so install
 `authorized_keys` yourself — VitaShell, a USB copy, or any route that writes a file to
-`ux0:data/vitasshd/` — and restart the server so it re-reads it.
+`ux0:data/home/.ssh/` — and restart the server so it re-reads it.
 
 ### Copying files with sftp and scp
 
@@ -213,7 +203,7 @@ scp -s -i ~/.ssh/id_ed25519 game.vpk vita@192.168.1.50:/ux0/data/
 scp -s -i ~/.ssh/id_ed25519 vita@192.168.1.50:/ux0/data/vitasshd/sshd.log .
 ```
 
-Paths are the same POSIX paths the shell uses: `/` lists the devices, `/ux0` is the memory card, and a session starts in `ux0:data/vitasshd`. `-s` selects scp's SFTP mode, which needs OpenSSH 8.7 or later and is the default from 9.0 (an older client has no `-s`, so use `sftp`); the legacy scp protocol (`scp -O`) is not supported, because the shell has no `scp` command to run.
+Paths are the same POSIX paths the shell uses: `/` lists the devices, `/ux0` is the memory card, and a session starts in its home, `ux0:data/home` (`/ux0/data/home`). `-s` selects scp's SFTP mode, which needs OpenSSH 8.7 or later and is the default from 9.0 (an older client has no `-s`, so use `sftp`); the legacy scp protocol (`scp -O`) is not supported, because the shell has no `scp` command to run.
 
 What to expect, because the Vita is not a Unix filesystem:
 
@@ -407,7 +397,7 @@ and do not replace that previous result.
 
 This requires a one-time VitaShell install of an updater-capable server build.
 The updater VPK is bundled inside the server VPK; it needs no separate manual install.
-Staging never uses VitaShell's `ux0:data/pkg` or the credentials in `ux0:data/vitasshd`.
+Staging never uses VitaShell's `ux0:data/pkg` or the credentials in `ux0:data/home/.ssh`.
 A staging failure leaves the installed server unchanged. Promotion is a system operation:
 there is no app-managed rollback, and hardware tests show that files omitted from the
 new package are removed from the app directory. Keep persistent files in the data
