@@ -14,6 +14,7 @@
  * string handed to libc comes out of sh_path.c.
  */
 #include "sshd.h"
+#include "sh_alias.h"
 #include "sh_chain.h"
 #include "sh_grep.h"
 #include "sh_headtail.h"
@@ -3026,7 +3027,11 @@ static int cmd_which(sh_session_t *s, int argc, char **argv)
          * is in the builtin table, so "found" and "builtin" are the same
          * event. Saying so beats the traditional "in (/bin:/usr/bin)", which
          * would claim a search that would find nothing. */
-        if (sh_builtin_lookup(argv[i]) != NULL) {
+        const char *alias = sh_alias_get(sh_session_aliases(s), argv[i]);
+
+        if (alias != NULL) {
+            sh_printf(s, "%s: aliased to %s\n", argv[i], alias);
+        } else if (sh_builtin_lookup(argv[i]) != NULL) {
             sh_printf(s, "%s: shell builtin\n", argv[i]);
         } else {
             sh_eprintf(s, "which: no %s in the builtins\n", argv[i]);
@@ -3131,6 +3136,91 @@ static int cmd_devices(sh_session_t *s, int argc, char **argv)
 /* help, exit                                                           */
 /* ------------------------------------------------------------------ */
 
+/* alias NAME='VALUE' is the form sh prints, so a listing can be pasted back in. */
+static void print_alias(sh_session_t *s, const char *name, const char *value)
+{
+    const char *q;
+
+    sh_printf(s, "alias %s='", name);
+    while ((q = strchr(value, '\'')) != NULL) {
+        sh_write(s, value, (size_t)(q - value));
+        sh_printf(s, "'\\''");
+        value = q + 1;
+    }
+    sh_printf(s, "%s'\n", value);
+}
+
+static int cmd_alias(sh_session_t *s, int argc, char **argv)
+{
+    sh_alias_table_t *t = sh_session_aliases(s);
+    int i, status = 0;
+
+    if (t == NULL) {
+        sh_eprintf(s, "alias: aliases are unavailable in this session\n");
+        return 1;
+    }
+    if (argc == 1) {
+        for (i = 0; i < sh_alias_count(t); i++) {
+            print_alias(s, sh_alias_name_at(t, i), sh_alias_value_at(t, i));
+        }
+        return 0;
+    }
+    for (i = 1; i < argc; i++) {
+        char *eq = strchr(argv[i], '=');
+
+        if (eq == NULL) {
+            const char *value = sh_alias_get(t, argv[i]);
+
+            if (value == NULL) {
+                sh_eprintf(s, "alias: %s: not found\n", argv[i]);
+                status = 1;
+            } else {
+                print_alias(s, argv[i], value);
+            }
+            continue;
+        }
+        *eq = '\0';
+        if (sh_alias_set(t, argv[i], eq + 1) != 0) {
+            switch (errno) {
+            case ENOSPC:
+                sh_eprintf(s, "alias: too many aliases (limit %d)\n", SH_ALIAS_MAX);
+                break;
+            case ELOOP:
+                sh_eprintf(s, "alias: %s: that value would make a loop of aliases\n", argv[i]);
+                break;
+            case ENAMETOOLONG:
+                sh_eprintf(s, "alias: %s: name over %d or value over %d bytes\n", argv[i], SH_ALIAS_NAME_MAX,
+                           SH_ALIAS_VALUE_MAX);
+                break;
+            default:
+                sh_eprintf(s, "alias: %s: %s\n", argv[i],
+                           sh_alias_name_ok(argv[i]) ? "the value is empty" : "not a valid alias name");
+                break;
+            }
+            status = 1;
+        }
+    }
+    return status;
+}
+
+static int cmd_unalias(sh_session_t *s, int argc, char **argv)
+{
+    sh_alias_table_t *t = sh_session_aliases(s);
+    int i, status = 0;
+
+    if (argc < 2) {
+        sh_eprintf(s, "usage: unalias NAME...\n");
+        return 1;
+    }
+    for (i = 1; i < argc; i++) {
+        if (sh_alias_unset(t, argv[i]) != 0) {
+            sh_eprintf(s, "unalias: %s: not found\n", argv[i]);
+            status = 1;
+        }
+    }
+    return status;
+}
+
 static int cmd_help(sh_session_t *s, int argc, char **argv)
 {
     const sh_builtin_t *table;
@@ -3138,6 +3228,13 @@ static int cmd_help(sh_session_t *s, int argc, char **argv)
 
     table = sh_builtins(&count);
     if (argc > 1) {
+        const char *alias = sh_alias_get(sh_session_aliases(s), argv[1]);
+
+        if (alias != NULL) {
+            sh_printf(s, "%s is an alias for `%s`%s\n", argv[1], alias,
+                      sh_builtin_lookup(argv[1]) != NULL ? "; it wins over the builtin of the same name" : "");
+            return 0;
+        }
         for (i = 0; i < count; i++) {
             if (strcmp(table[i].name, argv[1]) == 0) {
                 sh_printf(s, "%s\n", table[i].usage);
@@ -3153,7 +3250,10 @@ static int cmd_help(sh_session_t *s, int argc, char **argv)
     }
     sh_printf(s, "\nType `help COMMAND` for one line of usage. Paths start at"
                  " `/`: `/` lists the devices, `/ux0` is the memory card. Join up to %d commands"
-                 " with ; && || (each a separate word, as with | and >).\n", SH_CHAIN_MAX);
+                 " with ; && || (each a separate word, as with | and >). `alias` lists the shortcuts; an alias"
+                 " expands only as the command word, follows other aliases (each at most once), and wins over a"
+                 " builtin of the same name.\n",
+              SH_CHAIN_MAX);
     return 0;
 }
 
@@ -3464,6 +3564,8 @@ static int cmd_vcmd(sh_session_t *s, int argc, char **argv)
 /* Keep this alphabetical: `help` prints it in order and people scan it. */
 static const sh_builtin_t builtins[] = {
     {":", cmd_true, ": [ARG...] -- do nothing, successfully"},
+    {"alias", cmd_alias,
+     "alias [NAME[=VALUE]]... -- list aliases, show one, or define one; expands as the command word"},
     {"cat", cmd_cat, "cat FILE... -- write a file to the terminal"},
     {"cd", cmd_cd, "cd [DIR] -- change the working directory (no argument: $HOME)"},
     {"cp", cmd_cp, "cp [-r] SRC... DST -- copy; -r for directories"},
@@ -3494,6 +3596,7 @@ static const sh_builtin_t builtins[] = {
      "tail [-n N | -c N] [FILE] -- last N lines (10) or N bytes of a file or stdin"},
     {"touch", cmd_touch, "touch FILE... -- create a file or update its time"},
     {"true", cmd_true, "true [ARG...] -- do nothing, successfully (status 0)"},
+    {"unalias", cmd_unalias, "unalias NAME... -- remove aliases"},
     {"uname", cmd_uname,
      "uname [-a] -- system name; -a adds the firmware the device reports"},
     {"uniq", cmd_uniq,
@@ -3646,6 +3749,51 @@ static int extract_redirect(sh_session_t *s, int *argc, char **argv,
     return 0;
 }
 
+/* Replaces argv[0] with the words of one alias value, in place. Returns 0, or -1 after printing when the
+ * words would not fit. */
+static int splice_alias_value(sh_session_t *s, char **argv, int *quoted, int *argc, const char *value)
+{
+    char *words[MAX_WORDS];
+    int wordq[MAX_WORDS];
+    int n;
+
+    n = split_line(value, words, wordq, MAX_WORDS);
+    if (n + *argc - 1 > MAX_WORDS) {
+        free_args(words, n);
+        sh_eprintf(s, "sh: %s: alias expands to too many words\n", argv[0]);
+        return -1;
+    }
+    free(argv[0]);
+    memmove(argv + n, argv + 1, (size_t)(*argc - 1) * sizeof(*argv));
+    memmove(quoted + n, quoted + 1, (size_t)(*argc - 1) * sizeof(*quoted));
+    memcpy(argv, words, (size_t)n * sizeof(*argv));
+    memcpy(quoted, wordq, (size_t)n * sizeof(*quoted));
+    *argc += n - 1;
+    return 0;
+}
+
+/* Expands an unquoted command word that names an alias, as bash does: the alias, then the first word of
+ * its value if that is an alias, and so on, each alias at most once (sh_alias_chain decides the order and
+ * the stop). This runs before redirects are extracted, so an alias followed by `> file` redirects and a
+ * `>` inside a value acts like the text it stands for. A chain or pipe operator in a value is an ordinary
+ * argument, because the line was split before this point. Returns 0, or -1 after printing. */
+static int expand_alias(sh_session_t *s, char **argv, int *quoted, int *argc)
+{
+    const char *chain[SH_ALIAS_MAX];
+    int i, steps;
+
+    if (quoted[0]) {
+        return 0;
+    }
+    steps = sh_alias_chain(sh_session_aliases(s), argv[0], chain, SH_ALIAS_MAX);
+    for (i = 0; i < steps; i++) {
+        if (splice_alias_value(s, argv, quoted, argc, chain[i]) != 0) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
 /* Runs one command from its already split words, which it takes ownership of and
  * frees on every path. argv and quoted hold MAX_WORDS entries: glob expansion grows
  * the list in place. */
@@ -3659,6 +3807,13 @@ static int run_command(sh_session_t *s, char **argv, int *quoted, int argc)
     char *in_path = NULL; /* the `<` filename, owned the same way */
     int in_started = 0;
 
+    if (argc == 0) {
+        return 0;
+    }
+    if (expand_alias(s, argv, quoted, &argc) != 0) {
+        free_args(argv, argc);
+        return 1;
+    }
     if (argc == 0) {
         return 0;
     }

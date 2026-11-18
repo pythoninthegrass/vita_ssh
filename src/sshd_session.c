@@ -95,6 +95,8 @@ struct sh_session {
     size_t linelen;
     size_t cursor; /* insertion point within line, 0..linelen */
 
+    sh_alias_table_t *aliases;
+
     char *history[SSHD_HISTORY];
     int hist_len;
     int hist_pos; /* SSHD_HISTORY means "not browsing" */
@@ -422,6 +424,11 @@ void sh_eprintf(sh_session_t *s, const char *fmt, ...)
 /* ------------------------------------------------------------------ */
 /* accessors                                                          */
 /* ------------------------------------------------------------------ */
+
+sh_alias_table_t *sh_session_aliases(const sh_session_t *s)
+{
+    return s == NULL ? NULL : s->aliases;
+}
 
 void sh_session_get_fsctx(const sh_session_t *s, sh_fsctx_t *fs)
 {
@@ -1542,6 +1549,10 @@ sh_session_t *sh_session_new(ssh_session ssh, const char *peer)
         free(s);
         return NULL;
     }
+    s->aliases = sh_alias_new();
+    if (s->aliases != NULL) {
+        sh_alias_seed(s->aliases);
+    }
     /* The auth methods to offer are a policy the host key layer decides: with
      * authorized_keys present, password authentication is still allowed only
      * when a generated password is also live. The reload first is what makes
@@ -1563,6 +1574,7 @@ void sh_session_free(sh_session_t *s)
     sh_sftp_free(s->sftp);
     sh_stdin_free(&s->in);
     sh_stdin_free(&s->cap);
+    sh_alias_free(s->aliases);
     for (i = 0; i < s->hist_len; i++) {
         free(s->history[i]);
     }

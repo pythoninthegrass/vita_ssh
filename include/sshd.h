@@ -21,6 +21,7 @@
 
 #include <libssh/libssh.h>
 
+#include "sh_alias.h"
 #include "sh_path.h"
 #include "sh_stdin.h"
 
@@ -118,6 +119,8 @@ void sh_session_get_fsctx(const sh_session_t *s, sh_fsctx_t *fs);
 /* Only `cd` and the initial setup call these. The cwd is per session, never
  * libc's, so two people logged in cannot move each other's relative paths. */
 void sh_session_set_cwd(sh_session_t *s, const char *posix);
+/* This session's aliases, never shared with another session; NULL if memory was short at setup. */
+sh_alias_table_t *sh_session_aliases(const sh_session_t *s);
 void sh_session_request_exit(sh_session_t *s);
 const char *sh_session_user(const sh_session_t *s);
 const char *sh_session_peer(const sh_session_t *s);

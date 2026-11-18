@@ -8,7 +8,7 @@ homebrew apps that install side by side on the same memory card:
 | `ssh_client_vita` | VitaSSH | `ROM000069` | libssh2 | Connects **out** to any SSH server, with a vita2d terminal and saved profiles |
 | `ssh_server_vita` | VitaSSHd | `ROM000070` | libssh | Listens for connections **in** from a devbox and gives you a shell over the Vita's devices |
 
-Both are experimental. The client is the older, better-travelled half; the server is the
+Both are experimental. The client is the older, better-traveled half; the server is the
 half that makes the device worth logging into, and it is new — read its status note before
 planning on it.
 
@@ -64,7 +64,7 @@ WiFi, and run commands on the remote host from the Vita.
 
 A 120×24 cell grid drawn with vita2d and the Vita's PGF font. It implements the CSI subset
 that ordinary command output needs: cursor movement and positioning, erase line and screen,
-SGR colours including bold and bright, save and restore cursor. Scrollback is 1000 lines
+SGR colors including bold and bright, save and restore cursor. Scrollback is 1000 lines
 with a scrollbar, driven by touch.
 
 What that deliberately leaves out is what full-screen programs ask for — see
@@ -133,7 +133,7 @@ not guaranteed to be present (a PCH-2000 with no card), writable, or roomy. So:
   `not saved: new fingerprint each boot` so you hear it from the Vita rather than from your
   client.
 - **`authorized_keys` is read from the first directory that has the file** — never a merge of
-  all four. Two files both claiming to authorise you is how a card you forgot about starts
+  all four. Two files both claiming to authorize you is how a card you forgot about starts
   letting people in.
 - **`~` is the directory the server could write**, or the first that exists at all, or
   `/ux0`.
@@ -263,8 +263,8 @@ running in the server's own process, the working directory belongs to the sessio
 than to libc, and POSIX paths are mapped onto sceIo devices at the boundary.
 
 ```
-:  cat  cd  cp  date  devices  df  du  echo  env  exit  false  grep  head  help
-ls   mkdir  mv   pwd     rm   rmdir  sort  stat  tail  touch  true  uname  uniq  vcmd  vpk  wc  whoami
+:  alias  cat  cd  cp  date  devices  df  du  echo  env  exit  false  grep  head  help
+ls   mkdir  mv   pwd     rm   rmdir  sort  stat  tail  touch  true  unalias  uname  uniq  vcmd  vpk  wc  whoami
 ```
 
 `vcmd HOST PORT [LINE]` sends one newline-terminated line to a TCP port and prints the
@@ -409,6 +409,8 @@ space; subsequent installs also replace the previous stage. Do not delete it dur
 The server and updater are built UNSAFE for system installation and app launch.
 
 A line is one command, or commands joined with `|`, and lines can be chained with `;` (run the next), `&&` (run the next only after status 0) and `||` (run the next only after a nonzero status). Chain operators run left to right with equal precedence, so `a && b || c` is `(a && b) || c`, and they bind looser than `|`, so `a | b && c` is `(a | b) && c`. The line's status is that of the last command that ran; a skipped command leaves it unchanged. Like `|` and `>`, a chain operator must be a separate, unquoted word: `echo a;b` and `"&&"` are just text. A line takes at most 16 commands. A leading or doubled operator, or a trailing `&&` or `||`, prints `sh: syntax error near unexpected token` with the operator and exits 2 without running anything; as in sh, one trailing `;` is accepted and ignored. `exit` in a chain ends the session and nothing after it runs. A pipeline runs its commands one after another, not at the same time: each command's output is held in memory (up to 1 MB, past which the pipeline stops with an error naming the limit) and becomes the next command's stdin, so `ls /ux0 | grep data` works. The `|` must be a separate, unquoted word (`echo a|b` is just text, as is `"|"`), and `exit` or `cd` before the last command of a pipeline has no effect. A command name the shell does not know prints `sh: NAME: command not found` and exits 127; a malformed pipeline (`| cat`, `echo x |`) prints `sh: syntax error near unexpected token `|'` and exits 2. Redirection exists in one form: `>` or `>>` as a separate, unquoted word followed by a file name (`echo hi > /ux0/data/x.txt`), and it redirects stdout only. `echo hi>x` is just text.
+
+Aliases are per session and die with it. A new session starts with `l` (`ls -l`), `ll` (`ls -la`), `la` (`ls -a`), `..` (`cd ..`) and `...` (`cd ../..`). `alias` lists them as `alias name='value'`, `alias NAME` shows one, and `alias NAME=VALUE` defines or replaces one (quote a value that holds spaces: `alias g='grep -n'`); `unalias NAME` removes one and `unalias: NAME: not found` exits 1 for a name that was never defined. An alias expands only when it is the command word of a command or of a pipeline segment or chain item: `grep ll f` searches for the word `ll`, an alias on the right of `|` or `;` expands, and `l > out.txt` redirects because expansion comes before redirects are read. As in bash, a value that starts with another alias expands through it (`alias l=ll` makes `l` run `ls -la`), and each alias applies at most once per command, so `alias ls='ls -l'` reaches the builtin `ls`. Unlike bash, a definition that would close a ring (`alias ll=l` after `alias l=ll`) is refused with a message, so a loop can never be defined; bash accepts it and fails when it runs. Bash's rule that an alias ending in a blank also expands the next word is not implemented. A `;`, `&&` or `|` inside a value is an ordinary argument, since the line was split before the alias expanded. An alias wins over a builtin of the same name, and `help NAME` and `which NAME` say so. At most 32 aliases of up to 256 bytes each; `history` shows what you typed, not the expansion.
 
 ---
 
@@ -612,20 +614,20 @@ What it stands on:
   client's shape is where that started; the code has since diverged past recognition, and
   upstream is unmaintained.
 - Packaging and installation follow the conventions of
-  [VitaShell](https://github.com/TheOfficialFloW/VitaShell) by TheOfficialFloW. The server's `vpk install` command follows VitaShell's installer (unpack, write `sce_sys/package/head.bin`, call `scePromoterUtilityPromotePkgWithRif`) and separate-updater handoff pattern. It uses its own staging directory. One file from VitaShell is vendored: `third_party/vitashell/head.bin`, the package-header template, under VitaShell's GPL-3.0 with its licence text beside it. The code that fills it in, `src/vpk_head.c`, is this repo's own.
+  [VitaShell](https://github.com/TheOfficialFloW/VitaShell) by TheOfficialFloW. The server's `vpk install` command follows VitaShell's installer (unpack, write `sce_sys/package/head.bin`, call `scePromoterUtilityPromotePkgWithRif`) and separate-updater handoff pattern. It uses its own staging directory. One file from VitaShell is vendored: `third_party/vitashell/head.bin`, the package-header template, under VitaShell's GPL-3.0 with its license text beside it. The code that fills it in, `src/vpk_head.c`, is this repo's own.
 - The OpenSSL Vita port that `task setup` compiles is
   [SonicMastr/vita-openssl3](https://github.com/SonicMastr/vita-openssl3).
 - The libraries doing the real work — libssh2, libssh, vita2d, VitaSDK — are listed with
-  their versions and licence terms under [Licence](#licence). None of them is vendored; the
+  their versions and license terms under [License](#license). None of them is vendored; the
   recipes that build them into `$VITASDK` are in `libs/`. The only third-party file in the tree
   is the VitaShell template above, in `third_party/`.
 
-## Licence
+## License
 
 The sources written for this repository are released into the public domain under the
 [Unlicense](LICENSE.md). Do what you want with them, including selling them, without asking.
 
-That dedication does not cover other people's files, and it relicenses nothing anybody else wrote. The one such file in the tree is `third_party/vitashell/head.bin`, VitaShell's package-header template, which stays under VitaShell's GPL-3.0 (the licence text is beside it, with the upstream commit and checksum in `third_party/vitashell/README.md`). The server app embeds that file, so a server VPK carries it: check what GPL-3.0 asks of you before you redistribute one. Both apps also ship statically linked third-party code, which stays under its own terms:
+That dedication does not cover other people's files, and it relicenses nothing anybody else wrote. The one such file in the tree is `third_party/vitashell/head.bin`, VitaShell's package-header template, which stays under VitaShell's GPL-3.0 (the license text is beside it, with the upstream commit and checksum in `third_party/vitashell/README.md`). The server app embeds that file, so a server VPK carries it: check what GPL-3.0 asks of you before you redistribute one. Both apps also ship statically linked third-party code, which stays under its own terms:
 
 **libssh — LGPL-2.1.** The server app links
 [libssh](https://www.libssh.org) 0.12.2 statically (copyright Aris Adamantiadis and the libssh
@@ -636,13 +638,13 @@ vendored here: `task setup` fetches it from libssh.org and builds it with
 is in this repo. That is also what makes the LGPL's relinking condition practical rather than
 theoretical — take the sources here, build a modified libssh against the same recipe, and relink
 the app. Reverse engineering for the purpose of debugging such modifications is permitted under
-LGPL-2.1 §6. The licence text is at
+LGPL-2.1 §6. The license text is at
 <https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html>; libssh's own sources carry the notice
 in their file headers.
 
 The other libraries compiled into the VPKs, for completeness:
 
-| Library | Version | Licence | In |
+| Library | Version | License | In |
 | --- | --- | --- | --- |
 | [libssh2](https://www.libssh2.org) | 1.11.1 | BSD-3-Clause | client |
 | [OpenSSL Vita port](https://github.com/SonicMastr/vita-openssl3) | 1.1.1 | dual OpenSSL / SSLeay | both |
@@ -651,7 +653,7 @@ The other libraries compiled into the VPKs, for completeness:
 | [VitaShell](https://github.com/TheOfficialFloW/VitaShell) `head.bin` | upstream commit `8120486` | GPL-3.0 | server |
 
 None of them is relicensed by this repo's dedication, and nothing above is legal advice — if you
-redistribute a VPK, carry the licence texts of the libraries inside it.
+redistribute a VPK, carry the license texts of the libraries inside it.
 
 ---
 
