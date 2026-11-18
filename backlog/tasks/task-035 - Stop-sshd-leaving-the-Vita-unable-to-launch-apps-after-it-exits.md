@@ -1,11 +1,11 @@
 ---
 id: TASK-035
 title: Stop sshd leaving the Vita unable to launch apps after it exits
-status: In Progress
+status: Done
 assignee:
   - Claude
 created_date: '2026-11-18T05:42:00Z'
-updated_date: '2026-11-18T07:14:00Z'
+updated_date: '2026-11-18T22:57:00Z'
 labels:
   - sshd
   - power
@@ -30,8 +30,8 @@ Commit 98a8fc1 made the server take two kernel power locks (disable auto-suspend
 <!-- AC:BEGIN -->
 - [x] #1 After running sshd once and quitting it from the PS menu, VitaShell and other apps launch normally, repeated at least three times on a device.
 - [x] #2 The server takes no kernel power lock that outlives its process; sshd.log shows no sceKernelPowerLock call.
-- [ ] #3 While serving, the device does not auto-suspend and WiFi stays up for as long as it did before 98a8fc1.
-- [ ] #4 What the device does with the panel while serving (turns off, dims or stays on) is recorded from a device run, so the reason 98a8fc1 was made is not lost.
+- [x] #3 While serving, the device does not auto-suspend and WiFi stays up for as long as it did before 98a8fc1.
+- [x] #4 What the device does with the panel while serving (turns off, dims or stays on) is recorded from a device run, so the reason 98a8fc1 was made is not lost.
 - [x] #5 The log and code comments describe the power behavior as it now is, with no mention of the removed locks as current behavior.
 <!-- AC:END -->
 
@@ -56,4 +56,16 @@ Risk: the build verified on a device is 462f824 (idle-count reset only, no sceKe
 2026-11-17 device run (work Vita, card clean per fsck_exfat, installed eboot.bin byte-identical to the working-tree build): user switched between the tick-only sshd and VitaShell several times with no hang; sshd.log shows three starts (23:43:50, 23:44:01, 23:44:12) with 'power: idle timer reset and power ticks 1/s' and no lock lines. AC3 (no suspend, WiFi stays up over time) and AC4 (panel behavior while serving) were not observed and stay open.
 
 2026-11-18: `vpk install` over ssh succeeded on the tick-only build (updater staged and promoted, result.txt 'promote package: 0x00000000', server back on its own). The failed handoff on 2026-11-17 ran while the leaked power locks were held; whether the locks caused that failure is a guess, not shown.
+
+2026-11-18: the tick-only change is committed as b8b3d14 (the 'Nothing committed' note above is stale); the working tree is clean at cf0f825 and src/sshd.c has no sceKernelPowerLock call. Open: AC3 and AC4 need an unattended device run, because the panel and the suspend timer can only be watched on the Vita.
+
+2026-11-18 device run (office Vita, tick-only build): served untouched for 35 minutes, 5 minutes past the device's sleep option, and ssh still worked; the Mac's nc -z -w 3 to port 22 also succeeded at 16:40 local. No auto-suspend, WiFi stayed up. AC3 checked. Panel behavior (AC4) was not reported and stays open.
+
+2026-11-18 panel behavior while serving (same 35 minute run, office Vita, tick-only build): the panel stayed on and dimmed, and did not turn off. That is the behavior the user wants, so the OLED-off lock that 98a8fc1 added is not needed.
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Removed power_hold() and its two sceKernelPowerLock calls from src/sshd.c (b8b3d14). The server now resets the idle count and calls sceKernelPowerTick for auto-suspend and OLED-off once a second while serving, so nothing is left held when the PS menu kills the process. The startup log line and the code comment describe the tick behavior. Device results: running sshd and VitaShell back and forth several times left no launch hang (2026-11-17, no lock lines in sshd.log); a 35 minute untouched run, 5 minutes past the sleep option, did not suspend and kept WiFi and ssh up; the panel stayed on and dimmed rather than turning off, which is the wanted behavior. Follow-up: TASK-023.01 and TASK-023.03 touch the power hold and must not assume kernel locks exist.
+<!-- SECTION:FINAL_SUMMARY:END -->
