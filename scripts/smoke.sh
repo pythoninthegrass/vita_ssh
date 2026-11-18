@@ -191,6 +191,42 @@ run_exec() {
   esac
   OUT=$($V 'pwd' 2>/dev/null | wc -l | tr -d ' ');            check "chain: the session still works after errors" 1 "$OUT"
 
+  # --- TASK-018: aliases ---------------------------------------------------
+  # Per session: every ssh call below is its own session, so each check defines what it uses.
+  OUT=$($V 'alias' 2>/dev/null | tr '\n' ' ');                check "alias: a fresh session lists the seeded aliases" "alias ..='cd ..' alias ...='cd ../..' alias l='ls -l' alias la='ls -a' alias ll='ls -la' " "$OUT"
+  check "alias: l is ls -l" "$($V 'ls -l /ux0' 2>/dev/null)" "$($V 'l /ux0' 2>/dev/null)"
+  OUT=$($V 'la /ux0' 2>/dev/null | wc -l | tr -d ' ');        [ "$OUT" -ge 1 ] && check "alias: la runs" ok ok || check "alias: la runs" ok fail
+  OUT=$($V 'cd /ux0/data ; .. ; pwd' 2>/dev/null);            check "alias: .. moves up one" /ux0 "$OUT"
+  OUT=$($V 'cd /ux0/data/vitasshd ; ... ; pwd' 2>/dev/null);  check "alias: ... moves up two" /ux0 "$OUT"
+  OUT=$($V "alias two='echo a b' ; two" 2>/dev/null);         check "alias: a value with spaces survives quoting" "a b" "$OUT"
+  OUT=$($V "alias g='echo hi' ; echo g" 2>/dev/null);         check "alias: an argument naming an alias is untouched" g "$OUT"
+  OUT=$($V "alias g='echo hi' ; echo x | g" 2>/dev/null);     check "alias: expands as a pipeline segment's command" hi "$OUT"
+  OUT=$($V "alias g='echo hi' ; false || g" 2>/dev/null);     check "alias: expands as a chain item's command" hi "$OUT"
+  OUT=$($V "alias s='echo a ; echo b' ; s" 2>/dev/null);      check "alias: a ; inside a value is not re-split" "a ; echo b" "$OUT"
+  check "alias: a value may start with its own name" "$($V 'ls -l /ux0' 2>/dev/null)" "$($V "alias ls='ls -l' ; ls /ux0" 2>/dev/null)"
+  OUT=$($V "alias echo='echo wins' ; echo x" 2>/dev/null);    check "alias: an alias wins over a builtin" "wins x" "$OUT"
+  check "alias: a value starting with another alias expands through it" "$($V 'ls -la /ux0' 2>/dev/null)" "$($V "alias m=ll ; m /ux0" 2>/dev/null)"
+  check "alias: a name coming back around reaches the builtin" "$($V 'ls -l /ux0' 2>/dev/null)" "$($V "alias ls='ls -l' ; alias mine=ls ; mine /ux0" 2>/dev/null)"
+  $V "alias a1=a2 ; alias a2=a1" >/dev/null 2>&1; RC=$?;       check "alias: closing a ring is refused (-> 1)" 1 "$RC"
+  ERR=$($V "alias a1=a2 ; alias a2=a1" 2>&1 | grep -v 'closed by remote host')
+  case "$ERR" in
+    *"loop of aliases"*) check "alias: the ring refusal is readable" ok ok ;;
+    *) check "alias: the ring refusal is readable: got \"$ERR\"" ok fail ;;
+  esac
+  OUT=$($V "alias a1=a2 ; alias a2=a1 ; alias" 2>/dev/null | grep -c "^alias a2=");    check "alias: the refused definition is not stored" 0 "$OUT"
+  OUT=$($V "unalias l ; l /" 2>&1 | grep -v 'closed by remote host' | head -n 1 | cut -c1-30); check "alias: unalias removes it" "sh: l: command not found" "$OUT"
+  $V "unalias nosuchalias" >/dev/null 2>&1; RC=$?;             check "alias: unalias of an unknown name exits 1" 1 "$RC"
+  ERR=$($V "unalias nosuchalias" 2>&1 | grep -v 'closed by remote host'); check "alias: unalias names the missing alias" "unalias: nosuchalias: not found" "$ERR"
+  $V "alias nosuchalias" >/dev/null 2>&1; RC=$?;               check "alias: showing an unknown alias exits 1" 1 "$RC"
+  $V "alias 'bad name'=x" >/dev/null 2>&1; RC=$?;              check "alias: an invalid name is refused (-> 1)" 1 "$RC"
+  OUT=$($V "alias z='echo made' ; l /ux0 > /ux0/data/$T-alias.txt ; cat /ux0/data/$T-alias.txt" 2>/dev/null | wc -l | tr -d ' ')
+  [ "$OUT" -ge 1 ] && check "alias: an alias before > redirects its output" ok ok || check "alias: an alias before > redirects its output" ok fail
+  $V "rm /ux0/data/$T-alias.txt" >/dev/null 2>&1
+  OUT=$($V "alias a1=x" 2>/dev/null; $V 'alias' 2>/dev/null | grep -c '^alias a1='); check "alias: a definition does not reach another session" 0 "$OUT"
+  OUT=$($V "which ll" 2>/dev/null);                            check "alias: which reports an alias" "ll: aliased to ls -la" "$OUT"
+  OUT=$($V "help ll" 2>/dev/null);                             check "alias: help reports an alias" 'll is an alias for `ls -la`' "$OUT"
+  OUT=$($V "alias ls='ls -l' ; help ls" 2>/dev/null);          check "alias: help says an alias wins over a builtin" 'ls is an alias for `ls -l`; it wins over the builtin of the same name' "$OUT"
+
   # --- AC2: a key that is not installed is refused -------------------------
   # The verdict comes from stderr, not the exit code: 255 is also what a
   # network failure returns, which once made this check pass while the
