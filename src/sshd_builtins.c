@@ -3163,6 +3163,23 @@ static int cmd_exit(sh_session_t *s, int argc, char **argv)
     return 0;
 }
 
+/* true, false and `:` ignore their arguments, as POSIX specifies; `:` shares cmd_true. */
+static int cmd_true(sh_session_t *s, int argc, char **argv)
+{
+    (void)s;
+    (void)argc;
+    (void)argv;
+    return 0;
+}
+
+static int cmd_false(sh_session_t *s, int argc, char **argv)
+{
+    (void)s;
+    (void)argc;
+    (void)argv;
+    return 1;
+}
+
 /* ------------------------------------------------------------------ */
 /* vcmd: one line to a TCP port, the reply to stdout                  */
 /* ------------------------------------------------------------------ */
@@ -3444,6 +3461,7 @@ static int cmd_vcmd(sh_session_t *s, int argc, char **argv)
 
 /* Keep this alphabetical: `help` prints it in order and people scan it. */
 static const sh_builtin_t builtins[] = {
+    {":", cmd_true, ": [ARG...] -- do nothing, successfully"},
     {"cat", cmd_cat, "cat FILE... -- write a file to the terminal"},
     {"cd", cmd_cd, "cd [DIR] -- change the working directory (no argument: $HOME)"},
     {"cp", cmd_cp, "cp [-r] SRC... DST -- copy; -r for directories"},
@@ -3454,6 +3472,7 @@ static const sh_builtin_t builtins[] = {
     {"echo", cmd_echo, "echo [-n] TEXT... -- print its arguments"},
     {"env", cmd_env, "env -- print the environment"},
     {"exit", cmd_exit, "exit -- end this session"},
+    {"false", cmd_false, "false [ARG...] -- do nothing, unsuccessfully (status 1)"},
     {"grep", cmd_grep,
      "grep [-ivnclq] PATTERN [FILE...] -- lines matching a POSIX basic regex"},
     {"head", cmd_head,
@@ -3472,6 +3491,7 @@ static const sh_builtin_t builtins[] = {
     {"tail", cmd_tail,
      "tail [-n N | -c N] [FILE] -- last N lines (10) or N bytes of a file or stdin"},
     {"touch", cmd_touch, "touch FILE... -- create a file or update its time"},
+    {"true", cmd_true, "true [ARG...] -- do nothing, successfully (status 0)"},
     {"uname", cmd_uname,
      "uname [-a] -- system name; -a adds the firmware the device reports"},
     {"uniq", cmd_uniq,

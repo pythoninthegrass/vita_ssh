@@ -263,8 +263,8 @@ running in the server's own process, the working directory belongs to the sessio
 than to libc, and POSIX paths are mapped onto sceIo devices at the boundary.
 
 ```
-cat  cd  cp  date  devices  df  du  echo  env  exit  grep  head  help
-ls   mkdir  mv   pwd     rm   rmdir  sort  stat  tail  touch  uname  uniq  vcmd  vpk  wc  whoami
+:  cat  cd  cp  date  devices  df  du  echo  env  exit  false  grep  head  help
+ls   mkdir  mv   pwd     rm   rmdir  sort  stat  tail  touch  true  uname  uniq  vcmd  vpk  wc  whoami
 ```
 
 `vcmd HOST PORT [LINE]` sends one newline-terminated line to a TCP port and prints the
