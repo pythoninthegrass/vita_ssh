@@ -1,9 +1,11 @@
 ---
 id: TASK-030
 title: 'Add the true, false and : builtins'
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - Claude
 created_date: '2026-11-17T18:42:00Z'
+updated_date: '2026-11-17T23:45:00Z'
 labels:
   - shell
   - coreutils
