@@ -7,6 +7,7 @@
 #endif
 #define VPK_UPDATE_PKG VPK_UPDATE_ROOT "/server"
 #define VPK_UPDATE_HELPER VPK_UPDATE_ROOT "/helper"
+#define VPK_THIRD_PKG VPK_UPDATE_ROOT "/third"
 #define VPK_UPDATE_LOG VPK_UPDATE_ROOT "/result.txt"
 #define VPK_UPDATE_READY VPK_UPDATE_ROOT "/ready"
 

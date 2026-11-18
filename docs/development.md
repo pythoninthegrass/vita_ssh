@@ -33,7 +33,7 @@ Nothing here runs on the host: the apps are cross-compiled for the Vita, so ever
 
 ### Install over SSH instead
 
-With a server already running on the Vita, no USB mount or VitaShell is needed. `vpk install` is fully implemented for any VPK, including the vitasshd server itself.
+With a server already running on the Vita, no USB mount or VitaShell is needed. `vpk install` installs the vitasshd server itself through an updater handoff, and any other title that is not running directly; `vpk install --reinstall` (or `-r`) replaces a title that is already installed. The README's `vpk` section lists what it refuses.
 
 ```bash
 scp -s build/ssh_server_vita.vpk any@<ip>:/ux0/data/

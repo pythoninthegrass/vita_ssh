@@ -165,7 +165,7 @@ const sh_builtin_t *sh_builtin_lookup(const char *name);
 /* Both take the package in the syscall spelling plus the name the user typed, for
  * messages, and return a shell exit status. list never writes. */
 int sh_vpk_list(sh_session_t *s, const char *sce, const char *name);
-int sh_vpk_install(sh_session_t *s, const char *sce, const char *name);
+int sh_vpk_install(sh_session_t *s, const char *sce, const char *name, int replace);
 int sh_vpk_pending(void);
 void sh_vpk_handoff(void);
 

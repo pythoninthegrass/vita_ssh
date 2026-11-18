@@ -2998,20 +2998,25 @@ static int cmd_env(sh_session_t *s, int argc, char **argv)
 static int cmd_vpk(sh_session_t *s, int argc, char **argv)
 {
     sh_target_t t;
+    int replace = 0, file = 2;
+    int is_reinstall = argc > 2 && (strcmp(argv[2], "-r") == 0 || strcmp(argv[2], "--reinstall") == 0);
 
-    if (argc != 3 || (strcmp(argv[1], "list") != 0 && strcmp(argv[1], "install") != 0)) {
-        sh_eprintf(s, "usage: vpk list FILE | vpk install FILE\n");
+    if (argc == 4 && strcmp(argv[1], "install") == 0 && is_reinstall) {
+        replace = 1;
+        file = 3;
+    } else if (argc != 3 || (strcmp(argv[1], "list") != 0 && strcmp(argv[1], "install") != 0) || is_reinstall) {
+        sh_eprintf(s, "usage: vpk list FILE | vpk install [-r | --reinstall] FILE\n");
         return 2;
     }
-    if (resolve_arg(s, "vpk", argv[2], &t) != 0) {
+    if (resolve_arg(s, "vpk", argv[file], &t) != 0) {
         return 1;
     }
     if (t.kind == SH_TARGET_ROOT || t.dev == NULL) {
-        sh_eprintf(s, "vpk: %s: Not a file\n", argv[2]);
+        sh_eprintf(s, "vpk: %s: Not a file\n", argv[file]);
         return 1;
     }
-    return (argv[1][0] == 'l') ? sh_vpk_list(s, t.sce, argv[2])
-                               : sh_vpk_install(s, t.sce, argv[2]);
+    return (argv[1][0] == 'l') ? sh_vpk_list(s, t.sce, argv[file])
+                               : sh_vpk_install(s, t.sce, argv[file], replace);
 }
 
 static int cmd_which(sh_session_t *s, int argc, char **argv)
@@ -3602,7 +3607,8 @@ static const sh_builtin_t builtins[] = {
     {"uniq", cmd_uniq,
      "uniq [-c] [-d] [-u] [FILE] -- collapse adjacent repeats; -c counts, -d repeats only, -u once-only"},
     {"vcmd", cmd_vcmd, "vcmd HOST PORT [LINE] -- send one line to a TCP port and print the reply"},
-    {"vpk", cmd_vpk, "vpk list FILE | vpk install FILE -- inspect or install a VPK over this app"},
+    {"vpk", cmd_vpk,
+     "vpk list FILE | vpk install [-r | --reinstall] FILE -- inspect a VPK, or install it: this app updates itself, another title installs unless it is running, --reinstall (-r) replaces an installed one"},
     {"wc", cmd_wc, "wc [-lwc] [FILE...] -- count lines, words and bytes of files or stdin"},
     {"which", cmd_which, "which COMMAND... -- report whether COMMAND is one of these builtins"},
     {"whoami", cmd_whoami, "whoami -- the name you logged in as"},

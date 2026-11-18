@@ -385,8 +385,8 @@ shell: SFTP and `scp` treat `/etc/os-release` as the unknown path it is, and `>`
 write to it, so `cat /etc/os-release > /ux0/data/x` works while `echo hi > /etc/os-release`
 fails.
 
-`vpk list FILE` prints a package's title ID and files without writing anything.
-`vpk install FILE` accepts only the server's own title (`ROM000070`), unpacks and
+`vpk list FILE` prints a package's title ID, whether it is this app and whether that title is installed or running, and its files, without writing anything.
+For the server's own title (`ROM000070`), `vpk install FILE` unpacks and
 CRC-checks it under `ux0:data/vitasshd-update/server`, and generates its package header.
 The system installer cannot replace a running title, so the server installs its bundled
 **VitaSSHd Updater** (`ROM000072`), closes the SSH command, launches the updater and exits.
@@ -394,6 +394,8 @@ The updater promotes the staged server and relaunches it, including after an ins
 failure. Reconnect after the server returns; SSH success means **staged for handoff**,
 not that installation has finished. Read `/ux0/data/vitasshd-update/result.txt` for the
 installer result (`0x00000000` means success).
+
+Any other title installs directly, with no updater and no handoff: `vpk install FILE` unpacks and CRC-checks it under `ux0:data/vitasshd-update/third`, generates its package header and calls the system installer, which blocks the server, and so every session, until it finishes, so a large package freezes the shell for that long. A title that is running is refused and never closed, since the system installer cannot replace a running title and a running app is not the server's to stop. A title that is already installed is refused unless the command is `vpk install --reinstall FILE` (`-r` for short), which replaces the whole package: files the new package omits are removed, and the server cannot undo a failed system install. Always refused: the updater title (`ROM000072`), any system app (title IDs beginning `NPXS`), a title that is not nine characters of A-Z and 0-9 starting with a letter, and a package whose `eboot.bin` is missing, under 4 KiB or without the SCE magic. Every refusal happens before anything is installed and leaves the staging directory clean.
 This file records the last helper run; failures before handoff are reported on SSH
 and do not replace that previous result.
 

@@ -150,6 +150,7 @@ add_executable(${VITA_SERVER_NAME}
   src/vpk_promote.c
   src/vpk_zip.c
   src/vpk_head.c
+  src/vpk_policy.c
   ${VPK_HEAD_TEMPLATE_SRC}
   src/sshd_hostkey.c
   src/sshd_sysinfo.c

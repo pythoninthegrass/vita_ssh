@@ -9,11 +9,14 @@
  * which registers and installs it. Any failure before that call leaves the installed app
  * untouched; the installer's own failure cannot be rolled back from here.
  *
- * Only this app's own title ID is accepted (SSHD_TITLEID, passed in from CMakeLists.txt).
- * A bundled second title promotes the server after it exits, then relaunches it.
+ * This app's own title ID (SSHD_TITLEID, passed in from CMakeLists.txt) installs through a bundled
+ * second title that promotes the server after it exits, then relaunches it. Any other title that is
+ * not running installs directly: the promoter refuses a running title, so nothing has to exit. What is
+ * allowed is decided in vpk_policy.c from the title and the facts gathered here.
  */
 #include "sshd.h"
 #include "vpk_head.h"
+#include "vpk_policy.h"
 #include "vpk_zip.h"
 #include "vpk_update.h"
 
@@ -182,13 +185,9 @@ fail:
     return -1;
 }
 
-/* Refuses a package that is not this app's, or whose eboot.bin cannot be one. */
+/* Refuses a package whose eboot.bin is missing or cannot be an executable. */
 static int package_check(sh_session_t *s, const char *name, const package_t *p)
 {
-    if (strcmp(p->title_id, SSHD_TITLEID) != 0) {
-        sh_eprintf(s, "vpk: %s: title ID is %s, this app is %s\n", name, p->title_id, SSHD_TITLEID);
-        return -1;
-    }
     if (p->eboot == NULL) {
         sh_eprintf(s, "vpk: %s: no eboot.bin in package\n", name);
         return -1;
@@ -201,6 +200,24 @@ static int package_check(sh_session_t *s, const char *name, const package_t *p)
     return 0;
 }
 
+/* Whether the title is installed. opendir() answers ENOTDIR for a missing path here, so absence is asked of stat(). */
+static int title_installed(const char *title)
+{
+    char path[64];
+    struct stat st;
+
+    snprintf(path, sizeof(path), "ux0:app/%s", title);
+    return stat(path, &st) == 0;
+}
+
+/* Whether the title is running, as the system's app manager reports it. */
+static int title_running(const char *title)
+{
+    SceUID pid = 0;
+
+    return sceAppMgrGetIdByName(&pid, title) >= 0;
+}
+
 int sh_vpk_list(sh_session_t *s, const char *sce, const char *name)
 {
     package_t p;
@@ -209,8 +226,13 @@ int sh_vpk_list(sh_session_t *s, const char *sce, const char *name)
     if (package_open(s, sce, name, &p) != 0) {
         return 1;
     }
-    sh_printf(s, "Title ID: %s%s\n", p.title_id,
-              strcmp(p.title_id, SSHD_TITLEID) == 0 ? " (this app)" : " (not this app)");
+    {
+        int own = strcmp(p.title_id, SSHD_TITLEID) == 0;
+
+        sh_printf(s, "Title ID: %s (%s%s%s)\n", p.title_id, own ? "this app" : "not this app",
+                  !own && title_installed(p.title_id) ? ", installed" : "",
+                  title_running(p.title_id) ? ", running" : "");
+    }
     for (i = 0; i < vpk_zip_count(p.zip); i++) {
         const vpk_entry_t *e = vpk_zip_entry(p.zip, i);
 
@@ -334,6 +356,7 @@ static int file_write(void *ctx, const unsigned char *data, size_t len)
         errno = EINTR;
         return 1;
     }
+    sh_session_yield(f->s);
     if (f->seen < sizeof(f->head)) {
         size_t n = sizeof(f->head) - f->seen;
 
@@ -470,33 +493,28 @@ int sh_vpk_pending(void)
     return update_pending;
 }
 
-int sh_vpk_install(sh_session_t *s, const char *sce, const char *name)
+/* The server's own title: stages it and the bundled updater, then hands off to the updater. */
+static int install_own(sh_session_t *s, package_t *pkg)
 {
-    package_t p, helper;
+    package_t helper;
     long long avail;
     const char *stage = "";
     int res, rc = 1;
     FILE *ready;
 
-    if (package_open(s, sce, name, &p) != 0) {
-        return 1;
-    }
-    if (package_check(s, name, &p) != 0) {
-        goto out;
-    }
     /* Use the currently running app's trusted helper, not a file from the uploaded package. */
     if (package_open(s, "app0:updater.vpk", "bundled updater", &helper) != 0) {
-        goto out;
+        return 1;
     }
     if (strcmp(helper.title_id, SSHD_UPDATER_TITLEID) != 0 ||
         helper.eboot == NULL || helper.eboot->usize < EBOOT_MIN_SIZE) {
         sh_eprintf(s, "vpk: invalid bundled updater\n");
         package_close(&helper);
-        goto out;
+        return 1;
     }
     avail = free_space("ux0:");
     /* Stage plus an installed copy, with slack for metadata. */
-    if (avail >= 0 && avail < 2 * (p.total + helper.total) + 1024 * 1024) {
+    if (avail >= 0 && avail < 2 * (pkg->total + helper.total) + 1024 * 1024) {
         sh_eprintf(s, "vpk: not enough space on ux0 for staging and installation\n");
         goto helper_out;
     }
@@ -505,9 +523,9 @@ int sh_vpk_install(sh_session_t *s, const char *sce, const char *name)
         goto helper_out;
     }
     unlink(VPK_UPDATE_READY);
-    sh_printf(s, "Unpacking %u files (%lld bytes)...\n", (unsigned)p.files, p.total);
-    if (stage_package(s, &p, VPK_UPDATE_PKG) != 0 ||
-        write_head_bin(s, &p, VPK_UPDATE_PKG) != 0 ||
+    sh_printf(s, "Unpacking %u files (%lld bytes)...\n", (unsigned)pkg->files, pkg->total);
+    if (stage_package(s, pkg, VPK_UPDATE_PKG) != 0 ||
+        write_head_bin(s, pkg, VPK_UPDATE_PKG) != 0 ||
         stage_package(s, &helper, VPK_UPDATE_HELPER) != 0 ||
         write_head_bin(s, &helper, VPK_UPDATE_HELPER) != 0) {
         sh_eprintf(s, "vpk: install aborted, installed app unchanged\n");
@@ -545,6 +563,89 @@ cleanup:
     remove_tree(VPK_UPDATE_HELPER, 0);
 helper_out:
     package_close(&helper);
+    return rc;
+}
+
+/* Any other title that is not running: unpacked, given a head.bin and promoted directly. No updater and no
+ * handoff are needed, because the promoter only refuses a title that is running. The promoter call blocks
+ * the server until the system finishes, and cannot yield. */
+static int install_third_party(sh_session_t *s, package_t *p, vpk_verdict_t verdict)
+{
+    long long avail = free_space("ux0:");
+    const char *stage = "";
+    int res, rc = 1;
+
+    /* Stage plus an installed copy, with slack for metadata. */
+    if (avail >= 0 && avail < 2 * p->total + 1024 * 1024) {
+        sh_eprintf(s, "vpk: not enough space on ux0 for staging and installation\n");
+        return 1;
+    }
+    if (mkdir(VPK_UPDATE_ROOT, 0755) != 0 && errno != EEXIST) {
+        sh_eprintf(s, "vpk: %s: %s\n", VPK_UPDATE_ROOT, strerror(errno));
+        return 1;
+    }
+    sh_printf(s, "Unpacking %u files (%lld bytes)...\n", (unsigned)p->files, p->total);
+    if (stage_package(s, p, VPK_THIRD_PKG) != 0 || write_head_bin(s, p, VPK_THIRD_PKG) != 0) {
+        sh_eprintf(s, "vpk: install aborted, nothing installed\n");
+        goto cleanup;
+    }
+    sh_printf(s, "Installing %s%s; this blocks the server until the system installer finishes...\n", p->title_id,
+              verdict == VPK_REPLACE ? " over the installed copy" : "");
+    res = vpk_promote(VPK_THIRD_PKG, &stage);
+    if (res < 0) {
+        sh_eprintf(s, "vpk: the system installer failed at \"%s\": 0x%08X\n", stage, (unsigned)res);
+        goto cleanup;
+    }
+    sh_printf(s, "Installed %s.\n", p->title_id);
+    rc = 0;
+
+cleanup:
+    remove_tree(VPK_THIRD_PKG, 0);
+    return rc;
+}
+
+int sh_vpk_install(sh_session_t *s, const char *sce, const char *name, int replace)
+{
+    package_t p;
+    vpk_verdict_t verdict;
+    int rc = 1;
+
+    if (package_open(s, sce, name, &p) != 0) {
+        return 1;
+    }
+    if (package_check(s, name, &p) != 0) {
+        goto out;
+    }
+    verdict = vpk_decide(p.title_id, SSHD_TITLEID, SSHD_UPDATER_TITLEID, title_installed(p.title_id),
+                         title_running(p.title_id), replace);
+    switch (verdict) {
+    case VPK_OWN:
+        rc = install_own(s, &p);
+        break;
+    case VPK_INSTALL:
+    case VPK_REPLACE:
+        rc = install_third_party(s, &p, verdict);
+        break;
+    case VPK_BAD_TITLE:
+        sh_eprintf(s, "vpk: %s: %s is not a title ID\n", name, p.title_id);
+        break;
+    case VPK_REFUSE_UPDATER:
+        sh_eprintf(s, "vpk: %s: title %s is the bundled updater, which only the server installs for itself\n", name,
+                   p.title_id);
+        break;
+    case VPK_REFUSE_SYSTEM:
+        sh_eprintf(s, "vpk: %s: title %s is a system app, which is never installed over ssh\n", name, p.title_id);
+        break;
+    case VPK_REFUSE_RUNNING:
+        sh_eprintf(s, "vpk: %s: title %s is running; it is not replaced or closed over ssh, quit it on the Vita first\n",
+                   name, p.title_id);
+        break;
+    case VPK_REFUSE_INSTALLED:
+        sh_eprintf(s, "vpk: %s: title %s is already installed; installing replaces the whole package and removes "
+                      "files the new one omits, so run `vpk install --reinstall %s` to do that\n",
+                   name, p.title_id, name);
+        break;
+    }
 out:
     package_close(&p);
     return rc;
