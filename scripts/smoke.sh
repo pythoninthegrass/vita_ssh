@@ -144,6 +144,53 @@ run_exec() {
   $V "echo x |"   >/dev/null 2>&1; RC=$?; check "pipe: trailing | is a syntax error (-> 2)" 2 "$RC"
   $V "rm /ux0/data/$T-pipe.txt" >/dev/null 2>&1
 
+  # --- TASK-025: chaining with ; && || -------------------------------------
+  # Left to right, equal precedence, looser than `|`; operators are separate unquoted words.
+  OUT=$($V 'echo a ; echo b' 2>/dev/null | tr '\n' ' ');      check "chain: ; runs both in order" "a b " "$OUT"
+  $V 'false ; true'  >/dev/null 2>&1; RC=$?;                  check "chain: ; status is the last command's (0)" 0 "$RC"
+  $V 'true ; false'  >/dev/null 2>&1; RC=$?;                  check "chain: ; status is the last command's (1)" 1 "$RC"
+  OUT=$($V 'true && echo yes' 2>/dev/null);                   check "chain: && runs after status 0" yes "$OUT"
+  OUT=$($V 'false && echo no' 2>/dev/null);                   check "chain: && skips after nonzero" "" "$OUT"
+  $V 'false && echo no' >/dev/null 2>&1; RC=$?;               check "chain: skipped && keeps the failing status" 1 "$RC"
+  OUT=$($V 'false || echo yes' 2>/dev/null);                  check "chain: || runs after nonzero" yes "$OUT"
+  OUT=$($V 'true || echo no' 2>/dev/null);                    check "chain: || skips after status 0" "" "$OUT"
+  $V 'true || echo no' >/dev/null 2>&1; RC=$?;                check "chain: skipped || keeps status 0" 0 "$RC"
+  OUT=$($V 'ls /nope && echo yes || echo no' 2>&1 | grep -v 'closed by remote host' | tail -n 1); check "chain: failing && then || runs the || arm" no "$OUT"
+  OUT=$($V 'ls /ux0 && echo yes || echo no' 2>/dev/null | tail -n 1); check "chain: passing && then || skips the || arm" yes "$OUT"
+  OUT=$($V 'echo x | cat && echo y' 2>/dev/null | tr '\n' ' '); check "chain: operators bind looser than |" "x y " "$OUT"
+  OUT=$($V 'uname -a ; pwd' 2>/dev/null | wc -l | tr -d ' ');  check "chain: one-shot uname -a ; pwd prints both" 2 "$OUT"
+  $V 'uname -a ; pwd' >/dev/null 2>&1; RC=$?;                 check "chain: one-shot exits with the last status" 0 "$RC"
+  OUT=$($V 'echo "a; b"' 2>/dev/null);                        check "chain: ; in double quotes stays literal" 'a; b' "$OUT"
+  OUT=$($V "echo 'x && y'" 2>/dev/null);                      check "chain: && in single quotes stays literal" 'x && y' "$OUT"
+  OUT=$($V 'echo a;b' 2>/dev/null);                           check "chain: glued ; is just text" 'a;b' "$OUT"
+  OUT=$($V "echo a > /ux0/data/$T-chain.txt ; echo b" 2>/dev/null); check "chain: redirect applies to its own command only" b "$OUT"
+  OUT=$($V "cat /ux0/data/$T-chain.txt" 2>/dev/null);         check "chain: the redirected command wrote its file" a "$OUT"
+  $V "rm /ux0/data/$T-chain.txt" >/dev/null 2>&1
+  OUT=$($V 'exit ; echo never' 2>/dev/null);                  check "chain: exit stops the chain" "" "$OUT"
+  OUT=$($V 'false ; false ; echo last' 2>/dev/null);          check "chain: ; ignores earlier failures" last "$OUT"
+  OUT=$($V 'echo a ; ; echo b' 2>&1 | grep -c -E '^(a|b)$');  check "chain: doubled operator runs nothing" 0 "$OUT"
+  $V 'echo a ; ; echo b' >/dev/null 2>&1; RC=$?;              check "chain: doubled operator is a syntax error (-> 2)" 2 "$RC"
+  $V 'echo a &&'  >/dev/null 2>&1; RC=$?;                     check "chain: trailing && is a syntax error (-> 2)" 2 "$RC"
+  OUT=$($V 'echo a ;' 2>/dev/null);                           check "chain: a trailing ; is accepted, as in sh" a "$OUT"
+  $V 'echo a ;' >/dev/null 2>&1; RC=$?;                       check "chain: a trailing ; leaves the status (0)" 0 "$RC"
+  $V 'echo a ||'  >/dev/null 2>&1; RC=$?;                     check "chain: trailing || is a syntax error (-> 2)" 2 "$RC"
+  $V '&& echo a'  >/dev/null 2>&1; RC=$?;                     check "chain: leading && is a syntax error (-> 2)" 2 "$RC"
+  OUT=$($V 'echo a ; | cat' 2>&1 | grep -c -E '^a$');         check "chain: a bad pipe in a later item runs nothing" 0 "$OUT"
+  ERR=$($V 'echo a ; ; echo b' 2>&1 | grep -v 'closed by remote host')
+  case "$ERR" in
+    *"near unexpected token \`;'"*) check "chain: syntax error names the operator" ok ok ;;
+    *) check "chain: syntax error names the operator: got \"$ERR\"" ok fail ;;
+  esac
+  LONG="true"; for d in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16; do LONG="$LONG ; true"; done
+  $V "$LONG" >/dev/null 2>&1; RC=$?;                          check "chain: 17 commands is over the limit (-> 2)" 2 "$RC"
+  OUT=$($V "echo ran ; $LONG" 2>&1 | grep -c -E '^ran$');     check "chain: an over-long line runs none of it" 0 "$OUT"
+  ERR=$($V "$LONG" 2>&1 | grep -v 'closed by remote host')
+  case "$ERR" in
+    *"limit 16"*) check "chain: over-long error names the limit" ok ok ;;
+    *) check "chain: over-long error names the limit: got \"$ERR\"" ok fail ;;
+  esac
+  OUT=$($V 'pwd' 2>/dev/null | wc -l | tr -d ' ');            check "chain: the session still works after errors" 1 "$OUT"
+
   # --- AC2: a key that is not installed is refused -------------------------
   # The verdict comes from stderr, not the exit code: 255 is also what a
   # network failure returns, which once made this check pass while the
