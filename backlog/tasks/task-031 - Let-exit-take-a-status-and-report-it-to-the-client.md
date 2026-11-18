@@ -34,7 +34,7 @@ Wanted: `exit [N]` as POSIX defines it for the cases that apply to a shell with 
 - [ ] #4 More than one argument prints `exit: too many arguments`, does not end the session, and exits 1.
 - [ ] #5 In a pipeline `exit 3` as a non-last segment is still skipped as in a subshell, and as the last segment ends the session with status 3.
 - [ ] #6 An interactive shell session that ends on EOF at an empty line reports the status of the last command it ran.
-- [ ] #7 help's usage string for exit shows the optional status, and README states the behaviour.
+- [ ] #7 help's usage string for exit shows the optional status, and README states the behavior.
 <!-- AC:END -->
 
 ## Definition of Done

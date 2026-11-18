@@ -54,7 +54,7 @@ terminal on the LAN -- the authoring agent's sandbox cannot reach the device, so
 is prepared and not yet executed. Install `build/ssh_server_vita.vpk` with `vpk install`
 first and read the `sftp: server code built` line in `sshd.log` to confirm which build is
 running. `tail -f` is graded by both its message and its exit status, and the check that
-follows proves the server still answers, which is the behaviour the refusal exists to
+follows proves the server still answers, which is the behavior the refusal exists to
 protect.
 
 ## Notes

@@ -5,7 +5,7 @@ status: Done
 assignee:
   - '@openai'
 created_date: '2026-11-16T04:30:00Z'
-updated_date: '2026-11-17 01:36'
+updated_date: '2026-11-18T07:47:00Z'
 labels:
   - deploy
   - server
@@ -104,7 +104,7 @@ Running-app test 2026-11-16 18:2x (option 3): built a throwaway server variant (
 
 CURRENT STATE as of 2026-11-16 (the user paused to investigate further; nothing committed, status left In Progress, ACs and plan above are unchanged and partly superseded by the notes in order below).
 
-Code in the working tree (uncommitted): src/vpk_zip.c + include/vpk_zip.h (zip reader), src/vpk_head.c + include/vpk_head.h (head.bin builder), src/sshd_vpk.c (`vpk list` and `vpk install` via the promoter), cmd_vpk in src/sshd_builtins.c, sh_vpk_* declarations in include/sshd.h, CMakeLists.txt (UNSAFE SELF, SSHD_TITLEID define, generated build/vpk_head_template.c, ScePromoterUtil_stub, new sources), third_party/vitashell/{head.bin,LICENSE,README.md} (VitaShell GPL-3.0, vendored with the user's go-ahead), scripts/test_vpk_zip.{py,c} and scripts/test_vpk_head.{py,c}, README.md (provenance, licence, shell command list, vpk paragraph), AGENTS.md. Both host tests pass; `task build` is clean.
+Code in the working tree (uncommitted): src/vpk_zip.c + include/vpk_zip.h (zip reader), src/vpk_head.c + include/vpk_head.h (head.bin builder), src/sshd_vpk.c (`vpk list` and `vpk install` via the promoter), cmd_vpk in src/sshd_builtins.c, sh_vpk_* declarations in include/sshd.h, CMakeLists.txt (UNSAFE SELF, SSHD_TITLEID define, generated build/vpk_head_template.c, ScePromoterUtil_stub, new sources), third_party/vitashell/{head.bin,LICENSE,README.md} (VitaShell GPL-3.0, vendored with the user's go-ahead), scripts/test_vpk_zip.{py,c} and scripts/test_vpk_head.{py,c}, README.md (provenance, license, shell command list, vpk paragraph), AGENTS.md. Both host tests pass; `task build` is clean.
 
 AC status by evidence: #2 and #9 verified on a device (`vpk list`, `help vpk`, `which vpk`). #3 partly: the title-ID refusal was exercised only indirectly (ROM000071 accepted by the throwaway variant, ROM000070 refused path not run); the eboot checks have not been run on a device. #5 holds so far: no run touched ux0:data/vitasshd except the earlier removed stage dir. #6 partly: stage-time and promoter failures left the installed app and ux0:data/pkg clean on the device; a client disconnect mid-unpack and a full card were not tried. #1, #4, #7, #8 are not met: the running server cannot install itself by any route tried (read-only ux0:app, ignored ux0:patch copy, promoter 0x80101114 on the running app).
 

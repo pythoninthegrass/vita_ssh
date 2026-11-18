@@ -6,6 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-11-17 03:38'
+updated_date: '2026-11-18T07:47:00Z'
 labels:
   - shell
   - path-layer
@@ -34,7 +35,7 @@ Already available, and the reason this is feasible at all: / is already a synthe
 Decisions already made with the user, do not re-litigate: /tmp is the ur0: RAM disk, not a persistent directory on ux0: (a /tmp that survives a reboot is scratch space wearing the wrong name); /dev supplies null, zero and urandom.
 
 Two hazards to respect, both from rules already paid for in AGENTS.md:
-1. --wrap rewrites calls made inside libc itself, which is what produced the opendir double-translation bug. Synthetic devices must be recognised by file descriptor, never by re-translating a path string, and any new wrapper that calls into libc has to ask whether libc calls another wrapped function on its way through.
+1. --wrap rewrites calls made inside libc itself, which is what produced the opendir double-translation bug. Synthetic devices must be recognized by file descriptor, never by re-translating a path string, and any new wrapper that calls into libc has to ask whether libc calls another wrapped function on its way through.
 2. normalise_stat() in src/sftp_server.c flattens every entry to a plain file or directory. The /dev entries have to reach SFTP as character devices ahead of that flattening, or sftp ls -l /dev reports regular files.
 
 Keep the surface honest: rm, mkdir, chmod, chown and rename against a /dev path refuse with a readable error. There are no symlinks on the Vita and nothing here pretends otherwise.

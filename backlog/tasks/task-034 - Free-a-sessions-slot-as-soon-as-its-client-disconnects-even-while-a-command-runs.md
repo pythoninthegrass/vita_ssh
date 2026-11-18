@@ -38,7 +38,7 @@ The sshd.log watchdog line `poll: loop stalled for N ms (suspend or starvation)`
 - [ ] #1 With a long command running on session A, a second client that authenticates, queues a command and is then killed has its slot freed within a stated time (measured), not when A's command ends
 - [ ] #2 With a long command running on session A, five consecutive abandon-after-auth probes never cause a `refused ...: 4 sessions already open` for a sixth, real client, measured on a device
 - [ ] #3 A session whose client disconnected while its queued command had not started never runs that command
-- [ ] #4 An exec session whose client sends EOF but keeps the connection open still runs its command and returns the output (existing behaviour kept)
+- [ ] #4 An exec session whose client sends EOF but keeps the connection open still runs its command and returns the output (existing behavior kept)
 - [ ] #5 The running command's own session is unaffected by other sessions being reaped, and sshd.log records each reaped session with the reason
 - [ ] #6 AGENTS.md says when a session's slot is freed relative to a running command, matching the code
 - [ ] #7 The decision on the `poll: loop stalled` log line after a yielding command is recorded in the task notes

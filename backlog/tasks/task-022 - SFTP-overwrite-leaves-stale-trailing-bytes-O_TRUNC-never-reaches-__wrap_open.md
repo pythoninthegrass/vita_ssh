@@ -4,7 +4,7 @@ title: 'SFTP overwrite leaves stale trailing bytes: O_TRUNC never reaches __wrap
 status: Done
 assignee: []
 created_date: '2026-11-17 04:30'
-updated_date: '2026-11-17 08:00'
+updated_date: '2026-11-18T07:47:00Z'
 labels:
   - sftp
   - data-corruption
@@ -56,13 +56,19 @@ This was found while removing QuickMenuReborn from a device: pushing a 1373-byte
 - [x] #1 After `scp smaller_file vita:/path/to/existing_bigger_file`, the file on the device is exactly the size of smaller_file and its bytes are equal to smaller_file, verified by pulling it back and `cmp`-ing, not by trusting the client exit status.
 - [x] #2 Overwriting with a file of exactly the same size, and overwriting with a larger file, both still produce byte-identical results.
 - [x] #3 Overwriting a file inside a directory that requires path translation (a `/ux0/...` POSIX path) truncates correctly, so the fix cannot depend on bypassing the path layer.
-- [x] #4 Overwriting on a read-only device still fails with the existing permission behaviour rather than silently leaving the old content.
+- [x] #4 Overwriting on a read-only device still fails with the existing permission behavior rather than silently leaving the old content.
 - [x] #5 A failed or partially-written overwrite does not leave a target file that mixes new head bytes with old tail bytes; the previous content either survives intact or is fully replaced.
 - [x] #6 The mechanism is explained in the task notes: what flags the stock libssh handler actually passes to `open()`, and whether `SSH_FXF_TRUNC` survives translation. State the evidence, not a guess.
 - [x] #7 If the conclusion is that `O_TRUNC` genuinely never arrives, say so in the notes and record whether the `.part` staging branch in `__wrap_open` has ever executed, since that branch is only reachable with O_CREAT|O_TRUNC.
 - [x] #8 A host-runnable check under scripts/ covers a shrink-overwrite, a grow-overwrite and a same-size overwrite against the real write path or an extracted equivalent, built with the host cc like scripts/test_vpk_zip.py.
-- [x] #9 Behaviour confirmed on a device for all three size relationships, with `stat` output transcribed into the task notes.
+- [x] #9 Behavior confirmed on a device for all three size relationships, with `stat` output transcribed into the task notes.
 <!-- AC:END -->
+
+## Definition of Done
+<!-- DOD:BEGIN -->
+- [x] #1 `task build` produces both ssh_client_vita.vpk and ssh_server_vita.vpk.
+- [x] #2 The shrink-overwrite repro in the description is re-run on a device and now yields the correct size and bytes.
+<!-- DOD:END -->
 
 ## Implementation Plan
 
@@ -94,7 +100,7 @@ So the branch that is supposed to handle truncation may be unreachable in practi
 
 1. Log the raw `flags` inside `__wrap_open` for a create, a shrink-overwrite, and a grow-overwrite, and read them from `sshd.log`. Use `sh_console_log`, never printf. Note that the build stamp only changes with `task --force build`, so check the `sftp: server code built` line to be sure which binary you are reading.
 2. Compare against what libssh 0.12.2 actually maps `SSH_FXF_TRUNC` to. The stock handler is `sftp_server_handlers.c`; the library is under `.task/portlibs` after `task setup`, and the installed headers are in `$VITASDK`. If the client sets `SSH_FXF_TRUNC` and the handler drops it, the fix belongs at the wrapper. If the client never sets it, no amount of server-side flag handling fixes it and the server must truncate based on the SFTP open pflags itself.
-3. Check whether newlib's `open` on this platform honours `O_TRUNC` at all when it reaches `sceIo*`. If it does not, a flag-only fix cannot work and the server must unlink or truncate explicitly - note that `__wrap_truncate` already exists at line 482 and goes through `sceIoChstat`, and that the SFTP `truncate` path already reads the size back and answers `ENOSYS` when it does not change. Reuse that verified approach rather than inventing a second one.
+3. Check whether newlib's `open` on this platform honors `O_TRUNC` at all when it reaches `sceIo*`. If it does not, a flag-only fix cannot work and the server must unlink or truncate explicitly - note that `__wrap_truncate` already exists at line 482 and goes through `sceIoChstat`, and that the SFTP `truncate` path already reads the size back and answers `ENOSYS` when it does not change. Reuse that verified approach rather than inventing a second one.
 
 ## Constraints that will bite
 
@@ -133,9 +139,3 @@ Device run on the home Vita, build stamp 2026-11-17 01:46:37, all pulled back an
 
 AC #4 verified on the home Vita (server built 2026-11-17 01:52:46, which contains the staging fix): `scp small` and `scp big` over the existing read-only file /os0/psp2config_dolce.skprx both failed with `dest open ...: Permission denied` and scp exit 1. The file was pulled back before and after and is byte-identical (5266 bytes, cmp equal), and no .part file appeared. An earlier attempt hung, but the sshd.log shows that connection died in the handshake (`handshake failed ... Socket error: Success`, 01:54:04) while another agent had the server's connection slots saturated, so it never reached an SFTP open; it says nothing about the read-only path.
 <!-- SECTION:NOTES:END -->
-
-## Definition of Done
-<!-- DOD:BEGIN -->
-- [x] #1 `task build` produces both ssh_client_vita.vpk and ssh_server_vita.vpk.
-- [x] #2 The shrink-overwrite repro in the description is re-run on a device and now yields the correct size and bytes.
-<!-- DOD:END -->

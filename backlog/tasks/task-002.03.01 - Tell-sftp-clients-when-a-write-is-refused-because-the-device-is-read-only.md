@@ -5,7 +5,7 @@ status: Done
 assignee:
   - claude
 created_date: '2026-11-16T18:19:00Z'
-updated_date: '2026-11-16T19:15:00Z'
+updated_date: '2026-11-18T07:47:00Z'
 labels: []
 dependencies: []
 references:
@@ -41,7 +41,7 @@ A sftp or scp user who writes to a read-only device such as /os0 sees a bare 'Fa
 1. Cause: `writable_target()` in src/sftp_server.c sets errno=EROFS, but libssh 0.12.2's static `unix_errno_to_ssh_stat()` (sftpserver.c:988) has no EROFS case, so open/mkdir/rmdir/unlink replies fall to SSH_FX_FAILURE (bare 'Failure'). EACCES maps to SSH_FX_PERMISSION_DENIED.
 2. Fix: `writable_target()` sets errno=EACCES instead of EROFS (comment says why). Rename already answers PERMISSION_DENIED via its own EROFS check in reply_rename_error, untouched (AC4). ENOENT paths untouched (AC3).
 3. Docs: AGENTS.md SFTP notes state the read-only refusal answers SSH_FX_PERMISSION_DENIED via EACCES, and why not EROFS (AC6).
-4. Verify: `task build` links both VPKs. Device behaviour (AC1, 2, 5) needs `scripts/smoke.sh sftp` on a Vita, which cannot run here.
+4. Verify: `task build` links both VPKs. Device behavior (AC1, 2, 5) needs `scripts/smoke.sh sftp` on a Vita, which cannot run here.
 
 Outcome: fix as planned; AC2 and AC4 verified by hand on the device after smoke.sh could not cover them.
 <!-- SECTION:PLAN:END -->

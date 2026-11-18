@@ -5,7 +5,7 @@ status: Done
 assignee:
   - claude
 created_date: '2026-11-17 03:29'
-updated_date: '2026-11-17T16:42:00Z'
+updated_date: '2026-11-18T07:47:00Z'
 labels:
   - portlib
   - build
@@ -65,7 +65,7 @@ Do not link anything into an app in this task; it is the library, the recipe and
 2. libs/curl/VITABUILD (autotools, like libssh2): --host=arm-vita-eabi, static only, --with-openssl=$VITASDK/arm-vita-eabi, http/https only (disable the rest), no libpsl/zstd/brotli/nghttp2/libssh2 (libssh2 and libssh never mix), no curl tool build unless needed, synchronous resolver first (no threads on a Vita thread).
 3. setup:curl in taskfiles/setup.yml mirroring the recipe: pkgver and sha256 read from the VITABUILD, sha check, fresh extract, out-of-tree wiped build, env -u scrub, assert libcrypto resolves in $VITASDK, stage, copy, test -f libcurl.a. Wire into portlibs and taskfile.yml sources (libcurl.a).
 4. Scratch probe program under scripts/ or a throwaway dir (not linked into either app): DNS via sceNet plus one HTTPS GET; settle resolver choice and CA bundle location/format. Needs the device: ask Lance which network he is on before running anything against it.
-5. Document in AGENTS.md; run task build and confirm both VPKs; check --force and skip behaviour.
+5. Document in AGENTS.md; run task build and confirm both VPKs; check --force and skip behavior.
 <!-- SECTION:PLAN:END -->
 
 ## Implementation Notes

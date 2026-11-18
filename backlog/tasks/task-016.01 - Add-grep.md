@@ -36,7 +36,7 @@ Exit status follows the conventional contract, because scripts and the eventual 
 - [x] #3 -i matches case-insensitively, -v inverts, -n prefixes line numbers, -c prints only a count, -l prints only file names, -q prints nothing and sets only the exit status.
 - [x] #4 Exit status is 0 when a line matched, 1 when none did, 2 on error such as an unreadable file.
 - [x] #5 An unreadable file is reported as grep: FILE: reason on the terminal and the other files still searched.
-- [x] #6 Regex behaviour is stated: either the POSIX basic subset works (and a test like grep 'a.c' matches abc) or the tool matches literally and both help and README say so.
+- [x] #6 Regex behavior is stated: either the POSIX basic subset works (and a test like grep 'a.c' matches abc) or the tool matches literally and both help and README say so.
 - [x] #7 A line longer than the tool's bound is either matched correctly or reported as over the limit, never silently truncated into a wrong answer.
 - [x] #8 A nonexistent pattern argument (no PATTERN given) prints usage and exits nonzero rather than matching everything.
 <!-- AC:END -->

@@ -4,7 +4,7 @@ title: Smoke-test interactive and exec sessions on the Vita
 status: Done
 assignee: []
 created_date: '2026-11-15T22:56:00Z'
-updated_date: '2026-11-17 02:33'
+updated_date: '2026-11-18T07:47:00Z'
 labels: []
 dependencies:
   - TASK-001.01
@@ -25,7 +25,7 @@ ordinal: 5000
 ## Description
 
 <!-- SECTION:DESCRIPTION:BEGIN -->
-The shell, path layer and session handling have only ever been reasoned about, never run: a build that links proves nothing about whether ls reaches a device, whether cd tracks the session's cwd, or whether a hung client leaves a dead session wedged in the poll loop. This is the on-device pass against a real OpenSSH client from both macOS and Linux. Two behaviours are design limits rather than bugs and should be reported as such, not silently fixed: a Ctrl-C during a running command cannot interrupt it (single-threaded, so the poll loop is inside the command), and long recursive walks are bounded by a depth limit instead.
+The shell, path layer and session handling have only ever been reasoned about, never run: a build that links proves nothing about whether ls reaches a device, whether cd tracks the session's cwd, or whether a hung client leaves a dead session wedged in the poll loop. This is the on-device pass against a real OpenSSH client from both macOS and Linux. Two behaviors are design limits rather than bugs and should be reported as such, not silently fixed: a Ctrl-C during a running command cannot interrupt it (single-threaded, so the poll loop is inside the command), and long recursive walks are bounded by a depth limit instead.
 <!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria

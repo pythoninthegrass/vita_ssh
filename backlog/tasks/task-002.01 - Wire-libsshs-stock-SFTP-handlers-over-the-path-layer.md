@@ -5,7 +5,7 @@ status: Done
 assignee:
   - '@claude'
 created_date: '2026-11-15T22:57:00Z'
-updated_date: '2026-11-16T08:15:00Z'
+updated_date: '2026-11-18T07:47:00Z'
 labels: []
 dependencies: []
 documentation:
@@ -26,7 +26,7 @@ ordinal: 7000
 ## Description
 
 <!-- SECTION:DESCRIPTION:BEGIN -->
-The channel subsystem callback currently prints 'subsystem not supported' and refuses. libssh ships a server-side SFTP implementation that handles the packet protocol itself; the job is to construct it for the accepted session, drive it from the same single-threaded poll loop that already pumps the session, and have it tear down cleanly when the channel closes. The path semantics live in src/sh_path.c: normalise in POSIX space and translate once immediately before the sceIo call, never guess a device, and never fake symlinks. libssh's own handlers assume POSIX filesystem semantics underneath (stat attributes, directory iteration, path handling), so part of the work is showing what they do with Vita's device-prefixed names and adapting at the boundary rather than forking the library.
+The channel subsystem callback currently prints 'subsystem not supported' and refuses. libssh ships a server-side SFTP implementation that handles the packet protocol itself; the job is to construct it for the accepted session, drive it from the same single-threaded poll loop that already pumps the session, and have it tear down cleanly when the channel closes. The path semantics live in src/sh_path.c: normalize in POSIX space and translate once immediately before the sceIo call, never guess a device, and never fake symlinks. libssh's own handlers assume POSIX filesystem semantics underneath (stat attributes, directory iteration, path handling), so part of the work is showing what they do with Vita's device-prefixed names and adapting at the boundary rather than forking the library.
 <!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria

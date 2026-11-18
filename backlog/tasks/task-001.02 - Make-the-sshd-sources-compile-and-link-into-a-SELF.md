@@ -82,7 +82,7 @@ The server sources were written against libssh 0.12.2's API from documentation a
   `void`-returning; there is no `ssh_channel_set_callbacks_userdata` — set
   `channel_cbs.userdata` before `ssh_set_channel_callbacks`; the free for
   `ssh_get_publickey_hash` is `ssh_clean_pubkey_hash(&hash)`; `ssh_pki_generate` is
-  deprecated in favour of `ssh_pki_ctx_new` + `ssh_pki_generate_key` + `ssh_pki_ctx_free`.
+  deprecated in favor of `ssh_pki_ctx_new` + `ssh_pki_generate_key` + `ssh_pki_ctx_free`.
 - Not in scope here, still open: the host key lives on `ux0:` so 001.03 must move it, and
   nothing has run on hardware yet — that is 001.04.
 <!-- STATUS:END -->

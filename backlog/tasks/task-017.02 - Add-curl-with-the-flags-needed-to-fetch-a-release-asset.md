@@ -51,7 +51,7 @@ Security and platform points that are not optional:
 <!-- AC:BEGIN -->
 - [ ] #1 curl URL writes the response body to the terminal; curl -o FILE URL writes it to FILE resolved through the path layer, and the parent directory's writability is checked before anything is created.
 - [ ] #2 curl -O URL saves into the current directory under the URL's last path segment; curl -J uses the Content-Disposition name when the server offers one.
-- [ ] #3 A server-supplied filename containing a path separator or .. is sanitised to a bare name or refused; a hostile Content-Disposition value cannot write outside the target directory.
+- [ ] #3 A server-supplied filename containing a path separator or .. is sanitized to a bare name or refused; a hostile Content-Disposition value cannot write outside the target directory.
 - [ ] #4 curl -L follows redirects up to a stated hop limit and reports a redirect loop or an exceeded limit as a readable error.
 - [ ] #5 The acceptance run on a device puts wifiturbo.suprx in ~/Downloads with the same size as the release asset.
 - [ ] #6 HTTPS verifies the certificate by default; the insecure switch is the only way to disable it and prints a warning when used; an unverifiable certificate fails with a readable sentence naming the host.

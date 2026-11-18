@@ -4,7 +4,7 @@ title: Back env with real session state and add printenv
 status: To Do
 assignee: []
 created_date: '2026-11-17 03:40'
-updated_date: '2026-11-17T18:43:00Z'
+updated_date: '2026-11-18T07:47:00Z'
 labels:
   - shell
   - coreutils
@@ -38,7 +38,7 @@ Two things to check rather than assume, because getting them wrong costs a debug
 
 Client-supplied values are untrusted input: they must not be able to inject escape sequences into the Vita console or become a path that gets used without going through the path layer.
 
-PATH stays what its own comment says it is -- decorative, since commands come from the builtin table and never from a search path. Document that rather than quietly honouring it.
+PATH stays what its own comment says it is -- decorative, since commands come from the builtin table and never from a search path. Document that rather than quietly honoring it.
 <!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria
@@ -51,7 +51,7 @@ PATH stays what its own comment says it is -- decorative, since commands come fr
 - [ ] #6 A client COLUMNS or LINES request either lands in the table or is refused with a line on the console or log; nothing is dropped silently, and the chosen authority for window size is recorded in code comments.
 - [ ] #7 A client-supplied variable value cannot put escape sequences on the Vita console and cannot reach a file call without going through the path layer.
 - [ ] #8 env and printenv each have a row in builtins[] in alphabetical order with a usage string help prints, and which finds both.
-- [ ] #9 PATH is still documented as decorative in the place a reader will find it, rather than being honoured as a search path.
+- [ ] #9 PATH is still documented as decorative in the place a reader will find it, rather than being honored as a search path.
 <!-- AC:END -->
 
 ## Definition of Done

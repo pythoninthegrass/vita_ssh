@@ -4,7 +4,7 @@ title: Add sed (stream editor subset)
 status: To Do
 assignee: []
 created_date: '2026-11-17 03:29'
-updated_date: '2026-11-17 03:29'
+updated_date: '2026-11-18T07:47:00Z'
 labels:
   - shell
   - coreutils
@@ -30,7 +30,7 @@ In scope: s/old/new/ (first match per line), s/old/new/g (all matches), an alter
 
 Same family rules as the parent task: cmd_sed() in src/sshd_builtins.c, alphabetical row, resolve_arg() for file arguments and for a script file, sh_printf() for the stream, sh_eprintf() for errors.
 
-Regex: whatever grep settled on (POSIX basic via newlib regcomp, or literal) -- reuse one engine rather than writing a second matcher, and keep the two tools' pattern behaviour identical so muscle memory does not betray anyone.
+Regex: whatever grep settled on (POSIX basic via newlib regcomp, or literal) -- reuse one engine rather than writing a second matcher, and keep the two tools' pattern behavior identical so muscle memory does not betray anyone.
 <!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria

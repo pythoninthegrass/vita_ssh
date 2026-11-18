@@ -4,7 +4,7 @@ title: Rework the README for the project's actual scope
 status: Done
 assignee: []
 created_date: '2026-11-15T22:57:00Z'
-updated_date: '2026-11-16T00:13:00Z'
+updated_date: '2026-11-18T07:47:00Z'
 labels: []
 dependencies:
   - TASK-001.01
@@ -32,7 +32,7 @@ The README still describes the upstream project: the feature and limitation list
 - [x] #3 the server section tells a user how to connect: what to install, where the password or key comes from, and one command line they can paste
 - [x] #4 the feature and limitation lists match what the code does today, removing claims that are no longer true
 - [x] #5 the prerequisites and build sections match the current task targets, including all portlibs the setup step builds
-- [x] #6 no section claims functionality the server does not yet have; unfinished parts are labelled as such
+- [x] #6 no section claims functionality the server does not yet have; unfinished parts are labeled as such
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -60,13 +60,13 @@ The old Contributing wishlist became backlog tasks: TASK-005 with TASK-005.01 (c
 
 Tile claim corrected: assets/ holds SVGs for the server's tile only. sce_sys/*.png for the client arrived as PNGs with no source, which is what TASK-009 is for; the README now says which app is which instead of claiming both are rendered.
 
-No LICENSE file exists in the repo. The README states that instead of inventing a licence; the user should pick one.
+No LICENSE file exists in the repo. The README states that instead of inventing a license; the user should pick one.
 
 Verification: no build was run (build/ belongs to the agent finishing TASK-001.02), so the check here is that every factual claim traces to a file and the markdown structure renders — tables, the two internal anchors, and the fenced blocks were read back after writing.
 
-Licence gap closed while this task was open: LICENSE.md (Unlicense) landed in 452f56e and the README's Licence section (Unlicense for this repo's sources, LGPL-2.1 for the statically linked libssh, plus the third-party table) was written alongside this rewrite. The earlier note in this record saying the repo had no licence file is superseded.
+License gap closed while this task was open: LICENSE.md (Unlicense) landed in 452f56e and the README's License section (Unlicense for this repo's sources, LGPL-2.1 for the statically linked libssh, plus the third-party table) was written alongside this rewrite. The earlier note in this record saying the repo had no license file is superseded.
 
-TASK-001.04 dependency added earlier to hold AC #6 open has been dropped on closure: the server section is labelled as unverified in the README itself, so no later task is blocked by this one. The SFTP paragraph still has to be revisited when TASK-002 lands.
+TASK-001.04 dependency added earlier to hold AC #6 open has been dropped on closure: the server section is labeled as unverified in the README itself, so no later task is blocked by this one. The SFTP paragraph still has to be revisited when TASK-002 lands.
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary
@@ -96,6 +96,6 @@ Follow-ups: when TASK-002 serves SFTP, the server section's 'refused today' word
   still describes only the client) and #2 partly met (titleids appear, but there is no
   per-app description), which is why neither is checked.
 - What is genuinely left: the client-only feature/limitation lists (#4), the how-to-connect
-  section (#3), prerequisites/build accuracy (#5), and labelling unfinished server behaviour
+  section (#3), prerequisites/build accuracy (#5), and labeling unfinished server behavior
   (#6). #3 and #6 depend on TASK-002.03, so they cannot be settled before SFTP is verified.
 <!-- STATUS:END -->

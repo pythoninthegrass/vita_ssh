@@ -5,7 +5,7 @@ status: Done
 assignee:
   - claude
 created_date: '2026-11-17 03:29'
-updated_date: '2026-11-17T17:45:00Z'
+updated_date: '2026-11-18T07:47:00Z'
 labels:
   - shell
 dependencies:
@@ -46,7 +46,7 @@ Split on | at the top level only: split_line() already tracks quoting, so a quot
 <!-- AC:BEGIN -->
 - [x] #1 cat FILE | cat writes the file; echo x | cat writes x; a three-segment pipeline chains correctly.
 - [x] #2 A pipe inside quotes is literal: echo "a|b" prints a|b and does not split the line.
-- [x] #3 The last segment's stdout goes to the terminal, and honours a trailing > FILE / >> FILE on that segment.
+- [x] #3 The last segment's stdout goes to the terminal, and honors a trailing > FILE / >> FILE on that segment.
 - [x] #4 A redirect on an intermediate segment wins over the pipe for that segment, the way sh applies redirection after pipeline assignment.
 - [x] #5 The pipeline's exit status is the last segment's; a failing middle segment still runs the segments after it and its error reaches the terminal.
 - [x] #6 A segment other than the last cannot change session state: cd or exit mid-pipeline does not move the cwd or end the session.
@@ -92,7 +92,7 @@ AC10 NOT MET as written: sh_session_interrupted() only reports a known state (ch
 
 Syntax errors use status 2 and the text `sh: syntax error near unexpected token `|'`. Segments are checked for emptiness before anything runs.
 
-AC9 and AC10 reworded (2026-11-17, Lance) to what the platform can deliver; the original text asked for a second session to be served during a long pipeline and for Ctrl-C to stop it. Evidence for AC9: du /ux0 | wc -l and plain du /ux0 both left a second session unable to finish the SSH banner for ~170 s (same behaviour, so pipes add no wait); a 16-segment pipeline over 800 KB took 0.5 s. AC10 is backed by the code check before each segment and the documented platform limit, not by a device run of a mid-pipeline hangup.
+AC9 and AC10 reworded (2026-11-17, Lance) to what the platform can deliver; the original text asked for a second session to be served during a long pipeline and for Ctrl-C to stop it. Evidence for AC9: du /ux0 | wc -l and plain du /ux0 both left a second session unable to finish the SSH banner for ~170 s (same behavior, so pipes add no wait); a 16-segment pipeline over 800 KB took 0.5 s. AC10 is backed by the code check before each segment and the documented platform limit, not by a device run of a mid-pipeline hangup.
 
 The `sh:` message forms (command not found / 127, syntax error / 2, redirect and < errors) are documented in README.md and in AGENTS.md under Adding a builtin.
 

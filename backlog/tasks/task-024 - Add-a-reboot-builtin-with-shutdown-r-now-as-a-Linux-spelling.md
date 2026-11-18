@@ -4,7 +4,7 @@ title: 'Add a reboot builtin, with shutdown -r now as a Linux spelling'
 status: To Do
 assignee: []
 created_date: '2026-11-17 05:14'
-updated_date: '2026-11-17 05:20'
+updated_date: '2026-11-18T07:47:00Z'
 labels:
   - shell
   - builtin
@@ -40,7 +40,7 @@ API. scePowerRequestColdReset() is in USER psp2/power.h (line 160) and ScePower_
 
 NO PROMPT, AND NONE IS POSSIBLE. Do not implement an interactive "are you sure?" and do not try to. A builtin's stdin is a bounded buffer loaded in full before the command runs (`sh_stdin_t`, from `cmd < FILE`, TASK-015.01), and a read that finds nothing returns end-of-input at once, so no builtin ever waits for a keystroke. The line editor consumes channel bytes as commands, and mid-command reads from the channel do not exist. That is a rule of the design, not a gap to fill: waiting on a human keystroke is an unbounded wait inside the server's single poll loop, the exact thing vcmd's five-second deadline exists to avoid. A future interactive stdin would need its own deadline design before a prompt became possible. Both verbs are non-interactive end to end, exactly like 'sudo reboot': 'ssh host "reboot now"' over a socket with no tty must work and exit 0.
 
-SYNTAX. Two verbs, one engine. 'reboot' is this shell's own verb; 'shutdown' is a compatibility front-end over the same code, the same shape as TASK-017.03's 'wget as a frontend over the curl engine'. Give 'shutdown' its own row in builtins[] (alphabetically between 'rmdir' and 'stat') so it shows in 'help' and 'which shutdown' reports shell builtin -- a hidden alias is a rumour, not a command.
+SYNTAX. Two verbs, one engine. 'reboot' is this shell's own verb; 'shutdown' is a compatibility front-end over the same code, the same shape as TASK-017.03's 'wget as a frontend over the curl engine'. Give 'shutdown' its own row in builtins[] (alphabetically between 'rmdir' and 'stat') so it shows in 'help' and 'which shutdown' reports shell builtin -- a hidden alias is a rumor, not a command.
 
   reboot now         reset as soon as the sessions have flushed -- seconds, as immediate as sudo reboot
   reboot +90         reset ninety seconds out
@@ -88,7 +88,7 @@ Register both rows in builtins[] in alphabetical position: 'reboot' between 'pwd
 - [ ] #6 The intent is in sshd.log with the requesting peer and the spelling as typed, before the reset happens, verified by reading the log after the device is back.
 - [ ] #7 A staged update under VPK_UPDATE_ROOT blocks 'reboot now' with a message naming what it found, verified by staging one and not promoting it; for '+90' the same condition warns rather than refuses.
 - [ ] #8 Low battery is refused with the reason, and any override is documented rather than silent.
-- [ ] #9 The interrupt behaviour of an in-flight SFTP transfer is investigated and the finding is recorded in docs/vcmd.md either way.
+- [ ] #9 The interrupt behavior of an in-flight SFTP transfer is investigated and the finding is recorded in docs/vcmd.md either way.
 - [ ] #10 'shutdown -r now' behaves identically to 'reboot now', verified on a device; it has its own builtins[] row, appears in 'help', and 'which shutdown' reports shell builtin.
 - [ ] #11 'shutdown -h now' refuses with the no-power-off reason and does NOT reboot, verified on a device, as do '-P', '-p', 'halt' and 'poweroff'.
 - [ ] #12 'shutdown -c' cancels a scheduled reset, verified on a device.

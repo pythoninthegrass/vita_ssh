@@ -38,7 +38,7 @@ Nothing in the build knows the server exists: CMakeLists.txt has one add_executa
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
 - [x] #1 CMakeLists.txt builds a second app from the sshd sources with its own titleid, distinct from the client's ROM000069
-- [x] #2 task build produces two VPKs and the client's VPK is unchanged in name and behaviour
+- [x] #2 task build produces two VPKs and the client's VPK is unchanged in name and behavior
 - [x] #3 the server target links the static libssh from the SDK plus the libraries it needs (ssl, crypto, z, pthread) and the Vita stubs
 - [x] #4 the server target defines the macro libssh's server-side declarations are gated behind, so its headers expose the server and SFTP API
 - [x] #5 task build's fingerprint list covers the new sources and the libssh archive, so editing a server source or rebuilding libssh relinks the server VPK
@@ -73,11 +73,11 @@ Nothing in the build knows the server exists: CMakeLists.txt has one add_executa
   `3e1113e5eeba07ea…`, byte-identical to the value recorded above, and reads
   `VitaSSH` / `ROM000069`; the server's reads `VitaSSHd` / `ROM000070`. `eboot.bin` sizes
   match the two `.self` files, so the SELF the VPKs ship is the one that just built.
-- Worth knowing about "behaviour unchanged": AC #2 means the client's name and behaviour, and
+- Worth knowing about "behavior unchanged": AC #2 means the client's name and behavior, and
   both hold — but the client's `eboot.bin` hash does move in 001.02, because `src/network.c`
   is compiled into both apps and its 14 `printf` calls became `net_log`. The client's
   implementation forwards to `vprintf` and re-adds the newline, so stdout is what it was. Name
-  and behaviour are unchanged; the bytes are not, and no criterion claims they are.
+  and behavior are unchanged; the bytes are not, and no criterion claims they are.
 - VPKs are ZIP containers (`PK\x03\x04`), so `unzip -l` / `unzip -p` is how to inspect what
   actually ships — `nm` and `strings` cannot read the SELF inside it.
 <!-- STATUS:END -->

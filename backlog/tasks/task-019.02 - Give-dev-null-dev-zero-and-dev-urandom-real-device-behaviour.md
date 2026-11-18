@@ -1,9 +1,10 @@
 ---
 id: TASK-019.02
-title: 'Give /dev/null, /dev/zero and /dev/urandom real device behaviour'
+title: 'Give /dev/null, /dev/zero and /dev/urandom real device behavior'
 status: To Do
 assignee: []
 created_date: '2026-11-17 03:38'
+updated_date: '2026-11-18T07:47:00Z'
 labels:
   - shell
   - path-layer
@@ -31,10 +32,10 @@ Wanted: the three /dev entries that show up in shell one-liners, behaving like t
 /dev/zero -- reads return the requested number of zero bytes; writes are discarded.
 /dev/urandom -- reads return unpredictable bytes; /dev/random may be the same thing while nothing distinguishes them.
 
-The seam already exists: __wrap_open() in src/sftp_server.c sees every open() in the server binary (builtins included, because active is NULL for them) and currently falls through to __real_open(). Recognise the synthetic names there, ahead of the SFTP branch, and serve them from a small table of synthetic file descriptors. Additional --wrap entries will be needed for the descriptors' read, write, close and fstat traffic; add each one to the link line in CMakeLists.txt alongside the existing list.
+The seam already exists: __wrap_open() in src/sftp_server.c sees every open() in the server binary (builtins included, because active is NULL for them) and currently falls through to __real_open(). Recognize the synthetic names there, ahead of the SFTP branch, and serve them from a small table of synthetic file descriptors. Additional --wrap entries will be needed for the descriptors' read, write, close and fstat traffic; add each one to the link line in CMakeLists.txt alongside the existing list.
 
 Three things that must not go wrong, each of them a rule already earned elsewhere in this tree:
-- Synthetic descriptors are recognised by fd value, never by re-translating a path. The existing opendir bug is what happens when a path is translated twice.
+- Synthetic descriptors are recognized by fd value, never by re-translating a path. The existing opendir bug is what happens when a path is translated twice.
 - The synthetic fd values cannot collide with a real SceUID, and every wrapper forwards anything not in the table untouched.
 - A wrapper that calls into libc must first establish that libc does not reach another wrapped symbol on that path.
 

@@ -4,7 +4,7 @@ title: 'Give the shell native system-control verbs: launch, quit, screen, noslee
 status: To Do
 assignee: []
 created_date: '2026-11-17 05:09'
-updated_date: '2026-11-17 05:14'
+updated_date: '2026-11-18T07:47:00Z'
 labels:
   - shell
   - builtin
@@ -41,7 +41,7 @@ READ FIRST. docs/vcmd.md, section "Where the plugin boundary is, and what cannot
 
 NAMING, already decided: plain verbs in builtins[], not subcommands of vcmd. vcmd is a transport (HOST PORT [LINE]); letting 'vcmd press cross' sometimes mean "send these bytes to :1338" and sometimes "act locally" makes a silent no-op indistinguishable from success. If a subcommand shape is ever wanted, the in-tree model is 'vpk list FILE | vpk install FILE' -- a builtin owning a noun.
 
-SHARED ACCEPTANCE for every subtask: 'task build' is clean; the new row sits in the right alphabetical position in builtins[]; 'help' lists the verb and 'help <verb>' prints its usage; 'which <verb>' reports shell builtin; every error message names the command and the offending argument; and behaviour is verified on a device, since compile-and-link proves nothing about these APIs.
+SHARED ACCEPTANCE for every subtask: 'task build' is clean; the new row sits in the right alphabetical position in builtins[]; 'help' lists the verb and 'help <verb>' prints its usage; 'which <verb>' reports shell builtin; every error message names the command and the offending argument; and behavior is verified on a device, since compile-and-link proves nothing about these APIs.
 
 SUBTASKS. The numbers came out of ordinal order when they were filed, so work from the titles and not from the numbering.
 

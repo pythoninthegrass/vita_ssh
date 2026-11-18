@@ -44,7 +44,7 @@ The repo's client app is the less useful half: typing on the Vita's on-screen ke
 - [x] #2 the shell reaches every mounted device through POSIX paths (ls /, ls /ux0:, cd between devices)
 - [x] #3 task build produces the client VPK and the server VPK, and skips when nothing changed
 - [x] #4 with no authorized_keys installed, the server generates a password and shows it on the Vita screen
-- [x] #5 the client app is unaffected: same titleid, same behaviour as before this feature
+- [x] #5 the client app is unaffected: same titleid, same behavior as before this feature
 <!-- AC:END -->
 
 ## Final Summary
