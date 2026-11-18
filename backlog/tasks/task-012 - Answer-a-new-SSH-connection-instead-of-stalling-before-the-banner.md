@@ -1,11 +1,11 @@
 ---
 id: TASK-012
 title: Answer a new SSH connection instead of stalling before the banner
-status: In Progress
+status: Done
 assignee:
   - claude
 created_date: '2026-11-17 02:21'
-updated_date: '2026-11-18T07:47:00Z'
+updated_date: '2026-11-18T23:02:00Z'
 labels:
   - server
   - network
@@ -39,7 +39,7 @@ Evidence to work from: ux0:data/vitasshd/sshd.log (readable over SSH, or from Vi
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 The cause of the pre-banner stall is identified and recorded in the task notes with evidence -- log lines, an instrumented build, or the accept loop and session table as observed at the moment a new connection is ignored -- rather than inferred from the symptom.
+- [x] #1 The cause of the pre-banner stall is identified from libssh's source and recorded in the task notes: a blocking ssh_handle_key_exchange() with no SSH_OPTIONS_TIMEOUT waits forever on a socket that sends nothing, which parks the single poll thread. The old build was observed wedged on a device, but was not instrumented while wedged.
 - [x] #2 Silent sockets do not consume the cap: with 8 connections that complete TCP and send nothing, a real client still gets one of the four slots, and `ssh <vita> pwd` completes key exchange and returns 0. The cap itself stays at 4 -- SSHD_MAX_SESSIONS is a hardware limit, so raising it is out of scope.
 - [x] #3 A session that never authenticates is reclaimed within a stated timeout, and the reclaim shows up as a line in sshd.log naming the peer.
 - [x] #4 The reproducing sequence -- connect and stay silent, then connect properly -- passes on the device, and a fresh `scripts/smoke.sh exec` run afterwards is clean, including the cross-device `cd` and `mv` checks.
@@ -65,4 +65,12 @@ Evidence to work from: ux0:data/vitasshd/sshd.log (readable over SSH, or from Vi
 2026-11-17: implemented in worktree branch worktree-task-012 (uncommitted), `task build` clean for both VPKs plus updater. Decisions from Lance: evict the oldest pre-auth session when all 4 slots are taken (cap stays 4, no extra memory), HANDSHAKE_TIMEOUT_S = 30. Changes: src/sshd.c (handshake now non-blocking and stepped from server_loop via `handshake_step()`; `slot_t` gained `handshaking` and `accepted_us`; `slot_oldest_preauth()` eviction in `on_incoming()`; reclaim line `reclaimed <peer>: no login within 30 s`; session set back to blocking in `handshake_done()` so later behavior is unchanged), `sh_session_authenticated()` in src/sshd_session.c and include/sshd.h, new scripts/silent_sockets.sh (8 silent sockets, `ssh pwd`, 20 one-shots). Not yet verified on a device, so no acceptance criterion is checked. Open risk to watch on the device: the session joins the poll event before key exchange finishes. Remaining: install the VPK on the Vita (needs Lance), reproduce the old stall first with the previous build if wanted for AC #1, run silent_sockets.sh and smoke.sh exec, then write the AGENTS.md rule and README known issue (AC #6).
 
 2026-11-17 device run (work Vita, new build installed with `vpk install`, result.txt `promote package: 0x00000000`): scripts/silent_sockets.sh with 8 silent sockets open: `ssh pwd` returned /ux0/data/vitasshd, 20 of 20 one-shots rc 0 (21 pass 0 fail). sshd.log shows the silent sockets filling the 4 slots, then `evicting <peer> (no login after N s) for <peer>` as later ones and the real client arrived. A single silent socket held 38 s produced `reclaimed <peer>: no login within 30 s`. scripts/smoke.sh exec: 41 pass 0 fail, including `cd between devices` and both `mv across devices` checks. AC #1 is NOT checked: the cause is established from libssh source (blocking wait with opts.timeout 0 is infinite), and the old build was seen wedged on the same Vita (`Connection timed out during banner exchange` on ssh and scp, cleared by restarting the server), but the old build was not instrumented while wedged, so the log-line evidence the criterion asks for was not captured. The first run of silent_sockets.sh failed its 20 one-shots only because the script used `true`, which this shell lacks (status 127); it now uses `pwd`. The `Connection to <ip> closed by remote host.` line after exec output also appears on the old build, so it is not from this change.
+
+2026-11-18: AC #1 reworded at the user's direction. The original asked for log lines or an instrumented build captured while the old build was wedged; the cause is instead established from libssh 0.12.2 source (src/server.c:669, src/session.c:887-899) plus the observed banner-exchange timeouts on the old build, and the fix is device verified (silent_sockets.sh 21 pass 0 fail, smoke.sh exec 41 pass 0 fail). Reproducing the old build was judged not worth the cost.
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+The pre-banner stall came from on_incoming() running ssh_handle_key_exchange() to completion on a blocking session: with no SSH_OPTIONS_TIMEOUT set, libssh waits forever on a socket that sends nothing, which parked the single poll thread. The handshake is now non-blocking and stepped from server_loop() (handshake_step()). A slot that has not logged in within 30 s is reclaimed (reclaimed <peer>: no login within 30 s), and when all four slots are taken the longest-waiting unauthenticated one is evicted, so the cap stays 4. Device verification (work Vita, 2026-11-17): scripts/silent_sockets.sh with 8 silent sockets, 21 pass 0 fail including 20 one-shots; scripts/smoke.sh exec 41 pass 0 fail. The rule is in AGENTS.md. AC #1 was reworded to accept the cause from libssh source plus the observed wedge, since the old build was never instrumented while wedged.
+<!-- SECTION:FINAL_SUMMARY:END -->
