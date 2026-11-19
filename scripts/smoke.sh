@@ -257,9 +257,11 @@ run_exec() {
   done
   ERR=$($V 'unset HOME' 2>&1 | grep -v 'closed by remote host');            check "var: unset of a readonly name is refused" "unset: HOME: readonly variable" "$ERR"
   OUT=$($V 'HOME=/x ; cd ~ ; pwd' 2>/dev/null);                              [ "$OUT" != "/x" ] && check "var: ~ is unaffected by a refused HOME" ok ok || check "var: ~ is unaffected by a refused HOME" ok fail
-  for BAD in 'echo $(date)' 'echo $((1+1))' 'echo ${A:-x}' 'echo $1'; do
+  for BAD in 'echo $(date)' 'echo $((1+1))' 'echo ${A:-x}'; do
     $V "$BAD" >/dev/null 2>&1; RC=$?;                                        check "var: unsupported syntax exits 2 ($BAD)" 2 "$RC"
   done
+  OUT=$($V 'echo [$1]' 2>/dev/null);                                         check "var: an unset positional parameter expands to nothing" "[]" "$OUT"
+  $V 'echo [$1]' >/dev/null 2>&1; RC=$?;                                     check "var: an unset positional parameter exits 0" 0 "$RC"
   ERR=$($V 'echo $(date)' 2>&1 | grep -v 'closed by remote host');           case $ERR in *'near "$("'*) check "var: unsupported syntax names the construct" ok ok ;; *) check "var: unsupported syntax names the construct: got \"$ERR\"" ok fail ;; esac
   for BAD in 'echo ${' 'echo ${}' 'echo ${A'; do
     $V "$BAD" >/dev/null 2>&1; RC=$?;                                        check "var: malformed brace exits 2 ($BAD)" 2 "$RC"
