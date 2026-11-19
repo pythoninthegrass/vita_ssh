@@ -1,10 +1,10 @@
 ---
 id: TASK-020
 title: Make session variables settable and expand $NAME in the shell
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-11-17 03:41'
-updated_date: '2026-11-17T20:45:00Z'
+updated_date: '2026-11-19T06:07:00Z'
 labels:
   - shell
   - coreutils
@@ -19,7 +19,17 @@ documentation:
 modified_files:
   - src/sshd_builtins.c
   - src/sshd_session.c
-  - include/sshd.h
+  - src/sh_env.c
+  - src/sh_expand.c
+  - include/sh_env.h
+  - include/sh_expand.h
+  - scripts/test_sh_env.c
+  - scripts/test_sh_expand.c
+  - scripts/test_sh_expand.py
+  - scripts/smoke.sh
+  - CMakeLists.txt
+  - README.md
+  - AGENTS.md
 priority: medium
 ordinal: 47000
 ---
@@ -36,7 +46,7 @@ Honesty points to settle in the open rather than paper over:
 - An unset variable expands to nothing, which is how sh behaves and which is safe here only because the path layer answers ENOENT for an unknown first component rather than falling back to a default device. State the word-elision rule explicitly: an unquoted reference to a missing variable contributes no word, a quoted one contributes an empty word, and that difference is what keeps rm with a missing argument from doing something nobody meant.
 - Variable references are expansion, not evaluation: no command substitution, no arithmetic, no braced defaults. Unsupported forms report a readable error rather than being passed through as a literal dollar that silently survives.
 
-Ordering in sh_execute_line() matters and is the one place this task can collide with others: word split, then alias expansion (TASK-018), then variable expansion, then redirect extraction, then glob expansion. A variable's value must not be glob-expanded or alias-expanded a second time -- the same one-level rule aliases use, and for the same reason: a hung poll loop takes every session with it. Coordinate with TASK-018, since both tasks edit the same function's word handling.
+Ordering in sh_execute_line() matters and is the one place this task can collide with others: word split, then alias expansion (TASK-018), then variable expansion, then redirect extraction, then glob expansion. A variable's value is split into fields at IFS and the fields are glob-expanded like any unquoted word, as in sh, but a value must never be alias-expanded or taken for an operator -- the same one-level rule aliases use, and for the same reason: a hung poll loop takes every session with it. Coordinate with TASK-018, since both tasks edit the same function's word handling.
 
 Server-owned names -- HOME, PWD, USER, LOGNAME, TMPDIR, and anything the client supplied through an env request -- refuse assignment with a readable error. Letting a typo move HOME would move ~, the SFTP landing directory and the download target out from under the session at once, which is exactly the kind of surprise this project refuses to ship.
 
@@ -45,24 +55,24 @@ Note on quoting: split_line() today tracks one quoted bit meaning "do not glob".
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 NAME=value sets a variable that env and printenv then report; unset NAME removes it; both exit 0 and setting an existing name replaces its value.
-- [ ] #2 echo $NAME prints the value, the braced form works in the same position, and an unset name expands to nothing.
-- [ ] #3 An unquoted reference to an unset variable contributes no word, so a command that would have received a stray empty argument receives none, while a quoted reference contributes an empty word.
-- [ ] #4 A substituted value is not glob-expanded or alias-expanded afterwards: a value containing an asterisk stays a literal asterisk.
-- [ ] #5 Expansion happens after alias expansion and before redirect extraction, so a redirect written with a variable in its target does the obvious thing exactly once.
-- [ ] #6 Assignment to HOME, PWD, USER, LOGNAME, TMPDIR or a client-supplied name is refused with a readable error naming the variable, and ~ and the SFTP landing directory are unaffected either way.
-- [ ] #7 Unsupported syntax -- command substitution, arithmetic, braced defaults -- reports a readable error naming the construct rather than passing a literal dollar sign through to the command.
-- [ ] #8 A malformed braced reference reports a readable error and a nonzero exit rather than expanding to empty or to a literal brace.
-- [ ] #9 Variables are per session and die with it; a second concurrent session never sees them, and history recalls the line as typed, not the expanded form.
-- [ ] #10 A session that sets the stated maximum number of variables, or a value over the length bound, gets a readable error naming the limit and keeps working.
-- [ ] #11 The assignment, unset and any export synonym have rows in builtins[] in alphabetical order, and which finds them.
+- [x] #1 NAME=value sets a variable that env and printenv then report; unset NAME removes it; both exit 0 and setting an existing name replaces its value.
+- [x] #2 echo $NAME prints the value, the braced form works in the same position, and an unset name expands to nothing.
+- [x] #3 An unquoted reference to an unset variable contributes no word, so a command that would have received a stray empty argument receives none, while a quoted reference contributes an empty word.
+- [x] #4 An unquoted substituted value is split at IFS and each field is glob-expanded like any unquoted word, as in sh; a quoted reference is neither split nor globbed; no field is ever alias-expanded or read as an operator, so a value of `>`, `;` or `|` is an ordinary argument.
+- [x] #5 Expansion happens after alias expansion and before redirect extraction, so a redirect written with a variable in its target does the obvious thing exactly once.
+- [x] #6 Assignment to HOME, PWD, USER, LOGNAME, TMPDIR or a client-supplied name is refused with a readable error naming the variable, and ~ and the SFTP landing directory are unaffected either way.
+- [x] #7 Unsupported syntax -- command substitution, arithmetic, braced defaults -- reports a readable error naming the construct rather than passing a literal dollar sign through to the command.
+- [x] #8 A malformed braced reference reports a readable error and a nonzero exit rather than expanding to empty or to a literal brace.
+- [x] #9 Variables are per session and die with it; a second concurrent session never sees them, and history recalls the line as typed, not the expanded form.
+- [x] #10 A session that sets the stated maximum number of variables, or a value over the length bound, gets a readable error naming the limit and keeps working.
+- [x] #11 The assignment, unset and any export synonym have rows in builtins[] in alphabetical order, and which finds them.
 <!-- AC:END -->
 
 ## Definition of Done
 <!-- DOD:BEGIN -->
-- [ ] #1 task build produces both VPKs
-- [ ] #2 Verified on a device over a real ssh session, including two concurrent sessions
-- [ ] #3 The quoting decision (single versus double quotes) is documented in help and README rather than left implicit
+- [x] #1 task build produces both VPKs
+- [x] #2 Verified on a device over a real ssh session, including two concurrent sessions
+- [x] #3 The quoting decision (single versus double quotes) is documented in help and README rather than left implicit
 <!-- DOD:END -->
 
 ## Implementation Plan
@@ -88,3 +98,15 @@ Open question for the user, not decided here: `$?` (last exit status) is the mos
 
 Update 2026-11-17: the `$?` question above is answered. It is filed as TASK-032, which depends on this task. Until that lands, `$?` in a word falls under the unsupported-construct error (AC7) rather than expanding, so write the expansion pass with a clear place to add one special parameter.
 <!-- SECTION:PLAN:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Session variables and $NAME expansion. Pure module src/sh_expand.c (host test scripts/test_sh_expand.py under ASan/UBSan: replacement, literal and quoted dollar markers, field splitting at IFS, unsupported and malformed forms, bounds, token and hostile sweeps). sh_env gained unset, readonly (HOME, PWD, USER, LOGNAME, TMPDIR plus client-supplied TERM/LANG via sh_env_lock) and snapshot/restore. split_line() writes markers for a `$` that must stay text and for one inside double quotes, and encodes the unquoted prefix length in quoted[] so `X="a b"` is an assignment; expand_variables() runs in run_command() after alias expansion and before redirects and globs. NAME=value, unset and export (synonym) added; a non-last pipeline segment restores the table like it restores the cwd.
+
+Expansion follows sh: an unquoted reference is split at $IFS (default space, tab, newline; custom IFS keeps empty fields; empty IFS disables splitting), the fields are glob-expanded, and an unquoted unset reference leaves no word. Typed text, "$X" and assignment values are never split. A field from a value is marked QUOTE_VALUE (nonzero, no QUOTE_NOGLOB), so it is never an operator or an alias but still globs. History: the first cut gave a value one word and no globbing; the user rejected both, and AC4 was rewritten to the sh behavior.
+
+Decisions to review: `rm $P` with P="*" removes every file in the cwd, as in sh; a word with typed quotes next to a reference (`x"$P"`) is not globbed (per-word granularity); `$` before a quote stays `$`; `A=1 cmd` is refused; `$?` is an unsupported-syntax error until TASK-032; backticks are not recognized; an unquoted `> $F` with spaces in F passes the extra fields as arguments instead of reporting an ambiguous redirect.
+
+Device (the Vita, home network, 2026-11-19): scripts/smoke.sh exec 152 pass, 0 fail, including checks for IFS splitting, globbing of unquoted values, literal operators and alias values; two concurrent sessions kept separate values (2026-11-18).
+<!-- SECTION:FINAL_SUMMARY:END -->
