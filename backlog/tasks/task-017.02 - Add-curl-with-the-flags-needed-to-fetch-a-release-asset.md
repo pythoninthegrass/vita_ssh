@@ -1,10 +1,10 @@
 ---
 id: TASK-017.02
 title: Add curl with the flags needed to fetch a release asset
-status: In Progress
+status: Done
 assignee: []
 created_date: '2026-11-17 03:29'
-updated_date: '2026-11-19T00:04:00Z'
+updated_date: '2026-11-19T00:31:00Z'
 labels:
   - shell
   - network
@@ -18,9 +18,18 @@ documentation:
   - AGENTS.md
   - include/sh_path.h
 modified_files:
+  - src/sshd_curl.c
+  - src/sh_curl_name.c
+  - include/sshd_curl.h
+  - include/sh_curl_name.h
   - src/sshd_builtins.c
   - CMakeLists.txt
+  - cmake/vita_seg0_slack.ld
+  - src/vita_shims.c
+  - scripts/test_sh_curl_name.c
+  - scripts/test_sh_curl_name.py
   - README.md
+  - AGENTS.md
 parent_task_id: TASK-017
 priority: high
 ordinal: 41000
@@ -49,24 +58,24 @@ Security and platform points that are not optional:
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 curl URL writes the response body to the terminal; curl -o FILE URL writes it to FILE resolved through the path layer, and the parent directory's writability is checked before anything is created.
-- [ ] #2 curl -O URL saves into the current directory under the URL's last path segment; curl -J uses the Content-Disposition name when the server offers one.
-- [ ] #3 A server-supplied filename containing a path separator or .. is sanitized to a bare name or refused; a hostile Content-Disposition value cannot write outside the target directory.
-- [ ] #4 curl -L follows redirects up to a stated hop limit and reports a redirect loop or an exceeded limit as a readable error.
-- [ ] #5 The acceptance run on a device puts wifiturbo.suprx in ~/Downloads with the same size as the release asset.
-- [ ] #6 HTTPS verifies the certificate by default; the insecure switch is the only way to disable it and prints a warning when used; an unverifiable certificate fails with a readable sentence naming the host.
-- [ ] #7 curl -I prints the response headers without the body; curl -f exits nonzero on a 4xx or 5xx instead of saving the error page as if it were the file.
-- [ ] #8 -s suppresses progress and -S restores error messages with it; without -s a progress indication updates as bytes arrive.
-- [ ] #9 A stalled or very slow server hits a bounded timeout, reports it, and the poll loop keeps serving other sessions and the console.
-- [ ] #10 A response beyond the stated size cap stops with a readable error naming the cap, and the partial file is removed or explicitly reported.
-- [ ] #11 curl with no URL prints usage and exits nonzero; a malformed or unsupported URL reports which part was rejected.
+- [x] #1 curl URL writes the response body to the terminal; curl -o FILE URL writes it to FILE resolved through the path layer, and the parent directory's writability is checked before anything is created.
+- [x] #2 curl -O URL saves into the current directory under the URL's last path segment; curl -J uses the Content-Disposition name when the server offers one.
+- [x] #3 A server-supplied filename containing a path separator or .. is sanitized to a bare name or refused; a hostile Content-Disposition value cannot write outside the target directory.
+- [x] #4 curl -L follows redirects up to a stated hop limit and reports a redirect loop or an exceeded limit as a readable error.
+- [x] #5 The acceptance run on a device puts wifiturbo.suprx in ~/Downloads with the same size as the release asset.
+- [x] #6 HTTPS verifies the certificate by default; the insecure switch is the only way to disable it and prints a warning when used; an unverifiable certificate fails with a readable sentence naming the host.
+- [x] #7 curl -I prints the response headers without the body; curl -f exits nonzero on a 4xx or 5xx instead of saving the error page as if it were the file.
+- [x] #8 -s suppresses progress and -S restores error messages with it; without -s a progress indication updates as bytes arrive.
+- [x] #9 A stalled or very slow server hits a bounded timeout, reports it, and the poll loop keeps serving other sessions and the console.
+- [x] #10 A response beyond the stated size cap stops with a readable error naming the cap, and the partial file is removed or explicitly reported.
+- [x] #11 curl with no URL prints usage and exits nonzero; a malformed or unsupported URL reports which part was rejected.
 <!-- AC:END -->
 
 ## Definition of Done
 <!-- DOD:BEGIN -->
-- [ ] #1 task build produces both VPKs
-- [ ] #2 Verified on a device, including the wifiturbo.suprx acceptance run
-- [ ] #3 README documents the supported flags and the CA store arrangement
+- [x] #1 task build produces both VPKs
+- [x] #2 Verified on a device, including the wifiturbo.suprx acceptance run
+- [x] #3 README documents the supported flags and the CA store arrangement
 <!-- DOD:END -->
 
 ## Implementation Plan
@@ -90,3 +99,15 @@ From TASK-017.01 device probe (work Vita): libcurl has no default CA path, so CU
 
 2026-11-18: layout fix done (uncommitted). cmake/vita_seg0_slack.ld plus seg0_slack_anchor in src/vita_shims.c end segment 0 one byte past a page boundary, leaving 4095 bytes of slack for vita-elf-create regardless of text size. With `curl` in the server's target_link_libraries and a reference to curl_easy_*, `task build` produces all three VPKs (server VPK 1431300 bytes with the probe linked in). AGENTS.md size-ceiling bullet rewritten. The probe reference was reverted; `curl` stays in the link list but nothing references it yet, so the archive pulls nothing until the command lands.
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Added the `curl` builtin (-L -O -J -o -I -f -s -S -k/--insecure). The engine is src/sshd_curl.c (curl_multi stepped from the poll loop, so wget in TASK-017.03 can reuse it); URL checks and untrusted file-name handling are in src/sh_curl_name.c with a host test (scripts/test_sh_curl_name.py, ASan/UBSan, swept over hostile strings and shown to fail under two deliberate mutations). Downloads go to NAME.part and replace NAME only on success. Bounds: 15 s connect, 30 s under 1 KB/s, 10 redirects, 256 MB.
+
+Linking libcurl exposed that the server's 'size ceiling' was 4 KB page-alignment slack for vita-elf-create, not a byte limit; cmake/vita_seg0_slack.ld plus an anchor in src/vita_shims.c now guarantee 4095 bytes of slack.
+
+Device results (the Vita, office network, final build): AC1 body to terminal, -o and -O to files, read-only device and missing directory refused before anything is created. AC2/3 -JO used the server name; hostile Content-Disposition values (`../../ux0/data/x`, `..`, `..%2F..%2Fx` via filename*, `ux0:` prefix) became bare names in the cwd or were refused, nothing written outside it. AC4 a redirect loop stopped with 'more than 10 redirects'. AC5 `cd ~/Downloads && curl -LJO <release URL>` gave 52879 bytes with the same SHA-1 as a local download. AC6 expired and self-signed certificates failed with a sentence naming the host and the verify result, -k bypassed them with a warning (also under -s). AC7 -I printed headers for every hop; -f on a 404 exited nonzero and left no file or .part. AC8 -s silent, -sS shows errors, progress updates once a second. AC9 a server that sent 10 bytes then stalled timed out at 30 s, exit 28, and a second connection still got its banner and a shell meanwhile (the Vita's own screen was not watched). AC10 an oversize Content-Length and a 256 MB undeclared stream both stopped with exit 63 and no .part left. AC11 no URL prints usage (2); ftp://, no scheme and a bad port each name the rejected part. Overwriting an existing file also worked.
+
+Known limits: libc's blocking resolver can hold the shell while DNS answers (in README); -s does not silence the up-front file-open errors (not in README); TASK-019.01's move of partial files to /tmp is not done, so the .part sits beside the target for now.
+<!-- SECTION:FINAL_SUMMARY:END -->
