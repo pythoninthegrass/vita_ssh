@@ -1,10 +1,10 @@
 ---
 id: TASK-017.02
 title: Add curl with the flags needed to fetch a release asset
-status: To Do
+status: In Progress
 assignee: []
 created_date: '2026-11-17 03:29'
-updated_date: '2026-11-17T16:44:00Z'
+updated_date: '2026-11-19T00:04:00Z'
 labels:
   - shell
   - network
@@ -69,10 +69,24 @@ Security and platform points that are not optional:
 - [ ] #3 README documents the supported flags and the CA store arrangement
 <!-- DOD:END -->
 
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Host-testable pure helpers first (TDD, like sh_headtail): src/sh_curl_name.c with URL split/validation (scheme http/https only, host, rejected-part message), last-path-segment name for -O, and Content-Disposition filename extraction with directory stripping and rejection of '..'. Test under ASan/UBSan in scripts/test_sh_curl_name.py against a model, pinned on hostile inputs.
+2. cmd_curl in src/sshd_builtins.c (alphabetical row in builtins[]): flags -L -O -J -o -I -f -s -S and an insecure switch; curl_multi driven from the poll loop with sh_server_poll_slice() and sh_session_yield() per step, bounded connect/low-speed timeouts, size cap, redirect limit (CURLOPT_MAXREDIRS), CAINFO vs0:data/external/cert/CA_LIST.cer then ux0:data/cacert.pem. Output via sh_write/sh_printf; file writes through resolve_arg/check_writable; partial file removed on failure.
+3. Add new .c files to the server list in CMakeLists.txt; build both VPKs.
+4. Device run: scp -s plus `vpk install -r`, then the wifiturbo.suprx acceptance run and each AC.
+5. README flags and CA store section; add the test to AGENTS.md's host-check list.
+<!-- SECTION:PLAN:END -->
+
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
 Partial downloads: when TASK-019.01 lands, curl's partial/temporary file resolves through the path layer to /tmp (the ur0: RAM disk) rather than sitting next to the final file, and the size cap has to account for the tmp bound measured in that task.
 
 From TASK-017.01 device probe (work Vita): libcurl has no default CA path, so CURLOPT_CAINFO must always be set or every HTTPS request fails with verify error 20. Use vs0:data/external/cert/CA_LIST.cer (verified, HTTP 200) with ux0:data/cacert.pem as the fallback. getaddrinfo works as is. Link set and details are in AGENTS.md under 'libcurl portlib'.
+
+2026-11-18 probe, no code kept: linking `curl` into the server (plus a reference to curl_easy_*; 97 curl_ symbols pulled) grows text from 2306476 to 3011840 bytes and the exe links, but `vita-elf-create` aborts: `Cannot allocate 3300 bytes for SCE data at end of segment 0; segment 1 overlaps`. readelf on the linked exe shows segment 0 ending at 0x812df538 and the RW segment starting at 0x812e0000, i.e. 2760 bytes of slack to the next 4 KB page against 3300 needed. So the AGENTS.md 'size ceiling' behaves as page-alignment slack after text, not a fixed byte limit: text can grow by 700 KB and fail or pass depending on where it lands mod 0x1000. Any link of libcurl needs a way to guarantee >= ~3.3 KB slack (or a larger gap) before it is worth building the command; decision needed before implementation.
+
+2026-11-18: layout fix done (uncommitted). cmake/vita_seg0_slack.ld plus seg0_slack_anchor in src/vita_shims.c end segment 0 one byte past a page boundary, leaving 4095 bytes of slack for vita-elf-create regardless of text size. With `curl` in the server's target_link_libraries and a reference to curl_easy_*, `task build` produces all three VPKs (server VPK 1431300 bytes with the probe linked in). AGENTS.md size-ceiling bullet rewritten. The probe reference was reverted; `curl` stays in the link list but nothing references it yet, so the archive pulls nothing until the command lands.
 <!-- SECTION:NOTES:END -->
