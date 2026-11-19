@@ -14,7 +14,7 @@
 
 typedef enum {
     SH_EXPAND_OK = 0,
-    SH_EXPAND_UNSUPPORTED, /* a construct that is not implemented: $(...), $((...)), ${NAME:-x}, $?, $1 */
+    SH_EXPAND_UNSUPPORTED, /* a construct that is not implemented: $(...), $((...)), ${NAME:-x}, $1, $$ and the other special parameters */
     SH_EXPAND_MALFORMED,   /* a `${` that is empty, unterminated or not a name */
     SH_EXPAND_TOOLONG      /* the result does not fit in the buffer */
 } sh_expand_status_t;
@@ -25,10 +25,10 @@ typedef struct {
     char what[32];  /* on UNSUPPORTED or MALFORMED, the text of the construct as written, cut short */
 } sh_expand_info_t;
 
-/* The value of name, or NULL when it is not set. */
+/* The value of name, or NULL when it is not set. `$?` asks for the name "?". */
 typedef const char *(*sh_expand_lookup_fn)(void *ctx, const char *name);
 
-/* Replaces `$NAME` and `${NAME}` in word with the looked-up value (nothing for an unset name) and turns
+/* Replaces `$NAME`, `${NAME}`, `$?` and `${?}` in word with the looked-up value (nothing for an unset name) and turns
  * SH_EXPAND_LITERAL_DOLLAR into `$`. The result is written to out (cap bytes in all) as nfields strings,
  * each with its terminator, back to back.
  *

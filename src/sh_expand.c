@@ -107,9 +107,14 @@ static void note(sh_expand_info_t *info, const char *prefix, const char *text, s
     info->what[p + n] = '\0';
 }
 
-static int is_special_param(char c)
+/* The special parameter a byte names, or 0. A `$` that was inside double quotes arrives as
+ * SH_EXPAND_QUOTED_DOLLAR, so `"$$"` is two of them. */
+static char special_char(char c)
 {
-    return strchr("?#$!@*-", c) != NULL || (c >= '0' && c <= '9');
+    if (c == '\x02') {
+        return '$';
+    }
+    return (c != '\0' && strchr("?#$!@*-", c) != NULL) ? c : 0;
 }
 
 /* A reference starts at the `$` at p[0]. On success sets *used to the bytes it covers and *name to the
@@ -129,6 +134,13 @@ static sh_expand_status_t parse_ref(const char *p, char *buf, const char **name,
         }
         return SH_EXPAND_UNSUPPORTED;
     }
+    if (p[1] == '{' && special_char(p[2]) != 0 && p[3] == '}') {
+        buf[0] = special_char(p[2]);
+        buf[1] = '\0';
+        *name = buf;
+        *used = 4;
+        return SH_EXPAND_OK;
+    }
     if (p[1] == '{') {
         const char *q = p + 2;
         size_t named = 0;
@@ -137,6 +149,20 @@ static sh_expand_status_t parse_ref(const char *p, char *buf, const char **name,
             named++;
         }
         if (named > 0 && q[0] >= '0' && q[0] <= '9') {
+            size_t digits = 0;
+
+            while (q[digits] >= '0' && q[digits] <= '9') {
+                digits++;
+            }
+            if (digits == named && q[named] == '}') {
+                *used = 3 + named;
+                if (named < NAME_BUF) {
+                    memcpy(buf, q, named);
+                    buf[named] = '\0';
+                    *name = buf;
+                }
+                return SH_EXPAND_OK;
+            }
             note(info, "${", q, named);
             return SH_EXPAND_UNSUPPORTED;
         }
@@ -170,9 +196,12 @@ static sh_expand_status_t parse_ref(const char *p, char *buf, const char **name,
         }
         return SH_EXPAND_OK;
     }
-    if (p[1] != '\0' && is_special_param(p[1])) {
-        note(info, "$", p + 1, 1);
-        return SH_EXPAND_UNSUPPORTED;
+    if (special_char(p[1]) != 0 || (p[1] >= '0' && p[1] <= '9')) {
+        buf[0] = special_char(p[1]) != 0 ? special_char(p[1]) : p[1];
+        buf[1] = '\0';
+        *name = buf;
+        *used = 2;
+        return SH_EXPAND_OK;
     }
     return SH_EXPAND_OK;
 }

@@ -126,6 +126,12 @@ sh_alias_table_t *sh_session_aliases(const sh_session_t *s);
  * setup. USER, LOGNAME, TERM, HOME and the rest live here; PWD is not stored and is read from
  * the session's cwd when printed, so it cannot disagree with `cd`. */
 sh_env_table_t *sh_session_env(const sh_session_t *s);
+/* The exit status of the last command line item that ran in this session, 0 in a fresh one. It is what
+ * `$?` expands to, and per session like the cwd. */
+int sh_session_last_status(const sh_session_t *s);
+void sh_session_set_last_status(sh_session_t *s, int status);
+/* What `$$` expands to: a number unique to this session since the server started. */
+int sh_session_id(const sh_session_t *s);
 void sh_session_request_exit(sh_session_t *s);
 const char *sh_session_user(const sh_session_t *s);
 const char *sh_session_peer(const sh_session_t *s);

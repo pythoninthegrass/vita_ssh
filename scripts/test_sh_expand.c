@@ -59,6 +59,18 @@ static const char *lookup(void *ctx, const char *name)
     if (strcmp(name, "MIX") == 0) {
         return "a : b";
     }
+    if (strcmp(name, "?") == 0) {
+        return "42";
+    }
+    if (strcmp(name, "$") == 0) {
+        return "777";
+    }
+    if (strcmp(name, "#") == 0) {
+        return "0";
+    }
+    if (strcmp(name, "0") == 0) {
+        return "sh";
+    }
     return NULL;
 }
 
@@ -160,16 +172,60 @@ static void test_unsupported(void)
     CHECK(fails_with("${A#x}", SH_EXPAND_UNSUPPORTED, "${A#"));
     CHECK(fails_with("${A%x}", SH_EXPAND_UNSUPPORTED, "${A%"));
     CHECK(fails_with("${A/x/y}", SH_EXPAND_UNSUPPORTED, "${A/"));
-    CHECK(fails_with("$?", SH_EXPAND_UNSUPPORTED, "$?"));
-    CHECK(fails_with("$1", SH_EXPAND_UNSUPPORTED, "$1"));
-    CHECK(fails_with("$0", SH_EXPAND_UNSUPPORTED, "$0"));
-    CHECK(fails_with("$$", SH_EXPAND_UNSUPPORTED, "$$"));
-    CHECK(fails_with("$#", SH_EXPAND_UNSUPPORTED, "$#"));
-    CHECK(fails_with("$@", SH_EXPAND_UNSUPPORTED, "$@"));
-    CHECK(fails_with("$*", SH_EXPAND_UNSUPPORTED, "$*"));
-    CHECK(fails_with("$!", SH_EXPAND_UNSUPPORTED, "$!"));
-    CHECK(fails_with("$-", SH_EXPAND_UNSUPPORTED, "$-"));
-    CHECK(fails_with("${1}", SH_EXPAND_UNSUPPORTED, "${1"));
+}
+
+static void test_status_param(void)
+{
+    CHECK(expands_to("$?", "42", 1));
+    CHECK(expands_to("${?}", "42", 1));
+    CHECK(expands_to("x$?y", "x42y", 1));
+    CHECK(expands_to("x${?}y", "x42y", 1));
+    CHECK(expands_to("$?$?", "4242", 2));
+    CHECK(expands_to("\x02?", "42", 1));
+    CHECK(expands_to("\x02{?}", "42", 1));
+    CHECK(expands_to("\x01?", "$?", 0));
+    CHECK(expands_to("\x01{?}", "${?}", 0));
+    CHECK(strcmp(fields_of("$?", NULL), "42") == 0);
+    CHECK(strcmp(fields_of("$?", "4"), "|2") == 0);
+    CHECK(strcmp(fields_of("\x02?", "4"), "42") == 0);
+    CHECK(fails_with("${?x}", SH_EXPAND_MALFORMED, "${?"));
+    CHECK(fails_with("${?", SH_EXPAND_MALFORMED, "${?"));
+    CHECK(fails_with("${??}", SH_EXPAND_MALFORMED, "${?"));
+}
+
+static void test_special_params(void)
+{
+    CHECK(expands_to("$$", "777", 1));
+    CHECK(expands_to("${$}", "777", 1));
+    CHECK(expands_to("a$$b", "a777b", 1));
+    CHECK(expands_to("$#", "0", 1));
+    CHECK(expands_to("${#}", "0", 1));
+    CHECK(expands_to("$0", "sh", 1));
+    CHECK(expands_to("${0}", "sh", 1));
+    CHECK(expands_to("$0x", "shx", 1));
+    CHECK(expands_to("$1", "", 1));
+    CHECK(expands_to("${1}", "", 1));
+    CHECK(expands_to("${10}", "", 1));
+    CHECK(expands_to("$10", "0", 1));
+    CHECK(expands_to("a$1b", "ab", 1));
+    CHECK(expands_to("$@", "", 1));
+    CHECK(expands_to("${@}", "", 1));
+    CHECK(expands_to("$*", "", 1));
+    CHECK(expands_to("${*}", "", 1));
+    CHECK(expands_to("$!", "", 1));
+    CHECK(expands_to("${!}", "", 1));
+    CHECK(expands_to("$-", "", 1));
+    CHECK(expands_to("${-}", "", 1));
+    CHECK(expands_to("\x01$", "$$", 0));
+    CHECK(expands_to("\x02\x02", "777", 1));
+    CHECK(expands_to("\x02{\x02}", "777", 1));
+    CHECK(expands_to("$\x02", "777", 1));
+    CHECK(strcmp(fields_of("$1", NULL), "") == 0);
+    CHECK(strcmp(fields_of("\x02" "1", NULL), "") == 0);
+    CHECK(run("\x02" "1", (char[8]){0}, 8, &(sh_expand_info_t){0}) == SH_EXPAND_OK);
+    CHECK(fails_with("${#A}", SH_EXPAND_MALFORMED, "${#"));
+    CHECK(fails_with("${$x}", SH_EXPAND_MALFORMED, "${$"));
+    CHECK(fails_with("${1a}", SH_EXPAND_UNSUPPORTED, "${1a"));
 }
 
 static void test_malformed(void)
@@ -228,6 +284,11 @@ static void test_token_sweep(void)
         {"$UNSET:", ":", 1},
         {"\x01", "$", 0},
         {"$.", "$.", 0},
+        {"$?", "42", 1},
+        {"$$", "777", 1},
+        {"$#", "0", 1},
+        {"$@", "", 1},
+        {"${?}", "42", 1},
         {"-", "-", 0},
     };
     const int ntok = (int)(sizeof(tok) / sizeof(tok[0]));
@@ -265,7 +326,7 @@ static void test_token_sweep(void)
 /* Every string up to six bytes over a hostile alphabet: whatever comes back stays inside the buffer. */
 static void test_hostile_sweep(void)
 {
-    static const char alpha[] = {'A', '$', '{', '}', '\x01', '\x02', ':', ' ', '1'};
+    static const char alpha[] = {'A', '$', '{', '}', '\x01', '\x02', ':', ' ', '1', '?'};
     const int na = (int)sizeof(alpha);
     int len, seq;
 
@@ -360,6 +421,8 @@ int main(void)
     test_value_not_rescanned();
     test_literal_dollar();
     test_unsupported();
+    test_status_param();
+    test_special_params();
     test_malformed();
     test_what_is_cut();
     test_bounds();

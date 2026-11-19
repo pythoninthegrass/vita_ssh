@@ -3540,7 +3540,7 @@ static int cmd_help(sh_session_t *s, int argc, char **argv)
                  " builtin of the same name. `NAME=value` sets a session variable and $NAME or ${NAME} expands it: single"
                  " quotes and a backslash keep a `$` as text, double quotes expand without splitting, an unquoted value splits"
                  " into words at $IFS (default space, tab, newline) and is globbed but never alias-expanded, an unquoted"
-                 " unset name leaves no word, and $(...), $((...), ${NAME:-x} and $? are errors.\n",
+                 " unset name leaves no word, and $(...), $((...) and ${NAME:-x} are errors. $? is the exit status of the last command, $$ is the session number, $0 is sh, $# is 0 and $1, $@, $*, $! and $- are empty: there are no scripts or jobs.\n",
               SH_CHAIN_MAX);
     return 0;
 }
@@ -4114,12 +4114,28 @@ static size_t assignment_prefix(const char *word, int quoted)
 typedef struct {
     sh_session_t *s;
     sh_fsctx_t fs;
+    char num[12]; /* `$?` or `$$` as text; a lookup result must outlive the call */
 } lookup_ctx_t;
 
 static const char *expand_lookup(void *ctx, const char *name)
 {
     lookup_ctx_t *c = ctx;
 
+    /* Special parameters. There are no scripts, functions, jobs or options, so the positional ones
+     * ($1.., $@, $*), $! and $- are unset, $# is 0 and $0 is the shell's name. */
+    if (name[0] == '?' || name[0] == '$') {
+        snprintf(c->num, sizeof(c->num), "%d", name[0] == '?' ? sh_session_last_status(c->s) : sh_session_id(c->s));
+        return c->num;
+    }
+    if (name[0] == '#') {
+        return "0";
+    }
+    if (strcmp(name, "0") == 0) {
+        return "sh";
+    }
+    if (strchr("!@*-0123456789", name[0]) != NULL) {
+        return NULL;
+    }
     return env_lookup(c->s, name, &c->fs);
 }
 
@@ -4153,7 +4169,7 @@ static int expand_variables(sh_session_t *s, char **argv, int *quoted, int *argc
         st = sh_expand_word(argv[i], expand_lookup, &ctx, i < nassign ? "" : env_lookup(s, "IFS", &ctx.fs), out,
                             sizeof(out), &info);
         if (st == SH_EXPAND_UNSUPPORTED) {
-            sh_eprintf(s, "sh: unsupported syntax near \"%s\": no command substitution, arithmetic, ${NAME:-...} or special parameters\n", info.what);
+            sh_eprintf(s, "sh: unsupported syntax near \"%s\": no command substitution, arithmetic or ${NAME:-...} operators\n", info.what);
             return 2;
         }
         if (st == SH_EXPAND_MALFORMED) {
@@ -4522,6 +4538,7 @@ static int run_chain(sh_session_t *s, char **argv, int *quoted, int argc)
             free_args(item, n);
         } else {
             status = run_item(s, item, itemq, n);
+            sh_session_set_last_status(s, status);
         }
         before = op;
     }
@@ -4531,7 +4548,7 @@ static int run_chain(sh_session_t *s, char **argv, int *quoted, int argc)
     return status;
 }
 
-int sh_execute_line(sh_session_t *s, const char *line)
+static int execute_line(sh_session_t *s, const char *line)
 {
     char *argv[MAX_WORDS];
     int quoted[MAX_WORDS];
@@ -4559,4 +4576,14 @@ int sh_execute_line(sh_session_t *s, const char *line)
         return run_item(s, argv, quoted, argc);
     }
     return run_chain(s, argv, quoted, argc);
+}
+
+/* Runs a line and records its status for `$?`, so a syntax error (2) and an unknown command (127)
+ * are seen by the next line as well as by an exec client. */
+int sh_execute_line(sh_session_t *s, const char *line)
+{
+    int status = execute_line(s, line);
+
+    sh_session_set_last_status(s, status);
+    return status;
 }

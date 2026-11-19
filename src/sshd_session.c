@@ -99,6 +99,8 @@ struct sh_session {
 
     sh_alias_table_t *aliases;
     sh_env_table_t *env;
+    int id; /* what `$$` expands to: unique among sessions since boot, never 0 */
+    int last_status; /* exit status of the last item that ran, what `$?` expands to; 0 from calloc */
 
     char *history[SSHD_HISTORY];
     int hist_len;
@@ -450,6 +452,23 @@ sh_alias_table_t *sh_session_aliases(const sh_session_t *s)
 sh_env_table_t *sh_session_env(const sh_session_t *s)
 {
     return s == NULL ? NULL : s->env;
+}
+
+int sh_session_last_status(const sh_session_t *s)
+{
+    return s == NULL ? 0 : s->last_status;
+}
+
+int sh_session_id(const sh_session_t *s)
+{
+    return s == NULL ? 0 : s->id;
+}
+
+void sh_session_set_last_status(sh_session_t *s, int status)
+{
+    if (s != NULL) {
+        s->last_status = status;
+    }
 }
 
 void sh_session_get_fsctx(const sh_session_t *s, sh_fsctx_t *fs)
@@ -1598,12 +1617,14 @@ static int on_service_request(ssh_session session, const char *service,
 
 sh_session_t *sh_session_new(ssh_session ssh, const char *peer)
 {
+    static int next_id = 1;
     sh_session_t *s = calloc(1, sizeof(*s));
 
     if (s == NULL) {
         return NULL;
     }
     s->ssh = ssh;
+    s->id = next_id++;
     s->hist_pos = SSHD_HISTORY;
     s->cols = 80;
     s->rows = 24;
