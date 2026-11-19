@@ -4,6 +4,7 @@ title: Expose sshd.log at /var/log/sshd.log through the path layer
 status: To Do
 assignee: []
 created_date: '2026-11-18T23:22:00Z'
+updated_date: '2026-11-18T23:24:00Z'
 labels:
   - shell
   - path-layer
@@ -33,9 +34,15 @@ Points to settle: ls / and ls /var must list it; the --wrap'd libc calls and SFT
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
 - [ ] #1 cat /var/log/sshd.log and tail /var/log/sshd.log print the current log wherever the server put it.
-- [ ] #2 ls / lists var and ls /var/log lists the log files, in POSIX spelling.
-- [ ] #3 A write, rename or removal under /var/log is refused with a readable error, unless the settled design says otherwise.
+- [ ] #2 ls / lists var and ls /var/log lists exactly sshd.log and sshd.log.old (when present), in POSIX spelling; nothing else in the server directory is reachable through /var/log.
+- [ ] #3 A write, rename or removal under /var/log, or a redirect into it, is refused with a readable read-only error.
 - [ ] #4 The remap resolves through sh_path.c only; no builtin builds the device path by hand, and a path is never translated twice.
-- [ ] #5 SFTP behavior under /var/log matches the design decision and is verified on a device.
+- [ ] #5 SFTP lists and reads /var/log/sshd.log (and refuses writes) on a device, through the same remap.
 - [ ] #6 README and docs/development.md name /var/log/sshd.log as where to read the log.
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Design settled (Lance, 2026-11-18): the remap is read-only; it covers only the log files (sshd.log and sshd.log.old), not the whole server directory; SFTP sees it. Sign-off requirement from the description is met.
+<!-- SECTION:NOTES:END -->
