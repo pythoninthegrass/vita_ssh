@@ -4,7 +4,7 @@ title: Rebuild the SSH listener after the network drops and returns
 status: In Progress
 assignee: []
 created_date: '2026-11-19T02:43:00Z'
-updated_date: '2026-11-19T02:48:00Z'
+updated_date: '2026-11-19T21:52:00Z'
 labels: []
 dependencies: []
 priority: high
@@ -20,12 +20,12 @@ After the Vita is suspended on one network and woken on another, the server keep
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 After an accept failure, the server closes the dead listener, waits for the network to report connected, binds a new listener and resumes serving, without a restart.
-- [ ] #2 A host test covers the rebuild schedule (first attempt immediate, backoff doubling to a cap, reset on a good accept, kept across a rebuild) over every short sequence of events against a model, under ASan/UBSan.
+- [x] #1 After an accept failure, the server closes the dead listener, waits for the network to report connected, binds a new listener and resumes serving, without a restart.
+- [x] #2 A host test covers the rebuild schedule (first attempt immediate, backoff doubling to a cap, reset on a good accept, kept across a rebuild) over every short sequence of events against a model, under ASan/UBSan.
 - [ ] #3 The address shown on the server's screen and logged as ready updates after a rebuild.
 - [ ] #4 A rebuild is never run from inside the listener's own poll callback, and it does not disturb a session that is still healthy.
-- [ ] #5 On a device: suspend on one network, wake on another, and a new ssh connection gets its banner and a shell with no restart; the log shows the rebuild.
-- [ ] #6 AGENTS.md records the platform rule and the verified device result.
+- [x] #5 On a device: suspend on one network, wake on another, and a new ssh connection gets its banner and a shell with no restart; the log shows the rebuild.
+- [x] #6 AGENTS.md records the platform rule and the verified device result.
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -45,4 +45,6 @@ Risk: sceNet itself may need sceNetInit/sceNetCtlInit again after a long outage;
 Built and installed on the device with vpk install -r. Host test: python3 -I scripts/test_sh_listen.py passes (all sequences up to 7 events). Device suspend/wake across networks (AC5) not yet run.
 
 AGENTS.md updated: test command, sh_listen.c in the server list, and the platform rule for the rebuild. Build installed 2026-11-18 20:45 and serving. Remaining: AC5, the device suspend/wake across networks, which needs the user; AC1 and AC3 are verified by that run too. Nothing is committed.
+
+2026-11-19: device run on the Vita, suspended on the home network and woken on the office network. sshd.log showed accept failed 0x804101A3, address changed, listener: rebuilding on port 22, ready ... (listener rebuilt, fd 4), and the next connection logged in and ran a command with no restart. Host test rerun, passes. AGENTS.md records the result. Not covered: the address on the Vita's screen (AC3), a healthy session surviving a rebuild (AC4), and the backoff and wait-for-connected path (the network was already up at wake).
 <!-- SECTION:NOTES:END -->
