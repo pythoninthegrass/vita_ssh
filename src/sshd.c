@@ -49,6 +49,7 @@
 #include <psp2/sysmodule.h>
 
 #include "network.h"
+#include "sh_listen.h"
 
 /*
  * scePowerSetIdleTimerCount() is not in psp2/power.h, but the ScePower stub the
@@ -108,6 +109,8 @@ static slot_t slots[SSHD_MAX_SESSIONS];
 static int pumping_slot = -1;
 static int listen_port;
 static volatile int quit_requested;
+/* Whether the listening socket works; on_incoming() reports into it and server_loop() acts on it. */
+static sh_listen_t listener_health;
 
 static char log_ring[CONSOLE_LINES][CONSOLE_WIDTH];
 static int log_head;
@@ -501,8 +504,12 @@ static int on_incoming(socket_t fd, int revents, void *userdata)
          * -2143223389 ()" -- so print the hex, which is the only legible form. */
         sh_console_log("accept failed: errno %d (0x%08X) %s", error,
                        (unsigned int)error, strerror(error));
-        return SSH_OK; /* spurious readiness: nothing to do */
+        /* The listener cannot be replaced from inside its own poll callback; server_loop() does it. A network
+         * change leaves the old socket readable once and then silent, so one failure is enough to rebuild. */
+        sh_listen_failed(&listener_health, sceKernelGetProcessTimeWide());
+        return SSH_OK;
     }
+    sh_listen_accepted(&listener_health);
     sh_console_log("accept returned fd %d, family %d", (int)client,
                    (int)peer.sin_family);
     if (peer.sin_family == AF_INET) {
@@ -626,6 +633,66 @@ static ssh_bind make_bind(const sh_auth_t *auth, int port)
     return bind;
 }
 
+static int net_connected(void)
+{
+    int state = 0;
+
+    return sceNetCtlInetGetState(&state) == 0 && state == SCE_NETCTL_STATE_CONNECTED;
+}
+
+static void listener_drop(ssh_bind *bind)
+{
+    if (*bind == NULL) {
+        return;
+    }
+    ssh_event_remove_fd(poll_event, ssh_bind_get_fd(*bind));
+    ssh_bind_free(*bind);
+    *bind = NULL;
+}
+
+/* Replaces the listening socket after it failed (sceNet kills it when the network changes under a suspend). A
+ * failure here leaves it down for sh_listen_failed()'s backoff; open sessions are separate sockets and stay. */
+static void listener_rebuild(ssh_bind *bind, const sh_auth_t *auth, const char *ip)
+{
+    unsigned long long now = sceKernelGetProcessTimeWide();
+
+    sh_console_log("listener: rebuilding on port %d", listen_port);
+    listener_drop(bind);
+    if (!net_connected()) {
+        sh_console_log("listener: network is not connected; will retry");
+        sh_listen_failed(&listener_health, now);
+        return;
+    }
+    *bind = make_bind(auth, listen_port);
+    if (*bind == NULL) {
+        sh_console_log("listener: could not bind port %d; will retry", listen_port);
+        sh_listen_failed(&listener_health, now);
+        return;
+    }
+    if (ssh_event_add_fd(poll_event, ssh_bind_get_fd(*bind), POLLIN, on_incoming, *bind) != SSH_OK) {
+        sh_console_log("listener: could not watch the new socket; will retry");
+        ssh_bind_free(*bind);
+        *bind = NULL;
+        sh_listen_failed(&listener_health, now);
+        return;
+    }
+    sh_listen_rebuilt(&listener_health);
+    sh_console_log("ready: ssh any@%s -p %d (listener rebuilt, fd %d)", ip, listen_port,
+                   (int)ssh_bind_get_fd(*bind));
+}
+
+/* Re-reads the address so the screen and the ready line follow a network change; logs only when it moves. */
+static void refresh_ip(char *ip, size_t len)
+{
+    char now_ip[64];
+
+    local_ip(now_ip, sizeof(now_ip));
+    if (strcmp(ip, now_ip) != 0) {
+        sh_console_log("address changed: %s -> %s", ip, now_ip);
+        snprintf(ip, len, "%s", now_ip);
+    }
+}
+
 /* ------------------------------------------------------------------ */
 /* the loop                                                           */
 /* ------------------------------------------------------------------ */
@@ -646,7 +713,7 @@ static int start_pressed(void)
     return 0;
 }
 
-static void server_loop(ssh_bind bind, const sh_auth_t *auth, vita2d_pgf *font)
+static void server_loop(ssh_bind *bind, const sh_auth_t *auth, vita2d_pgf *font)
 {
     unsigned long long next_draw = 0;
     unsigned long long next_power_tick = 0;
@@ -661,7 +728,7 @@ static void server_loop(ssh_bind bind, const sh_auth_t *auth, vita2d_pgf *font)
 
     local_ip(ip, sizeof(ip));
     sh_console_log("ready: ssh any@%s -p %d", ip, listen_port);
-    sh_console_log("poll: watching listener fd %d", (int)ssh_bind_get_fd(bind));
+    sh_console_log("poll: watching listener fd %d", (int)ssh_bind_get_fd(*bind));
 
     while (!quit_requested) {
         int i;
@@ -676,6 +743,10 @@ static void server_loop(ssh_bind bind, const sh_auth_t *auth, vita2d_pgf *font)
             /* dopoll reports an error for any session's socket; the per-session
              * check right below is what decides who to drop, so there is
              * nothing to do here but keep going. */
+        }
+        if (sh_listen_due(&listener_health, sceKernelGetProcessTimeWide())) {
+            refresh_ip(ip, sizeof(ip));
+            listener_rebuild(bind, auth, ip);
         }
         for (i = 0; i < SSHD_MAX_SESSIONS; i++) {
             int pumped;
@@ -732,6 +803,7 @@ static void server_loop(ssh_bind bind, const sh_auth_t *auth, vita2d_pgf *font)
              * and the device sleeps on its own schedule, rather than the
              * server holding it awake until the battery is flat. */
             if (now >= next_power_tick) {
+                refresh_ip(ip, sizeof(ip));
                 if (count_sessions() > 0 || !scePowerIsLowBattery()) {
                     power_tick();
                 }
@@ -817,6 +889,7 @@ static int server_thread(SceSize args, void *argp)
     } else if (sh_auth_prepare(&auth) != 0) {
         sh_console_log("error: cannot start without a host key");
     } else {
+        sh_listen_init(&listener_health);
         ports[0] = SSHD_PORT_PRIMARY;
         ports[1] = SSHD_PORT_FALLBACK;
         for (p = 0; p < 2; p++) {
@@ -842,7 +915,7 @@ static int server_thread(SceSize args, void *argp)
              * awake with nobody touching it. */
             sh_console_log("power: idle timer reset and power ticks 1/s; "
                            "the device stays awake while the server runs");
-            server_loop(bind, &auth, font);
+            server_loop(&bind, &auth, font);
         }
     }
 

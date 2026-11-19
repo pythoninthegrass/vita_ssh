@@ -159,6 +159,7 @@ add_executable(${VITA_SERVER_NAME}
   src/sh_alias.c
   src/sh_env.c
   src/sh_lineq.c
+  src/sh_listen.c
   src/sh_defer.c
   src/sh_chain.c
   src/sh_grep.c
