@@ -263,6 +263,8 @@ see each other's. `TERM` is what the client's pty request named (`dumb` until th
 the pty request is the one authority for window size. `PATH` is decorative: commands come
 from the builtin table, never from a search path.
 
+`du [-ahks] [PATH...]` prints one `SIZE<TAB>PATH` line per directory, children before their parent and the argument's own total last, with paths as typed (`du .` prints `./src`). Sizes are in 1K units and a file counts its `st_size` rounded up, so they are apparent sizes: the FAT `stat()` has no block count, and a desktop `du` that rounds to clusters will show larger numbers. `-a` adds a line per file, `-s` prints only the total, `-h` prints `254M`-style sizes and `-k` is the default.
+
 `vcmd HOST PORT [LINE]` sends one newline-terminated line to a TCP port and prints the
 reply, which is how you drive a plugin's debug socket from a session you are already
 sitting in -- `vcmd 127.0.0.1 1339 status` for the Wi-Fi Turbo remote control, `1338`

@@ -164,6 +164,7 @@ add_executable(${VITA_SERVER_NAME}
   src/sh_defer.c
   src/sh_chain.c
   src/sh_exit.c
+  src/sh_du.c
   src/sh_grep.c
   src/sh_headtail.c
   src/sh_textops.c

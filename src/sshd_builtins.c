@@ -16,6 +16,7 @@
 #include "sshd.h"
 #include "sh_alias.h"
 #include "sh_chain.h"
+#include "sh_du.h"
 #include "sh_exit.h"
 #include "sh_expand.h"
 #include "sshd_curl.h"
@@ -2921,86 +2922,203 @@ static int cmd_df(sh_session_t *s, int argc, char **argv)
     return 0;
 }
 
-static long long du_tree(sh_session_t *s, const sh_target_t *t, int depth,
-                         sh_walk_t *w)
+/* State shared down a du walk. typed is the path as the user wrote it plus the
+ * sub-path walked so far; each level appends its name and cuts it back, so it
+ * is the one place a recursive call's path survives the next call's loop. */
+typedef struct {
+    sh_session_t *s;
+    sh_walk_t *w;
+    char typed[SH_POSIX_PATH_MAX];
+    int all, summary, human, failed;
+} du_ctx_t;
+
+static void du_print(du_ctx_t *c, long long kb)
 {
-    DIR *dir;
+    char size[24];
+
+    if (c->human) {
+        sh_du_human(size, sizeof(size), kb);
+    } else {
+        snprintf(size, sizeof(size), "%lld", kb);
+    }
+    sh_printf(c->s, "%s\t%s\n", size, c->typed);
+}
+
+/* Appends name to c->typed. Returns the length to cut back to, or -1 if it
+ * does not fit. */
+static int du_push(du_ctx_t *c, const char *name)
+{
+    size_t len = strlen(c->typed);
+    size_t sep = (len > 0 && c->typed[len - 1] == '/') ? 0 : 1;
+
+    if (len + sep + strlen(name) >= sizeof(c->typed)) {
+        return -1;
+    }
+    if (sep) {
+        c->typed[len] = '/';
+    }
+    strcpy(c->typed + len + sep, name);
+    return (int)len;
+}
+
+/* Prints a line for every directory under t, children before the directory
+ * itself, and returns the tree's size in 1K units. A file counts its st_size
+ * rounded up; the directory entry itself counts nothing. */
+static long long du_tree(du_ctx_t *c, const sh_target_t *t, int depth)
+{
+    DIR *dir = NULL;
     struct dirent *ent;
     long long total = 0;
 
-    dir = opendir(t->sce);
-    if (dir == NULL) {
-        return 0;
+    if (depth > MAX_DEPTH) {
+        sh_eprintf(c->s, "du: %s: Too many levels of directories\n", c->typed);
+        c->failed = 1;
+    } else if ((dir = opendir(t->sce)) == NULL) {
+        sh_eprintf(c->s, "du: %s: %s\n", c->typed, strerror(errno));
+        c->failed = 1;
     }
-    while ((ent = readdir(dir)) != NULL) {
+    while (dir != NULL && (ent = readdir(dir)) != NULL) {
         struct stat st;
+        int cut;
 
-        sh_session_yield(s);
-        if (sh_session_interrupted(s) || depth > MAX_DEPTH) {
+        sh_session_yield(c->s);
+        if (sh_session_interrupted(c->s)) {
             break;
         }
         if (sh_is_dot(ent->d_name)) {
             continue;
         }
-        if (sh_join(w->a, sizeof(w->a), t->sce, ent->d_name) != 0) {
+        cut = du_push(c, ent->d_name);
+        if (cut < 0 || sh_join(c->w->a, sizeof(c->w->a), t->sce, ent->d_name) != 0) {
+            sh_eprintf(c->s, "du: %s/%s: %s\n", c->typed, ent->d_name,
+                       strerror(ENAMETOOLONG));
+            c->failed = 1;
+            if (cut >= 0) {
+                c->typed[cut] = '\0';
+            }
             continue;
         }
-        if (stat(w->a, &st) != 0) {
-            continue;
-        }
-        if (!S_ISDIR(st.st_mode)) {
-            total += (long long)st.st_size;
-            continue;
-        }
-        {
+        if (stat(c->w->a, &st) != 0) {
+            sh_eprintf(c->s, "du: %s: %s\n", c->typed, strerror(errno));
+            c->failed = 1;
+        } else if (!S_ISDIR(st.st_mode)) {
+            long long kb = sh_du_kb((long long)st.st_size);
+
+            total += kb;
+            if (c->all) {
+                du_print(c, kb);
+            }
+        } else {
             sh_fsctx_t fs;
             sh_target_t child;
+            int rc;
 
             fs.cwd = t->posix;
             fs.home = t->posix;
-            if (sh_path_resolve(&fs, ent->d_name, &child) == 0) {
-                total += du_tree(s, &child, depth + 1, w);
+            rc = sh_path_resolve(&fs, ent->d_name, &child);
+            if (rc != 0) {
+                sh_eprintf(c->s, "du: %s: %s\n", c->typed, strerror(rc));
+                c->failed = 1;
+            } else {
+                total += du_tree(c, &child, depth + 1);
             }
         }
+        c->typed[cut] = '\0';
     }
-    closedir(dir);
+    if (dir != NULL) {
+        closedir(dir);
+    }
+    if (!sh_session_interrupted(c->s) && (!c->summary || depth == 0)) {
+        du_print(c, total);
+    }
     return total;
 }
 
 static int cmd_du(sh_session_t *s, int argc, char **argv)
 {
     const char *targets[MAX_ARGS];
-    int i, n, status = 0;
-    sh_walk_t *w;
-    char human[16];
+    int i, n, bad = 0;
+    du_ctx_t *c;
 
-    n = collect_targets(argv, argc, "ah", targets, MAX_ARGS, NULL);
-    if (n == 0) {
-        targets[n++] = NULL; /* du with no argument means the cwd */
-    }
-    w = malloc(sizeof(*w));
-    if (w == NULL) {
+    c = calloc(1, sizeof(*c));
+    if (c == NULL) {
         sh_eprintf(s, "du: out of memory\n");
         return 1;
     }
-    for (i = 0; i < n; i++) {
-        sh_target_t t;
+    c->s = s;
+    for (i = 1; i < argc; i++) {
+        const char *f;
 
+        if (argv[i][0] != '-' || argv[i][1] == '\0') {
+            continue;
+        }
+        for (f = argv[i] + 1; *f != '\0'; f++) {
+            if (*f == 'a') {
+                c->all = 1;
+            } else if (*f == 's') {
+                c->summary = 1;
+            } else if (*f == 'h') {
+                c->human = 1;
+            } else if (*f != 'k') { /* -k is the default unit */
+                bad = *f;
+            }
+        }
+    }
+    if (bad != 0) {
+        sh_eprintf(s, "du: illegal option -- %c\n", bad);
+        free(c);
+        return 1;
+    }
+    if (c->all && c->summary) {
+        sh_eprintf(s, "du: cannot both summarize and show all entries\n");
+        free(c);
+        return 1;
+    }
+    n = collect_targets(argv, argc, "ahks", targets, MAX_ARGS, NULL);
+    if (n == 0) {
+        targets[n++] = NULL; /* du with no argument means the cwd */
+    }
+    c->w = malloc(sizeof(*c->w));
+    if (c->w == NULL) {
+        sh_eprintf(s, "du: out of memory\n");
+        free(c);
+        return 1;
+    }
+    for (i = 0; i < n && !sh_session_interrupted(s); i++) {
+        const char *typed = targets[i] ? targets[i] : ".";
+        sh_target_t t;
+        struct stat st;
+
+        if (strlen(typed) >= sizeof(c->typed)) {
+            sh_eprintf(s, "du: %.64s...: %s\n", typed, strerror(ENAMETOOLONG));
+            c->failed = 1;
+            continue;
+        }
+        strcpy(c->typed, typed);
         if (resolve_arg(s, "du", targets[i], &t) != 0) {
-            status = 1;
+            c->failed = 1;
             continue;
         }
         if (t.kind == SH_TARGET_ROOT) {
-            sh_eprintf(s, "du: %s: Invalid argument\n",
-                       targets[i] ? targets[i] : ".");
-            status = 1;
+            sh_eprintf(s, "du: %s: Invalid argument\n", typed);
+            c->failed = 1;
             continue;
         }
-        human_size(human, sizeof(human), du_tree(s, &t, 0, w));
-        sh_printf(s, "%8s  %s\n", human, t.posix);
+        if (t.kind != SH_TARGET_DEVICE && stat_target(&t, &st) != 0) {
+            sh_eprintf(s, "du: %s: %s\n", typed, strerror(errno));
+            c->failed = 1;
+            continue;
+        }
+        if (t.kind != SH_TARGET_DEVICE && !S_ISDIR(st.st_mode)) {
+            du_print(c, sh_du_kb((long long)st.st_size));
+            continue;
+        }
+        du_tree(c, &t, 0);
     }
-    free(w);
-    return status;
+    i = c->failed;
+    free(c->w);
+    free(c);
+    return i;
 }
 
 /* ------------------------------------------------------------------ */
@@ -3873,7 +3991,7 @@ static const sh_builtin_t builtins[] = {
     {"date", cmd_date, "date -- print the current date and time"},
     {"devices", cmd_devices, "devices -- every Vita device and whether it is mounted"},
     {"df", cmd_df, "df [DEVICE] -- free and total space per device"},
-    {"du", cmd_du, "du [PATH] -- total size of a tree"},
+    {"du", cmd_du, "du [-ahks] [PATH...] -- size in 1K of each directory (st_size rounded up), -a files too, -s total only, -h readable"},
     {"echo", cmd_echo, "echo [-n] TEXT... -- print its arguments"},
     {"env", cmd_env, "env -- print the environment"},
     {"exit", cmd_exit, "exit [N] -- end this session with status N (default: the last command's)"},

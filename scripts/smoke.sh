@@ -96,6 +96,16 @@ run_exec() {
   $V "cat /ux0/data/$T-copy/sub/f.txt" >/dev/null 2>&1; RC=$?
   check "cp -r copies a tree" 0 "$RC"
   $V "du /ux0/data/$T"           >/dev/null 2>&1; RC=$?; check "du walks a tree" 0 "$RC"
+  # shape: one line per directory, child first, size in 1K (6 bytes -> 1), path as typed
+  OUT=$($V "du /ux0/data/$T"); WANT=$(printf '1\t/ux0/data/%s/sub\n1\t/ux0/data/%s' "$T" "$T")
+  if [ "$OUT" = "$WANT" ]; then check "du prints a line per directory" ok ok
+  else printf 'FAIL  du prints a line per directory (got "%s")\n' "$OUT"; FAIL=$((FAIL+1)); fi
+  OUT=$($V "du -sh /ux0/data/$T"); WANT=$(printf '1.0K\t/ux0/data/%s' "$T")
+  if [ "$OUT" = "$WANT" ]; then check "du -sh prints one total" ok ok
+  else printf 'FAIL  du -sh prints one total (got "%s")\n' "$OUT"; FAIL=$((FAIL+1)); fi
+  OUT=$($V "du -a /ux0/data/$T" | head -1); WANT=$(printf '1\t/ux0/data/%s/sub/f.txt' "$T")
+  if [ "$OUT" = "$WANT" ]; then check "du -a lists files" ok ok
+  else printf 'FAIL  du -a lists files (got "%s")\n' "$OUT"; FAIL=$((FAIL+1)); fi
   # cross-device mv: the first candidate device that accepts the write
   MVOK=""
   for DEV2 in uma0 tm0 grw0 ud0 ur0; do
