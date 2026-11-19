@@ -254,7 +254,7 @@ than to libc, and POSIX paths are mapped onto sceIo devices at the boundary.
 
 ```
 :  alias  cat  cd  cp  curl  date  devices  df  du  echo  env  exit  false  grep  head  help
-ls   mkdir  mv   printenv  pwd     rm   rmdir  sort  stat  tail  touch  true  unalias  uname  uniq  vcmd  vpk  wc  whoami
+ls   mkdir  mv   printenv  pwd     rm   rmdir  sort  stat  tail  touch  true  unalias  uname  uniq  vcmd  vpk  wc  wget  whoami
 ```
 
 `env` and `printenv [NAME...]` report this session's own variables, so two sessions never
@@ -378,6 +378,8 @@ console serving while it runs. Exit status is **0**, curl's own code for a trans
 (**28** timeout, **60** certificate, **63** size limit, ...), or **2** for a bad command line or
 URL. Name resolution is libc's blocking resolver, so a slow DNS server holds the shell for as
 long as it takes to answer.
+
+`wget [-q] [-O FILE] [--no-check-certificate] [--content-disposition] URL` is the same engine under wget's defaults, not a second HTTP client: `wget URL` behaves like `curl -L -f -O URL`, so it follows up to 10 redirects, exits nonzero on an HTTP 4xx or 5xx without saving the error page, and saves into the current directory under the URL's last path segment. Certificate checks, the 256 MB cap, the timeouts, the `NAME.part` handling and the file-name rules above are the same code, so the two can never disagree about whether a download was safe. `-O FILE` names the file (resolved through the path layer, with the writability check) and always wins over a server-supplied name; `-O -` writes the body to the terminal. `--content-disposition` is wget's spelling of `-J`. `-q` hides the progress meter, and an error still prints. `-r`, `-p` and `-m` are refused (`wget: -r: recursive download is not supported`) rather than ignored. Differences from GNU wget: an existing file is replaced, not kept as `NAME.1`, and the exit status is curl's code (**22** for an HTTP error, **28** timeout, **60** certificate, **63** size limit, **2** for a bad command line) rather than wget's 1 to 8.
 
 `/` lists the mounted devices and `/ux0` is the memory card; `devices` and `df` tell you
 what is actually there. Quoting (`'…'`, `"…"`, `\`) works, `*` and `?` expand in arguments

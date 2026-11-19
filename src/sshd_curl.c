@@ -70,7 +70,7 @@ static int choose_name(xfer_t *x, const char **name)
         int r = x->dispo_too_long ? -1 : sh_curl_disposition_name(x->dispo, clean, sizeof(clean));
 
         if (r < 0) {
-            sh_eprintf(x->s, "curl: refusing the file name in Content-Disposition: %s\n", x->dispo);
+            sh_eprintf(x->s, "%s: refusing the file name in Content-Disposition: %s\n", x->o->tool, x->dispo);
             return -1;
         }
         if (r == 0) {
@@ -91,12 +91,12 @@ static int open_target(xfer_t *x)
     if (choose_name(x, &name) != 0 || x->o->resolve_out(x->o->ctx, name, x->final_sce, sizeof(x->final_sce)) != 0)
         return -1;
     if (snprintf(x->part_sce, sizeof(x->part_sce), "%s.part", x->final_sce) >= (int)sizeof(x->part_sce)) {
-        sh_eprintf(x->s, "curl: %s: %s\n", name, strerror(ENAMETOOLONG));
+        sh_eprintf(x->s, "%s: %s: %s\n", x->o->tool, name, strerror(ENAMETOOLONG));
         return -1;
     }
     x->fd = open(x->part_sce, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (x->fd < 0) {
-        sh_eprintf(x->s, "curl: %s: %s\n", name, strerror(errno));
+        sh_eprintf(x->s, "%s: %s: %s\n", x->o->tool, name, strerror(errno));
         return -1;
     }
     if (name != x->label)
@@ -203,30 +203,30 @@ static void report(xfer_t *x, CURLcode rc, const char *host, const char *detail,
 
     switch (rc) {
     case CURLE_HTTP_RETURNED_ERROR:
-        sh_eprintf(s, "curl: %s: the server answered HTTP %ld\n", host, http);
+        sh_eprintf(s, "%s: %s: the server answered HTTP %ld\n", x->o->tool, host, http);
         break;
     case CURLE_COULDNT_RESOLVE_HOST:
-        sh_eprintf(s, "curl: could not resolve host %s\n", host);
+        sh_eprintf(s, "%s: could not resolve host %s\n", x->o->tool, host);
         break;
     case CURLE_COULDNT_CONNECT:
-        sh_eprintf(s, "curl: could not connect to %s\n", host);
+        sh_eprintf(s, "%s: could not connect to %s\n", x->o->tool, host);
         break;
     case CURLE_OPERATION_TIMEDOUT:
-        sh_eprintf(s, "curl: %s: timed out (no connection in %d s, or under 1 KB/s for %d s)\n", host,
+        sh_eprintf(s, "%s: %s: timed out (no connection in %d s, or under 1 KB/s for %d s)\n", x->o->tool, host,
                    SSHD_CURL_CONNECT_S, SSHD_CURL_STALL_S);
         break;
     case CURLE_TOO_MANY_REDIRECTS:
-        sh_eprintf(s, "curl: %s: more than %d redirects (limit reached or a redirect loop)\n", host,
+        sh_eprintf(s, "%s: %s: more than %d redirects (limit reached or a redirect loop)\n", x->o->tool, host,
                    SSHD_CURL_MAX_REDIRS);
         break;
     case CURLE_PEER_FAILED_VERIFICATION:
     case CURLE_SSL_CACERT_BADFILE:
     case CURLE_SSL_CERTPROBLEM:
-        sh_eprintf(s, "curl: %s: certificate could not be verified (%s); -k skips the check\n", host,
-                   detail[0] ? detail : curl_easy_strerror(rc));
+        sh_eprintf(s, "%s: %s: certificate could not be verified (%s); %s skips the check\n", x->o->tool, host,
+                   detail[0] ? detail : curl_easy_strerror(rc), x->o->insecure_flag);
         break;
     default:
-        sh_eprintf(s, "curl: %s: %s\n", host, detail[0] ? detail : curl_easy_strerror(rc));
+        sh_eprintf(s, "%s: %s: %s\n", x->o->tool, host, detail[0] ? detail : curl_easy_strerror(rc));
         break;
     }
 }
@@ -243,7 +243,7 @@ static void finish_file(xfer_t *x, int ok)
     }
     unlink(x->final_sce);
     if (rename(x->part_sce, x->final_sce) != 0) {
-        sh_eprintf(x->s, "curl: %s: %s; the download is kept as %s\n", x->label, strerror(errno), x->part_sce);
+        sh_eprintf(x->s, "%s: %s: %s; the download is kept as %s\n", x->o->tool, x->label, strerror(errno), x->part_sce);
     }
 }
 
@@ -260,24 +260,25 @@ int sshd_curl_run(sh_session_t *s, const sshd_curl_opts_t *o)
     time_t shown = 0;
 
     if (sh_curl_url_check(o->url, &why) != 0) {
-        sh_eprintf(s, "curl: %s: %s\n", o->url, why);
+        sh_eprintf(s, "%s: %s: %s\n", o->tool, o->url, why);
         return 2;
     }
     if (sh_curl_url_host(o->url, host, sizeof(host)) != 0)
         snprintf(host, sizeof(host), "the server");
     if (o->insecure) {
-        sh_eprintf(s, "curl: warning: certificate verification is off (-k); the connection is not authenticated\n");
+        sh_eprintf(s, "%s: warning: certificate verification is off (%s); the connection is not authenticated\n", o->tool, o->insecure_flag);
     } else if (strncasecmp(o->url, "https://", 8) == 0 && (ca = pick_ca_store()) == NULL) {
-        sh_eprintf(s, "curl: no CA store found (%s, %s); -k skips certificate checks\n", ca_stores[0], ca_stores[1]);
+        sh_eprintf(s, "%s: no CA store found (%s, %s); %s skips certificate checks\n", o->tool, ca_stores[0], ca_stores[1],
+                   o->insecure_flag);
         return 2;
     }
     if (ensure_global_init() != 0) {
-        sh_eprintf(s, "curl: libcurl failed to start\n");
+        sh_eprintf(s, "%s: libcurl failed to start\n", o->tool);
         return 2;
     }
     x = calloc(1, sizeof(*x));
     if (x == NULL) {
-        sh_eprintf(s, "curl: out of memory\n");
+        sh_eprintf(s, "%s: out of memory\n", o->tool);
         return 2;
     }
     x->s = s;
@@ -287,7 +288,7 @@ int sshd_curl_run(sh_session_t *s, const sshd_curl_opts_t *o)
     err[0] = '\0';
 
     if (o->by_url_name && sh_curl_url_basename(o->url, x->url_name, sizeof(x->url_name)) != 0) {
-        sh_eprintf(s, "curl: %s: no usable file name in the URL; name one with -o\n", o->url);
+        sh_eprintf(s, "%s: %s: no usable file name in the URL; name one with %s\n", o->tool, o->url, o->out_flag);
         goto out;
     }
     if (x->to_file && !o->head_only) {
@@ -301,7 +302,7 @@ int sshd_curl_run(sh_session_t *s, const sshd_curl_opts_t *o)
     easy = curl_easy_init();
     multi = curl_multi_init();
     if (easy == NULL || multi == NULL) {
-        sh_eprintf(s, "curl: out of memory\n");
+        sh_eprintf(s, "%s: out of memory\n", o->tool);
         goto out;
     }
     curl_easy_setopt(easy, CURLOPT_URL, o->url);
@@ -337,7 +338,7 @@ int sshd_curl_run(sh_session_t *s, const sshd_curl_opts_t *o)
         if (!running)
             break;
         if (sh_session_interrupted(s)) {
-            sh_eprintf(s, "curl: session closed, transfer abandoned\n");
+            sh_eprintf(s, "%s: session closed, transfer abandoned\n", o->tool);
             status = 1;
             goto out;
         }
@@ -374,13 +375,13 @@ int sshd_curl_run(sh_session_t *s, const sshd_curl_opts_t *o)
         if (x->capped || rc == CURLE_FILESIZE_EXCEEDED) {
             status = (int)CURLE_FILESIZE_EXCEEDED;
             if (!o->silent || o->show_errors)
-                sh_eprintf(s, "curl: %s: larger than the %u MB limit; stopped%s\n", host, SSHD_CURL_MAX_BYTES >> 20,
+                sh_eprintf(s, "%s: %s: larger than the %u MB limit; stopped%s\n", o->tool, host, SSHD_CURL_MAX_BYTES >> 20,
                            x->to_file ? " and the partial file removed" : "");
         } else if (x->open_failed) {
             status = 23; /* open_target() already said why */
         } else if (x->write_errno) {
             if (!o->silent || o->show_errors)
-                sh_eprintf(s, "curl: %s: %s\n", x->label, strerror(x->write_errno));
+                sh_eprintf(s, "%s: %s: %s\n", o->tool, x->label, strerror(x->write_errno));
             status = 23;
         } else if (!o->silent || o->show_errors) {
             report(x, rc, host, err, http);

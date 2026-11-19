@@ -1,4 +1,4 @@
-/* The HTTP(S) download engine behind curl: libcurl driven from the server's poll loop. */
+/* The HTTP(S) download engine behind curl and wget: libcurl driven from the server's poll loop. */
 #ifndef SSHD_CURL_H
 #define SSHD_CURL_H
 
@@ -15,6 +15,9 @@
 #define SSHD_CURL_STALL_S 30
 
 typedef struct {
+    const char *tool;          /* name that prefixes messages: "curl" or "wget" */
+    const char *insecure_flag; /* the caller's spelling of the insecure switch, for hints */
+    const char *out_flag;      /* the caller's spelling of the file name switch, for hints */
     const char *url;
     const char *out_arg;   /* -o FILE, or NULL */
     int by_url_name;       /* -O: name the file after the URL's last path segment */

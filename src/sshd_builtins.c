@@ -20,6 +20,7 @@
 #include "sh_grep.h"
 #include "sh_headtail.h"
 #include "sh_textops.h"
+#include "sh_wget_args.h"
 
 #include <dirent.h>
 #include <errno.h>
@@ -3011,26 +3012,33 @@ static int cmd_printenv(sh_session_t *s, int argc, char **argv)
     return status;
 }
 
-/* Where curl may put a file: resolved through the path layer, on a writable device, in a directory that exists. */
-static int curl_resolve_out(void *ctx, const char *name, char *sce, size_t cap)
+/* Who a download's file-name check speaks for, and whose session it is. */
+typedef struct {
+    sh_session_t *s;
+    const char *tool;
+} fetch_ctx_t;
+
+/* Where curl or wget may put a file: resolved through the path layer, on a writable device, in a directory that exists. */
+static int fetch_resolve_out(void *ctx, const char *name, char *sce, size_t cap)
 {
-    sh_session_t *s = ctx;
+    fetch_ctx_t *f = ctx;
+    sh_session_t *s = f->s;
     sh_target_t t, dir;
     sh_fsctx_t fs;
     char parent[SH_POSIX_PATH_MAX];
     struct stat st;
 
-    if (resolve_arg(s, "curl", name, &t) != 0 || check_writable(s, "curl", name, &t) != 0) {
+    if (resolve_arg(s, f->tool, name, &t) != 0 || check_writable(s, f->tool, name, &t) != 0) {
         return -1;
     }
     fs_of(s, &fs);
     if (sh_parent(parent, sizeof(parent), t.posix) != 0 || sh_path_resolve(&fs, parent, &dir) != 0 ||
         dir.kind == SH_TARGET_ROOT || stat(dir.sce, &st) != 0 || !S_ISDIR(st.st_mode)) {
-        sh_eprintf(s, "curl: %s: No such file or directory\n", name);
+        sh_eprintf(s, "%s: %s: No such file or directory\n", f->tool, name);
         return -1;
     }
     if (strlen(t.sce) >= cap) {
-        sh_eprintf(s, "curl: %s: %s\n", name, strerror(ENAMETOOLONG));
+        sh_eprintf(s, "%s: %s: %s\n", f->tool, name, strerror(ENAMETOOLONG));
         return -1;
     }
     memcpy(sce, t.sce, strlen(t.sce) + 1);
@@ -3046,11 +3054,15 @@ static int curl_usage(sh_session_t *s)
 static int cmd_curl(sh_session_t *s, int argc, char **argv)
 {
     sshd_curl_opts_t o;
+    fetch_ctx_t fc = {s, "curl"};
     int i, j, flags_done = 0;
 
     memset(&o, 0, sizeof(o));
-    o.resolve_out = curl_resolve_out;
-    o.ctx = s;
+    o.tool = "curl";
+    o.insecure_flag = "-k";
+    o.out_flag = "-o";
+    o.resolve_out = fetch_resolve_out;
+    o.ctx = &fc;
     for (i = 1; i < argc; i++) {
         const char *a = argv[i];
 
@@ -3112,6 +3124,42 @@ static int cmd_curl(sh_session_t *s, int argc, char **argv)
         sh_eprintf(s, "curl: -I prints to the terminal; redirect it with >\n");
         return 2;
     }
+    return sshd_curl_run(s, &o);
+}
+
+/* wget is curl's engine with wget's defaults: follow redirects, fail on an HTTP error, save under the URL's name. */
+static int cmd_wget(sh_session_t *s, int argc, char **argv)
+{
+    sshd_curl_opts_t o;
+    sh_wget_args_t a;
+    fetch_ctx_t fc = {s, "wget"};
+    char msg[160];
+    int rc;
+
+    rc = sh_wget_parse(argc, argv, &a, msg, sizeof(msg));
+    if (rc < 0) {
+        sh_eprintf(s, "wget: %s\n", msg);
+        return 2;
+    }
+    if (rc > 0) {
+        sh_eprintf(s, "usage: wget [-q] [-O FILE] [--no-check-certificate] [--content-disposition] URL\n");
+        return 2;
+    }
+    memset(&o, 0, sizeof(o));
+    o.tool = "wget";
+    o.insecure_flag = "--no-check-certificate";
+    o.out_flag = "-O";
+    o.url = a.url;
+    o.out_arg = a.out_file;
+    o.by_url_name = a.out_file == NULL && !a.to_terminal;
+    o.use_dispo = a.use_dispo && o.by_url_name;
+    o.follow = 1;
+    o.fail_http = 1;
+    o.silent = a.quiet;
+    o.show_errors = a.quiet;
+    o.insecure = a.insecure;
+    o.resolve_out = fetch_resolve_out;
+    o.ctx = &fc;
     return sshd_curl_run(s, &o);
 }
 
@@ -3733,6 +3781,8 @@ static const sh_builtin_t builtins[] = {
     {"vpk", cmd_vpk,
      "vpk list FILE | vpk install [-r | --reinstall] FILE -- inspect a VPK, or install it: this app updates itself, another title installs unless it is running, --reinstall (-r) replaces an installed one"},
     {"wc", cmd_wc, "wc [-lwc] [FILE...] -- count lines, words and bytes of files or stdin"},
+    {"wget", cmd_wget,
+     "wget [-q] [-O FILE] [--no-check-certificate] [--content-disposition] URL -- fetch an http(s) URL into the current directory under its name; same engine as curl -L -f -O"},
     {"which", cmd_which, "which COMMAND... -- report whether COMMAND is one of these builtins"},
     {"whoami", cmd_whoami, "whoami -- the name you logged in as"},
 };
