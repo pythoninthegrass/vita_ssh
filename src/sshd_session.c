@@ -112,12 +112,13 @@ struct sh_session {
     int shell;
     int authenticated;
     int exit_requested;
+    int exit_status; /* what a shell session reports when exit_requested ends it */
     int finished;
     const char *end_reason; /* why the session ended, first cause wins; NULL until it does */
     int in_pump; /* set while sh_session_pump() runs a command: only then may a write wait on the poll loop */
     int in_cb; /* set while on_channel_data() feeds the editor: a libssh callback, so no write may wait on the poll loop */
     sh_defer_t defer; /* what the editor wrote from a callback while a command ran; sh_session_pump() sends it when the command ends */
-    time_t sftp_closing; /* when the sftp channel close was started, 0 before */
+    time_t close_started; /* when the channel close was started for an sftp session or an exit, 0 before */
     unsigned long long last_yield_us; /* system time of the last sh_session_yield() slice */
 
     /* Completed lines, pushed by the editor on Enter (or by exec) and popped by sh_session_pump(). */
@@ -488,10 +489,11 @@ void sh_session_set_cwd(sh_session_t *s, const char *posix)
     snprintf(s->cwd, sizeof(s->cwd), "%s", posix);
 }
 
-void sh_session_request_exit(sh_session_t *s)
+void sh_session_request_exit(sh_session_t *s, int status)
 {
     if (s != NULL) {
         note_end(s, "exit command");
+        s->exit_status = status;
         s->exit_requested = 1;
     }
 }
@@ -1199,6 +1201,7 @@ static void feed_byte(sh_session_t *s, unsigned char c)
     case KEY_CTRL_D:
         if (s->linelen == 0) {
             note_end(s, "ctrl-d on an empty line");
+            s->exit_status = s->last_status;
             s->exit_requested = 1; /* EOF on an empty line, as every shell does */
         }
         return;
@@ -1708,13 +1711,21 @@ int sh_session_pump(sh_session_t *s)
         return 1;
     }
     if (s->exit_requested) {
-        if (s->channel != NULL) {
-            ssh_channel_request_send_exit_status(s->channel, 0);
+        time_t now = time(NULL);
+
+        s->finished = 1;
+        if (s->channel == NULL) {
+            return 1;
+        }
+        if (s->close_started == 0) {
+            s->close_started = now;
+            ssh_channel_request_send_exit_status(s->channel, s->exit_status);
             ssh_channel_send_eof(s->channel);
             ssh_channel_close(s->channel);
         }
-        s->finished = 1;
-        return 1;
+        /* Freeing the session before the client has answered the close can drop the exit status
+         * and makes its ssh exit 255; a client that never answers is let go after a few seconds. */
+        return ssh_channel_is_closed(s->channel) || now - s->close_started >= SFTP_CLOSE_WAIT_S;
     }
     if (s->sftp != NULL && !s->finished) {
         sh_fsctx_t fs;
@@ -1738,8 +1749,8 @@ int sh_session_pump(sh_session_t *s)
         }
         /* The client sent EOF or closed: nothing else ends an sftp session, and
          * its ssh waits for our channel close before it exits. */
-        if (s->sftp_closing == 0) {
-            s->sftp_closing = now;
+        if (s->close_started == 0) {
+            s->close_started = now;
             ssh_channel_request_send_exit_status(s->channel, 0);
             ssh_channel_send_eof(s->channel);
             ssh_channel_close(s->channel);
@@ -1748,7 +1759,7 @@ int sh_session_pump(sh_session_t *s)
          * makes its ssh exit 255, and scp reports that as a failed copy. A client
          * that never answers is let go after a few seconds. */
         return ssh_channel_is_closed(s->channel) ||
-               now - s->sftp_closing >= SFTP_CLOSE_WAIT_S;
+               now - s->close_started >= SFTP_CLOSE_WAIT_S;
     }
     {
         char line[SSHD_LINE_MAX];
@@ -1804,8 +1815,11 @@ int sh_session_pump(sh_session_t *s)
             sh_defer_reset(&s->defer);
         }
     }
-    if (s->exit_requested || s->finished) {
+    if (s->finished) {
         return 1;
+    }
+    if (s->exit_requested) {
+        return 0; /* the next pump reports exit_status and closes the channel before the slot is freed */
     }
     if (s->eof_seen && sh_lineq_len(&s->lineq) == 0) {
         note_end(s, "client sent EOF");

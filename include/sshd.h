@@ -132,7 +132,8 @@ int sh_session_last_status(const sh_session_t *s);
 void sh_session_set_last_status(sh_session_t *s, int status);
 /* What `$$` expands to: a number unique to this session since the server started. */
 int sh_session_id(const sh_session_t *s);
-void sh_session_request_exit(sh_session_t *s);
+/* Ends the session after the running command, reporting status (0 to 255) to a shell client. */
+void sh_session_request_exit(sh_session_t *s, int status);
 const char *sh_session_user(const sh_session_t *s);
 const char *sh_session_peer(const sh_session_t *s);
 /* Nonzero once a password or key login has succeeded. */

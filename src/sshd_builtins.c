@@ -16,6 +16,7 @@
 #include "sshd.h"
 #include "sh_alias.h"
 #include "sh_chain.h"
+#include "sh_exit.h"
 #include "sh_expand.h"
 #include "sshd_curl.h"
 #include "sh_grep.h"
@@ -3547,10 +3548,20 @@ static int cmd_help(sh_session_t *s, int argc, char **argv)
 
 static int cmd_exit(sh_session_t *s, int argc, char **argv)
 {
-    (void)argc;
-    (void)argv;
-    sh_session_request_exit(s);
-    return 0;
+    int status;
+
+    switch (sh_exit_parse(argc, argv, sh_session_last_status(s), &status)) {
+    case SH_EXIT_BAD_NUMBER:
+        sh_eprintf(s, "exit: %s: numeric argument required\n", argv[1]);
+        break;
+    case SH_EXIT_TOO_MANY:
+        sh_eprintf(s, "exit: too many arguments\n");
+        return status;
+    case SH_EXIT_END:
+        break;
+    }
+    sh_session_request_exit(s, status);
+    return status;
 }
 
 /* true, false and `:` ignore their arguments, as POSIX specifies; `:` shares cmd_true. */
@@ -3865,7 +3876,7 @@ static const sh_builtin_t builtins[] = {
     {"du", cmd_du, "du [PATH] -- total size of a tree"},
     {"echo", cmd_echo, "echo [-n] TEXT... -- print its arguments"},
     {"env", cmd_env, "env -- print the environment"},
-    {"exit", cmd_exit, "exit -- end this session"},
+    {"exit", cmd_exit, "exit [N] -- end this session with status N (default: the last command's)"},
     {"export", cmd_export,
      "export [NAME=VALUE]... -- set variables, the same as NAME=VALUE (no argument: list them, like env)"},
     {"false", cmd_false, "false [ARG...] -- do nothing, unsuccessfully (status 1)"},
