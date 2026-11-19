@@ -201,6 +201,7 @@ target_link_options(${VITA_SERVER_NAME} PRIVATE
   -Wl,--wrap=statvfs
   -Wl,--wrap=ssh_channel_write
   -Wl,--wrap=realpath
+  -Wl,-T,${CMAKE_SOURCE_DIR}/cmake/vita_seg0_slack.ld
 )
 
 # ssh is the SDK's static libssh. z is libssh's compression path and pthread is what
@@ -214,6 +215,7 @@ target_link_options(${VITA_SERVER_NAME} PRIVATE
 # SceLibKernel_stub already listed, and without it `uname -a` has no firmware to report.
 target_link_libraries(${VITA_SERVER_NAME}
   vita2d
+  curl
   ssh
   ssl
   crypto

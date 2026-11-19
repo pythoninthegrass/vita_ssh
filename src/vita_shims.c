@@ -88,3 +88,6 @@ int readlink(const char *path, char *buf, size_t bufsiz)
     (void)path; (void)buf; (void)bufsiz;
     return UNSUPPORTED("readlink");
 }
+
+// Anchors the read-only output section that cmake/vita_seg0_slack.ld pads to a page boundary.
+__attribute__((section(".vita_seg0_slack"), used)) static const char seg0_slack_anchor = 0;
