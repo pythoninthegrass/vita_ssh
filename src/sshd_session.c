@@ -1286,6 +1286,7 @@ static int on_pty_request(ssh_session session, ssh_channel channel,
     s->rows = rows;
     if (term != NULL && term[0] != '\0') {
         set_env(s, "TERM", term);
+        sh_env_lock(s->env, "TERM"); /* the client's value; a user's assignment must not replace it */
     }
     sh_console_log("pty %s %dx%d from %s", term ? term : "?", cols, rows,
                    sh_session_peer(s));
@@ -1309,6 +1310,7 @@ static int on_env_request(ssh_session session, ssh_channel channel,
     }
     if (ok) {
         if (sh_env_set(s->env, name, value) == 0) {
+            sh_env_lock(s->env, name);
             return 0;
         }
         sh_console_log("env %s from %s refused: %s", name, sh_session_peer(s), strerror(errno));

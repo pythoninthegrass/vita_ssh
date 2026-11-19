@@ -227,6 +227,39 @@ run_exec() {
   OUT=$($V "help ll" 2>/dev/null);                             check "alias: help reports an alias" 'll is an alias for `ls -la`' "$OUT"
   OUT=$($V "alias ls='ls -l' ; help ls" 2>/dev/null);          check "alias: help says an alias wins over a builtin" 'ls is an alias for `ls -l`; it wins over the builtin of the same name' "$OUT"
 
+  # --- TASK-020: session variables and $NAME expansion ---------------------
+  OUT=$($V 'T20=bar ; printenv T20 ; T20=baz ; echo $T20 ; unset T20 ; printenv T20' 2>/dev/null | tr '\n' ' ');   check "var: set, replace and unset" "bar baz " "$OUT"
+  OUT=$($V 'X=hi ; echo ${X}there $X.x "[$NOPE]" a$NOPE.b' 2>/dev/null);   check "var: braced form, unset names expand to nothing" "hithere hi.x [] a.b" "$OUT"
+  OUT=$($V 'echo a $NOPE b ; echo a "$NOPE" b' 2>/dev/null | tr '\n' '|'); check "var: unquoted unset leaves no word, quoted leaves an empty one" "a b|a  b|" "$OUT"
+  OUT=$($V 'S="a   b" ; echo $S ; echo "$S"' 2>/dev/null | tr '\n' '|');   check "var: an unquoted value splits at IFS, a quoted one does not" "a b|a   b|" "$OUT"
+  OUT=$($V 'IFS=: ; P=a:b:c ; echo $P ; echo "$P" ; P="a::b" ; echo $P' 2>/dev/null | tr '\n' '|'); check "var: IFS is the separator, and an empty field stays" "a b c|a:b:c|a  b|" "$OUT"
+  OUT=$($V 'IFS= ; S="a   b" ; echo $S ; unset IFS ; echo $S' 2>/dev/null | tr '\n' '|'); check "var: an empty IFS does not split, unset IFS is blank, tab and newline" "a   b|a b|" "$OUT"
+  OUT=$($V 'S="a   b" ; T=$S ; echo "$T"' 2>/dev/null);                      check "var: an assignment value is not split" "a   b" "$OUT"
+  OUT=$($V 'C="echo hi there" ; $C' 2>/dev/null);                            check "var: a value can supply the command and its arguments" "hi there" "$OUT"
+  OUT=$($V 'P="/ux0/data/vitassh*" ; echo $P ; echo "$P" ; echo "x"$P' 2>/dev/null | tr '\n' '|');  check "var: an unquoted value globs, a quoted one does not" "/ux0/data/vitassh /ux0/data/vitasshd /ux0/data/vitasshd-update|/ux0/data/vitassh*|x/ux0/data/vitassh*|" "$OUT"
+  OUT=$($V "O='>' ; echo hi \$O x ; S=';' ; echo a \$S echo b" 2>/dev/null | tr '\n' '|'); check "var: a value is not a redirect or chain operator" "hi > x|a ; echo b|" "$OUT"
+  OUT=$($V "alias g='echo hi' ; C=g ; \$C x" 2>&1 | head -n 1);              check "var: a value is not alias-expanded" "sh: g: command not found" "$OUT"
+  OUT=$($V "F=/ux0/data/$T-var.txt ; echo made > \$F ; cat \$F ; rm \$F" 2>/dev/null); check "var: a redirect target may use a variable" made "$OUT"
+  OUT=$($V "D=/ux0/data ; cd \$D ; pwd" 2>/dev/null);                        check "var: cd \$D" /ux0/data "$OUT"
+  OUT=$($V "echo '\$HOME' \\\$HOME \"\\\$HOME\"" 2>/dev/null);              check "var: single quotes and backslash keep the dollar" '$HOME $HOME $HOME' "$OUT"
+  for BAD in HOME PWD USER LOGNAME TMPDIR; do
+    ERR=$($V "$BAD=/x" 2>&1 | grep -v 'closed by remote host');            check "var: $BAD is readonly" "sh: $BAD: readonly variable" "$ERR"
+  done
+  ERR=$($V 'unset HOME' 2>&1 | grep -v 'closed by remote host');            check "var: unset of a readonly name is refused" "unset: HOME: readonly variable" "$ERR"
+  OUT=$($V 'HOME=/x ; cd ~ ; pwd' 2>/dev/null);                              [ "$OUT" != "/x" ] && check "var: ~ is unaffected by a refused HOME" ok ok || check "var: ~ is unaffected by a refused HOME" ok fail
+  for BAD in 'echo $(date)' 'echo $((1+1))' 'echo ${A:-x}' 'echo $1'; do
+    $V "$BAD" >/dev/null 2>&1; RC=$?;                                        check "var: unsupported syntax exits 2 ($BAD)" 2 "$RC"
+  done
+  ERR=$($V 'echo $(date)' 2>&1 | grep -v 'closed by remote host');           case $ERR in *'near "$("'*) check "var: unsupported syntax names the construct" ok ok ;; *) check "var: unsupported syntax names the construct: got \"$ERR\"" ok fail ;; esac
+  for BAD in 'echo ${' 'echo ${}' 'echo ${A'; do
+    $V "$BAD" >/dev/null 2>&1; RC=$?;                                        check "var: malformed brace exits 2 ($BAD)" 2 "$RC"
+  done
+  OUT=$($V 'A=1 echo hi' 2>&1 | grep -v 'closed by remote host');           case $OUT in *"assignment before a command is not supported"*) check "var: an assignment before a command is refused" ok ok ;; *) check "var: an assignment before a command is refused: got \"$OUT\"" ok fail ;; esac
+  OUT=$($V 'export E1=one E2=two ; echo $E1 $E2' 2>/dev/null);              check "var: export is assignment" "one two" "$OUT"
+  OUT=$($V 'X=1 | cat ; printenv X' 2>/dev/null);                            check "var: an assignment in a pipeline segment is undone" "" "$OUT"
+  OUT=$($V 'V1=1 V2=2 V3=3 V4=4 V5=5 V6=6 V7=7 V8=8 V9=9 V10=1 V11=1 V12=1 V13=1 V14=1 V15=1 V16=1 V17=1 V18=1 V19=1 V20=1 V21=1 V22=1 V23=1 V24=1 V25=1 V26=1 V27=1 V28=1 V29=1 V30=1 ; echo alive' 2>&1 | grep -v 'closed by remote host' | tail -n 1); check "var: a full table is refused and the session keeps working" alive "$OUT"
+  OUT=$($V "T20ISO=mine" 2>/dev/null; $V 'printenv T20ISO' 2>/dev/null);     check "var: a variable does not reach another session" "" "$OUT"
+
   # --- TASK-001.08: what `vpk install` accepts -----------------------------
   # Small generated packages (scripts/make_vpk_fixture.py) that are never installed: each is refused
   # before the system installer is called. Installing a real third-party title and replacing an

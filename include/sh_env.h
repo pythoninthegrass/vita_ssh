@@ -31,6 +31,23 @@ size_t sh_env_strip_ctrl(char *dst, size_t size, const char *src);
  * when the table is full). */
 int sh_env_set(sh_env_table_t *t, const char *name, const char *value);
 
+/* Removes name, keeping the order of the others. Returns 0, or -1 with errno: EINVAL (NULL table or
+ * name), ENOENT (not set). Does not consult readonly status: that is the caller's decision. */
+int sh_env_unset(sh_env_table_t *t, const char *name);
+
+/* Marks a set variable as supplied by the client, so a user's assignment must leave it alone. The mark
+ * lasts as long as the variable. Returns 0, or -1 with ENOENT when name is not set. */
+int sh_env_lock(sh_env_table_t *t, const char *name);
+
+/* True for the server-owned names HOME, PWD, USER, LOGNAME and TMPDIR (set or not), and for a locked
+ * variable. Only the shell's own assignment and unset ask; sh_env_set itself never refuses. */
+int sh_env_is_readonly(const sh_env_table_t *t, const char *name);
+
+/* A copy of the whole table, locks included, for a caller that must undo what a command did; NULL when t
+ * is NULL or memory is short. sh_env_restore puts it back and frees it; both tolerate NULL. */
+sh_env_table_t *sh_env_snapshot(const sh_env_table_t *t);
+void sh_env_restore(sh_env_table_t *t, sh_env_table_t *saved);
+
 /* The value, or NULL when name is not set or t is NULL. */
 const char *sh_env_get(const sh_env_table_t *t, const char *name);
 

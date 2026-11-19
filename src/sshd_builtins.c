@@ -16,6 +16,7 @@
 #include "sshd.h"
 #include "sh_alias.h"
 #include "sh_chain.h"
+#include "sh_expand.h"
 #include "sshd_curl.h"
 #include "sh_grep.h"
 #include "sh_headtail.h"
@@ -440,6 +441,21 @@ static int expand_glob(const sh_fsctx_t *fs, const char *word, char **out,
 /* line parsing: quotes first, then globs                               */
 /* ------------------------------------------------------------------ */
 
+/* quoted[i] is 0 for a word with no quoting. Otherwise it is nonzero, and the bits above the low byte
+ * count the unquoted bytes before the first quoted one, so `X="a b"` is an assignment and `"X=a b"` is
+ * not. Every reader but the assignment check only tests it for zero. */
+#define QUOTE_MARK(unquoted_bytes) (1 | ((int)(unquoted_bytes) << 8))
+#define QUOTE_UNQUOTED_BYTES(q) ((q) >> 8)
+
+/* Bit 0 of quoted[i] means "do not glob". QUOTE_VALUE marks a field that came out of a variable: no
+ * operator, alias or assignment meaning (it is nonzero), but still a glob pattern. */
+#define QUOTE_NOGLOB 1
+#define QUOTE_VALUE 2
+
+/* A `$` that must reach the command as text (single-quoted, backslashed, or right before a quote) is
+ * written as SH_EXPAND_LITERAL_DOLLAR, which the expansion pass turns back into `$`; one inside double
+ * quotes is written as SH_EXPAND_QUOTED_DOLLAR, which expands but is not split into fields. Splitting happens
+ * before the line runs, expansion as each command runs, so a variable set earlier in a chain is seen. */
 static int split_line(const char *line, char **argv, int *quoted, int max)
 {
     int argc = 0;
@@ -447,7 +463,7 @@ static int split_line(const char *line, char **argv, int *quoted, int max)
 
     while (*p != '\0' && argc < max) {
         char *word, *w;
-        int saw_quote = 0;
+        int first_quote = -1;
 
         while (*p == ' ' || *p == '\t') {
             p++;
@@ -461,12 +477,30 @@ static int split_line(const char *line, char **argv, int *quoted, int max)
         }
         w = word;
         while (*p != '\0' && *p != ' ' && *p != '\t') {
+            if (*p == '$' && (p[1] == '\'' || p[1] == '"')) {
+                *w++ = SH_EXPAND_LITERAL_DOLLAR;
+                p++;
+                continue;
+            }
             if (*p == '\'' || *p == '"') {
                 char quote = *p++;
 
-                saw_quote = 1;
+                if (first_quote < 0) {
+                    first_quote = (int)(w - word);
+                }
                 while (*p != '\0' && *p != quote) {
-                    *w++ = *p++;
+                    if (*p == '$' && quote == '\'') {
+                        *w++ = SH_EXPAND_LITERAL_DOLLAR;
+                        p++;
+                    } else if (quote == '"' && *p == '\\' && p[1] == '$') {
+                        *w++ = SH_EXPAND_LITERAL_DOLLAR;
+                        p += 2;
+                    } else if (quote == '"' && *p == '$') {
+                        *w++ = SH_EXPAND_QUOTED_DOLLAR;
+                        p++;
+                    } else {
+                        *w++ = *p++;
+                    }
                 }
                 if (*p == quote) {
                     p++;
@@ -475,14 +509,21 @@ static int split_line(const char *line, char **argv, int *quoted, int max)
             }
             if (*p == '\\' && p[1] != '\0') {
                 p++;
-                saw_quote = 1;
+                if (first_quote < 0) {
+                    first_quote = (int)(w - word);
+                }
+                if (*p == '$') {
+                    *w++ = SH_EXPAND_LITERAL_DOLLAR;
+                    p++;
+                    continue;
+                }
             }
             *w++ = *p++;
         }
         *w = '\0';
         argv[argc] = word;
         if (quoted != NULL) {
-            quoted[argc] = saw_quote;
+            quoted[argc] = first_quote < 0 ? 0 : QUOTE_MARK(first_quote);
         }
         argc++;
     }
@@ -3012,6 +3053,77 @@ static int cmd_printenv(sh_session_t *s, int argc, char **argv)
     return status;
 }
 
+/* Defines name for this session, or says why not in the voice of `who` and returns 1. The readonly
+ * check lives here and not in sh_env_set, which the server itself uses to fill in HOME and the rest. */
+static int set_variable(sh_session_t *s, const char *who, const char *name, const char *value)
+{
+    sh_env_table_t *t = sh_session_env(s);
+
+    if (!sh_env_name_ok(name)) {
+        sh_eprintf(s, "%s: `%s': not a valid identifier\n", who, name);
+        return 1;
+    }
+    if (sh_env_is_readonly(t, name)) {
+        sh_eprintf(s, "%s: %s: readonly variable\n", who, name);
+        return 1;
+    }
+    if (sh_env_set(t, name, value) != 0) {
+        if (errno == ENAMETOOLONG) {
+            sh_eprintf(s, "%s: %s: value too long (limit %d bytes)\n", who, name, SH_ENV_VALUE_MAX);
+        } else if (errno == ENOSPC) {
+            sh_eprintf(s, "%s: %s: too many variables (limit %d)\n", who, name, SH_ENV_MAX);
+        } else {
+            sh_eprintf(s, "%s: %s: %s\n", who, name, strerror(errno));
+        }
+        return 1;
+    }
+    return 0;
+}
+
+/* export is assignment under another name: there are no child processes for a value to be exported to,
+ * so a bare NAME changes nothing. With no arguments it lists, like env. */
+static int cmd_export(sh_session_t *s, int argc, char **argv)
+{
+    int i, status = 0;
+
+    if (argc == 1) {
+        return cmd_env(s, argc, argv);
+    }
+    for (i = 1; i < argc; i++) {
+        char *eq = strchr(argv[i], '=');
+
+        if (eq == NULL) {
+            if (!sh_env_name_ok(argv[i])) {
+                sh_eprintf(s, "export: `%s': not a valid identifier\n", argv[i]);
+                status = 1;
+            }
+            continue;
+        }
+        *eq = '\0';
+        status |= set_variable(s, "export", argv[i], eq + 1);
+        *eq = '=';
+    }
+    return status;
+}
+
+static int cmd_unset(sh_session_t *s, int argc, char **argv)
+{
+    int i, status = 0;
+
+    for (i = 1; i < argc; i++) {
+        if (!sh_env_name_ok(argv[i])) {
+            sh_eprintf(s, "unset: `%s': not a valid identifier\n", argv[i]);
+            status = 1;
+        } else if (sh_env_is_readonly(sh_session_env(s), argv[i])) {
+            sh_eprintf(s, "unset: %s: readonly variable\n", argv[i]);
+            status = 1;
+        } else {
+            sh_env_unset(sh_session_env(s), argv[i]);
+        }
+    }
+    return status;
+}
+
 /* Who a download's file-name check speaks for, and whose session it is. */
 typedef struct {
     sh_session_t *s;
@@ -3425,7 +3537,10 @@ static int cmd_help(sh_session_t *s, int argc, char **argv)
                  " `/`: `/` lists the devices, `/ux0` is the memory card. Join up to %d commands"
                  " with ; && || (each a separate word, as with | and >). `alias` lists the shortcuts; an alias"
                  " expands only as the command word, follows other aliases (each at most once), and wins over a"
-                 " builtin of the same name.\n",
+                 " builtin of the same name. `NAME=value` sets a session variable and $NAME or ${NAME} expands it: single"
+                 " quotes and a backslash keep a `$` as text, double quotes expand without splitting, an unquoted value splits"
+                 " into words at $IFS (default space, tab, newline) and is globbed but never alias-expanded, an unquoted"
+                 " unset name leaves no word, and $(...), $((...), ${NAME:-x} and $? are errors.\n",
               SH_CHAIN_MAX);
     return 0;
 }
@@ -3751,6 +3866,8 @@ static const sh_builtin_t builtins[] = {
     {"echo", cmd_echo, "echo [-n] TEXT... -- print its arguments"},
     {"env", cmd_env, "env -- print the environment"},
     {"exit", cmd_exit, "exit -- end this session"},
+    {"export", cmd_export,
+     "export [NAME=VALUE]... -- set variables, the same as NAME=VALUE (no argument: list them, like env)"},
     {"false", cmd_false, "false [ARG...] -- do nothing, unsuccessfully (status 1)"},
     {"grep", cmd_grep,
      "grep [-ivnclq] PATTERN [FILE...] -- lines matching a POSIX basic regex"},
@@ -3777,6 +3894,7 @@ static const sh_builtin_t builtins[] = {
      "uname [-a] -- system name; -a adds the firmware the device reports"},
     {"uniq", cmd_uniq,
      "uniq [-c] [-d] [-u] [FILE] -- collapse adjacent repeats; -c counts, -d repeats only, -u once-only"},
+    {"unset", cmd_unset, "unset NAME... -- remove variables"},
     {"vcmd", cmd_vcmd, "vcmd HOST PORT [LINE] -- send one line to a TCP port and print the reply"},
     {"vpk", cmd_vpk,
      "vpk list FILE | vpk install [-r | --reinstall] FILE -- inspect a VPK, or install it: this app updates itself, another title installs unless it is running, --reinstall (-r) replaces an installed one"},
@@ -3973,6 +4091,133 @@ static int expand_alias(sh_session_t *s, char **argv, int *quoted, int *argc)
     return 0;
 }
 
+/* The `NAME=` at the front of an unquoted word, as a prefix length; 0 when the word is not an assignment.
+ * Quoting that starts after the `=` (`X="a b"`) still counts; quoting the name does not. */
+static size_t assignment_prefix(const char *word, int quoted)
+{
+    const char *eq = strchr(word, '=');
+    char name[SH_ENV_NAME_MAX + 1];
+    size_t n;
+
+    if (eq == NULL || (size_t)(eq - word) > SH_ENV_NAME_MAX) {
+        return 0;
+    }
+    n = (size_t)(eq - word);
+    if (quoted && (size_t)QUOTE_UNQUOTED_BYTES(quoted) <= n) {
+        return 0;
+    }
+    memcpy(name, word, n);
+    name[n] = '\0';
+    return sh_env_name_ok(name) ? n + 1 : 0;
+}
+
+typedef struct {
+    sh_session_t *s;
+    sh_fsctx_t fs;
+} lookup_ctx_t;
+
+static const char *expand_lookup(void *ctx, const char *name)
+{
+    lookup_ctx_t *c = ctx;
+
+    return env_lookup(c->s, name, &c->fs);
+}
+
+/* Replaces `$NAME` and `${NAME}` in every word, in place. An unquoted reference is split into fields at
+ * $IFS (space, tab and newline when it is unset), so `A="x y"; cmd $A` passes two arguments and an unquoted
+ * reference that is unset or empty leaves no word; a double-quoted one stays a single word, empty if need be,
+ * which is what keeps `rm $UNSET` from running with a stray argument. The first nassign words are
+ * assignments, whose values are never split. A field that came from a value is marked QUOTE_VALUE: it is
+ * globbed like any unquoted word, as in sh, but it is never read as an operator or an alias, so a value of
+ * `>` or `;` is an argument. A word with typed quoting keeps its own flag and is not globbed. Returns 0, or
+ * the exit status after printing why the line cannot run. */
+static int expand_variables(sh_session_t *s, char **argv, int *quoted, int *argc, int nassign)
+{
+    char out[SSHD_LINE_MAX];
+    lookup_ctx_t ctx;
+    int i = 0;
+
+    ctx.s = s;
+    fs_of(s, &ctx.fs);
+    while (i < *argc) {
+        sh_expand_info_t info;
+        sh_expand_status_t st;
+        int n, j, flag;
+        char *fields[MAX_WORDS];
+        const char *f;
+
+        if (strpbrk(argv[i], "$\x01\x02") == NULL) {
+            i++;
+            continue;
+        }
+        st = sh_expand_word(argv[i], expand_lookup, &ctx, i < nassign ? "" : env_lookup(s, "IFS", &ctx.fs), out,
+                            sizeof(out), &info);
+        if (st == SH_EXPAND_UNSUPPORTED) {
+            sh_eprintf(s, "sh: unsupported syntax near \"%s\": no command substitution, arithmetic, ${NAME:-...} or special parameters\n", info.what);
+            return 2;
+        }
+        if (st == SH_EXPAND_MALFORMED) {
+            sh_eprintf(s, "sh: bad substitution near \"%s\"\n", info.what);
+            return 2;
+        }
+        if (st == SH_EXPAND_TOOLONG) {
+            sh_eprintf(s, "sh: a word expands to more than %d bytes\n", SSHD_LINE_MAX - 1);
+            return 1;
+        }
+        n = info.nfields;
+        if (n == 0 && quoted[i]) {
+            n = 1; /* a typed "" is a word even when nothing else is in it */
+        }
+        if (n > MAX_WORDS - (*argc - 1)) {
+            sh_eprintf(s, "sh: a word expands to too many words (limit %d)\n", MAX_WORDS);
+            return 1;
+        }
+        for (f = out, j = 0; j < n; j++) {
+            fields[j] = strdup(f);
+            if (fields[j] == NULL) {
+                while (j-- > 0) {
+                    free(fields[j]);
+                }
+                sh_eprintf(s, "sh: out of memory\n");
+                return 1;
+            }
+            f += strlen(f) + 1;
+        }
+        flag = quoted[i] != 0 ? quoted[i] : (info.refs > 0 ? QUOTE_VALUE : 0);
+        free(argv[i]);
+        memmove(argv + i + n, argv + i + 1, (size_t)(*argc - i - 1) * sizeof(*argv));
+        memmove(quoted + i + n, quoted + i + 1, (size_t)(*argc - i - 1) * sizeof(*quoted));
+        for (j = 0; j < n; j++) {
+            argv[i + j] = fields[j];
+            quoted[i + j] = flag;
+        }
+        *argc += n - 1;
+        i += n;
+    }
+    return 0;
+}
+
+/* NAME=VALUE words at the front of a command, which sh would apply to one command's environment. There
+ * is no child to hand it to, so a lone assignment sets the session variable and one in front of a
+ * command is refused rather than silently changing more than the line says. */
+static int run_assignments(sh_session_t *s, char **argv, int argc, int nassign)
+{
+    int i, status = 0;
+
+    if (argc > nassign) {
+        sh_eprintf(s, "sh: %s: an assignment before a command is not supported; set it on its own line\n", argv[0]);
+        return 1;
+    }
+    for (i = 0; i < nassign; i++) {
+        char *eq = strchr(argv[i], '=');
+
+        *eq = '\0';
+        status |= set_variable(s, "sh", argv[i], eq + 1);
+        *eq = '=';
+    }
+    return status;
+}
+
 /* Runs one command from its already split words, which it takes ownership of and
  * frees on every path. argv and quoted hold MAX_WORDS entries: glob expansion grows
  * the list in place. */
@@ -3985,6 +4230,7 @@ static int run_command(sh_session_t *s, char **argv, int *quoted, int argc)
     int redir_append = 0;
     char *in_path = NULL; /* the `<` filename, owned the same way */
     int in_started = 0;
+    int nassign = 0;
 
     if (argc == 0) {
         return 0;
@@ -3992,6 +4238,17 @@ static int run_command(sh_session_t *s, char **argv, int *quoted, int argc)
     if (expand_alias(s, argv, quoted, &argc) != 0) {
         free_args(argv, argc);
         return 1;
+    }
+    if (argc == 0) {
+        return 0;
+    }
+    while (nassign < argc && assignment_prefix(argv[nassign], quoted[nassign]) != 0) {
+        nassign++;
+    }
+    status = expand_variables(s, argv, quoted, &argc, nassign);
+    if (status != 0) {
+        free_args(argv, argc);
+        return status;
     }
     if (argc == 0) {
         return 0;
@@ -4009,12 +4266,12 @@ static int run_command(sh_session_t *s, char **argv, int *quoted, int argc)
 
     /* Expand wildcards unless the word was quoted, which is how a quoted "*"
      * stays literal. The command name itself is never a pattern. */
-    for (i = 1; i < argc; i++) {
+    for (i = 1; nassign == 0 && i < argc; i++) {
         char *expanded[MAX_LIST];
         sh_fsctx_t fs;
         int n, room;
 
-        if (quoted[i] || !has_glob_chars(argv[i])) {
+        if ((quoted[i] & QUOTE_NOGLOB) || !has_glob_chars(argv[i])) {
             continue;
         }
         fs_of(s, &fs);
@@ -4091,7 +4348,9 @@ static int run_command(sh_session_t *s, char **argv, int *quoted, int argc)
     }
 
     cmd = sh_builtin_lookup(argv[0]);
-    if (cmd == NULL) {
+    if (nassign > 0) {
+        status = run_assignments(s, argv, argc, nassign);
+    } else if (cmd == NULL) {
         sh_eprintf(s, "sh: %s: command not found\n", argv[0]);
         status = 127;
     } else {
@@ -4134,7 +4393,7 @@ static int has_empty_segment(char **argv, int *quoted, int argc)
  * handed to the next as stdin: there is no fork and nothing may block, so this is not a
  * streaming pipe, and a segment cannot start before the one before it has finished. A
  * segment that is not the last cannot change session state, as in a subshell: `exit` is
- * skipped and `cd` is undone. Returns the last segment's status. */
+ * skipped, `cd` is undone and variable changes are undone. Returns the last segment's status. */
 static int run_pipeline(sh_session_t *s, char **argv, int *quoted, int argc)
 {
     char *seg[MAX_WORDS];
@@ -4171,14 +4430,17 @@ static int run_pipeline(sh_session_t *s, char **argv, int *quoted, int argc)
             sh_fsctx_t fs;
             char cwd[SH_POSIX_PATH_MAX];
             char name[NAME_MAX + 1];
+            sh_env_table_t *saved_env;
 
             fs_of(s, &fs);
             snprintf(cwd, sizeof(cwd), "%s", fs.cwd);
             snprintf(name, sizeof(name), "%s", seg[0]);
+            saved_env = sh_env_snapshot(sh_session_env(s));
             sh_session_capture_start(s);
             status = run_command(s, seg, segq, n);
             sh_session_stdin_end(s); /* before capture_end hands the output over as the next stdin */
             sh_session_set_cwd(s, cwd);
+            sh_env_restore(sh_session_env(s), saved_env);
             if (sh_session_capture_end(s) != 0) {
                 sh_eprintf(s, "sh: %s: output too large for a pipe (limit %d bytes)\n",
                            name, SSHD_STDIN_MAX);
