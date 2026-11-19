@@ -16,6 +16,7 @@
 #include "sshd.h"
 #include "sh_alias.h"
 #include "sh_chain.h"
+#include "sshd_curl.h"
 #include "sh_grep.h"
 #include "sh_headtail.h"
 #include "sh_textops.h"
@@ -3010,6 +3011,110 @@ static int cmd_printenv(sh_session_t *s, int argc, char **argv)
     return status;
 }
 
+/* Where curl may put a file: resolved through the path layer, on a writable device, in a directory that exists. */
+static int curl_resolve_out(void *ctx, const char *name, char *sce, size_t cap)
+{
+    sh_session_t *s = ctx;
+    sh_target_t t, dir;
+    sh_fsctx_t fs;
+    char parent[SH_POSIX_PATH_MAX];
+    struct stat st;
+
+    if (resolve_arg(s, "curl", name, &t) != 0 || check_writable(s, "curl", name, &t) != 0) {
+        return -1;
+    }
+    fs_of(s, &fs);
+    if (sh_parent(parent, sizeof(parent), t.posix) != 0 || sh_path_resolve(&fs, parent, &dir) != 0 ||
+        dir.kind == SH_TARGET_ROOT || stat(dir.sce, &st) != 0 || !S_ISDIR(st.st_mode)) {
+        sh_eprintf(s, "curl: %s: No such file or directory\n", name);
+        return -1;
+    }
+    if (strlen(t.sce) >= cap) {
+        sh_eprintf(s, "curl: %s: %s\n", name, strerror(ENAMETOOLONG));
+        return -1;
+    }
+    memcpy(sce, t.sce, strlen(t.sce) + 1);
+    return 0;
+}
+
+static int curl_usage(sh_session_t *s)
+{
+    sh_eprintf(s, "usage: curl [-LJOIfsSk] [-o FILE] URL\n");
+    return 2;
+}
+
+static int cmd_curl(sh_session_t *s, int argc, char **argv)
+{
+    sshd_curl_opts_t o;
+    int i, j, flags_done = 0;
+
+    memset(&o, 0, sizeof(o));
+    o.resolve_out = curl_resolve_out;
+    o.ctx = s;
+    for (i = 1; i < argc; i++) {
+        const char *a = argv[i];
+
+        if (flags_done || a[0] != '-' || a[1] == '\0') {
+            if (o.url != NULL) {
+                sh_eprintf(s, "curl: only one URL is supported\n");
+                return 2;
+            }
+            o.url = a;
+            continue;
+        }
+        if (strcmp(a, "--") == 0) {
+            flags_done = 1;
+            continue;
+        }
+        if (strcmp(a, "--insecure") == 0) {
+            o.insecure = 1;
+            continue;
+        }
+        for (j = 1; a[j] != '\0'; j++) {
+            switch (a[j]) {
+            case 'L': o.follow = 1; break;
+            case 'O': o.by_url_name = 1; break;
+            case 'J': o.use_dispo = 1; break;
+            case 'I': o.head_only = 1; break;
+            case 'f': o.fail_http = 1; break;
+            case 's': o.silent = 1; break;
+            case 'S': o.show_errors = 1; break;
+            case 'k': o.insecure = 1; break;
+            case 'o':
+                if (a[j + 1] != '\0') {
+                    o.out_arg = a + j + 1;
+                } else if (i + 1 < argc) {
+                    o.out_arg = argv[++i];
+                } else {
+                    sh_eprintf(s, "curl: -o needs a file name\n");
+                    return 2;
+                }
+                j = (int)strlen(a) - 1;
+                break;
+            default:
+                sh_eprintf(s, "curl: -%c: unknown option\n", a[j]);
+                return curl_usage(s);
+            }
+        }
+    }
+    if (o.url == NULL) {
+        return curl_usage(s);
+    }
+    if (o.out_arg != NULL && o.by_url_name) {
+        sh_eprintf(s, "curl: -o and -O cannot be combined\n");
+        return 2;
+    }
+    if (o.use_dispo && !o.by_url_name) {
+        sh_eprintf(s, "curl: -J needs -O\n");
+        return 2;
+    }
+    if (o.head_only && (o.out_arg != NULL || o.by_url_name)) {
+        sh_eprintf(s, "curl: -I prints to the terminal; redirect it with >\n");
+        return 2;
+    }
+    return sshd_curl_run(s, &o);
+}
+
 static int cmd_vpk(sh_session_t *s, int argc, char **argv)
 {
     sh_target_t t;
@@ -3589,6 +3694,8 @@ static const sh_builtin_t builtins[] = {
     {"cat", cmd_cat, "cat FILE... -- write a file to the terminal"},
     {"cd", cmd_cd, "cd [DIR] -- change the working directory (no argument: $HOME)"},
     {"cp", cmd_cp, "cp [-r] SRC... DST -- copy; -r for directories"},
+    {"curl", cmd_curl,
+     "curl [-LJOIfsSk] [-o FILE] URL -- fetch an http(s) URL; -L redirects, -O/-J name the file, -I headers, -f fail on HTTP errors, -s/-S quiet, -k skip certificate checks"},
     {"date", cmd_date, "date -- print the current date and time"},
     {"devices", cmd_devices, "devices -- every Vita device and whether it is mounted"},
     {"df", cmd_df, "df [DEVICE] -- free and total space per device"},

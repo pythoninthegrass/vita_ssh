@@ -253,7 +253,7 @@ running in the server's own process, the working directory belongs to the sessio
 than to libc, and POSIX paths are mapped onto sceIo devices at the boundary.
 
 ```
-:  alias  cat  cd  cp  date  devices  df  du  echo  env  exit  false  grep  head  help
+:  alias  cat  cd  cp  curl  date  devices  df  du  echo  env  exit  false  grep  head  help
 ls   mkdir  mv   printenv  pwd     rm   rmdir  sort  stat  tail  touch  true  unalias  uname  uniq  vcmd  vpk  wc  whoami
 ```
 
@@ -346,6 +346,38 @@ option or (for `uniq`) a second file name.
 
 [`docs/vcmd.md`](docs/vcmd.md) has the arguments, the error strings, and the command
 surfaces both plugins expose on those ports.
+
+`curl [-LJOIfsSk] [-o FILE] URL` fetches one `http://` or `https://` URL with libcurl, so
+`cd ~/Downloads && curl -LJO https://github.com/juanjsebgarcia/vita-turbo-wifi/releases/download/v0.7.2/wifiturbo.suprx`
+leaves `wifiturbo.suprx` in `~/Downloads`. With no file option the body goes to the terminal
+(and through `>`, like any builtin). Flags, which may be clustered (`-LJO`, `-sS`):
+
+| Flag | Does |
+| --- | --- |
+| `-o FILE` | save to FILE, resolved through the path layer |
+| `-O` | save under the URL's last path segment, in the current directory |
+| `-J` | with `-O`, use the server's `Content-Disposition` file name when it offers one |
+| `-L` | follow redirects, at most **10**; a loop or a longer chain is `more than 10 redirects` |
+| `-I` | print the response headers (every hop with `-L`) and no body |
+| `-f` | exit **22** on an HTTP 4xx or 5xx and save nothing, instead of saving the error page |
+| `-s` | no progress meter and no error messages |
+| `-S` | with `-s`, show errors again |
+| `-k`, `--insecure` | skip certificate checks; a warning is always printed, even with `-s` |
+
+A file name from the URL or from `Content-Disposition` is untrusted: any directory part is
+dropped, and a name that is empty, contains `..`, a control byte, a trailing dot or space, or
+a character FAT cannot hold (`: " * ? < > |`) is refused (`-J` says so and saves nothing). A
+download goes to `NAME.part` beside the target and replaces `NAME` only when it finishes, so a
+failed or abandoned transfer removes its partial file and leaves an earlier `NAME` alone. A
+response over **256 MB** stops with an error naming the limit. HTTPS verifies the certificate
+against `vs0:data/external/cert/CA_LIST.cer`, the system store, falling back to
+`ux0:data/cacert.pem` (curl's `cacert.pem`) if a firmware lacks it, and fails with a sentence
+naming the host and the verify result when it cannot. A transfer gives up after **15 s** with no
+connection or **30 s** under 1 KB/s, and keeps the other sessions' sockets, handshakes and the
+console serving while it runs. Exit status is **0**, curl's own code for a transfer failure
+(**28** timeout, **60** certificate, **63** size limit, ...), or **2** for a bad command line or
+URL. Name resolution is libc's blocking resolver, so a slow DNS server holds the shell for as
+long as it takes to answer.
 
 `/` lists the mounted devices and `/ux0` is the memory card; `devices` and `df` tell you
 what is actually there. Quoting (`'…'`, `"…"`, `\`) works, `*` and `?` expand in arguments
