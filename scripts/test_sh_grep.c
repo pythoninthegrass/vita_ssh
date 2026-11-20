@@ -336,6 +336,134 @@ static void test_read_line(void)
     CHECK(eof);
 }
 
+/* Compiles, finds the leftmost-longest match at or after from; returns 1 and the span, 0 for none. */
+static int span(const char *pattern, int flags, const char *line, size_t from, size_t *so,
+                size_t *eo)
+{
+    sh_grep_t *re = sh_grep_compile(pattern, flags);
+    int r;
+
+    if (re == NULL) {
+        return -2;
+    }
+    r = sh_grep_span(re, line, from, so, eo);
+    sh_grep_free(re);
+    return r;
+}
+
+/* "^$" is a blank line, not every line: grep -v '^$' must keep the lines that have text. */
+static void test_empty_line_anchor(void)
+{
+    CHECK(run("^$", 0, "", 0) == 1);
+    CHECK(run("^$", 0, "abc", 0) == 0);
+    CHECK(run("^$", 0, "abc", 1) == 1);
+    /* An anchored body that needs a byte must not match the empty line. */
+    CHECK(run("^a$", 0, "", 0) == 0);
+    CHECK(run("^\\(ab\\)$", 0, "", 0) == 0);
+    CHECK(run("^a*$", 0, "", 0) == 1);
+    CHECK(run("^", 0, "abc", 0) == 1);
+    CHECK(run("$", 0, "abc", 0) == 1);
+}
+
+static void test_span(void)
+{
+    size_t so = 99, eo = 99;
+
+    /* Literal path: the first occurrence, then the next one from a later start. */
+    CHECK(span("ab", 0, "xabyab", 0, &so, &eo) == 1 && so == 1 && eo == 3);
+    CHECK(span("ab", 0, "xabyab", 2, &so, &eo) == 1 && so == 4 && eo == 6);
+    CHECK(span("ab", 0, "xabyab", 5, &so, &eo) == 0);
+    CHECK(span("AB", SH_GREP_ICASE, "xabyab", 0, &so, &eo) == 1 && so == 1 && eo == 3);
+
+    /* Leftmost wins over longest; among starts at one position the longest wins. */
+    CHECK(span("a*", 0, "baaac", 0, &so, &eo) == 1 && so == 0 && eo == 0);
+    CHECK(span("a\\+", 0, "baaac", 0, &so, &eo) == 1 && so == 1 && eo == 4);
+    CHECK(span("a\\|ab", 0, "xabx", 0, &so, &eo) == 1 && so == 1 && eo == 3);
+    CHECK(span("[0-9]\\{2,3\\}", 0, "a12345", 0, &so, &eo) == 1 && so == 1 && eo == 4);
+    CHECK(span("x.*y", 0, "axbyby", 0, &so, &eo) == 1 && so == 1 && eo == 6);
+
+    /* Anchors use the whole line, not the start offset. */
+    CHECK(span("^a", 0, "aaa", 0, &so, &eo) == 1 && so == 0 && eo == 1);
+    CHECK(span("^a", 0, "aaa", 1, &so, &eo) == 0);
+    CHECK(span("a$", 0, "aaa", 0, &so, &eo) == 1 && so == 2 && eo == 3);
+    CHECK(span("$", 0, "abc", 0, &so, &eo) == 1 && so == 3 && eo == 3);
+    CHECK(span("^$", 0, "", 0, &so, &eo) == 1 && so == 0 && eo == 0);
+
+    /* The empty pattern matches the empty string at the start offset. */
+    CHECK(span("", 0, "abc", 2, &so, &eo) == 1 && so == 2 && eo == 2);
+    /* An offset at the end of the line can still match empty, and past it cannot. */
+    CHECK(span("x*", 0, "abc", 3, &so, &eo) == 1 && so == 3 && eo == 3);
+    CHECK(span("x*", 0, "abc", 4, &so, &eo) == 0);
+    CHECK(span("x", 0, "abc", 0, &so, &eo) == 0);
+}
+
+/* Whole-string match of pat on s[b..e), done through the plain matcher on a copy. */
+static int whole(const char *pat, const char *s, size_t b, size_t e)
+{
+    char wrapped[64], sub[16];
+    int r;
+
+    snprintf(wrapped, sizeof(wrapped), "^\\(%s\\)$", pat);
+    memcpy(sub, s + b, e - b);
+    sub[e - b] = '\0';
+    r = run(wrapped, 0, sub, 0);
+    return r == 1;
+}
+
+/* Every span is checked against brute force: leftmost start, then longest end, over all strings. */
+static void test_span_sweep(void)
+{
+    static const char *pats[] = {"a", "ab", "a*", "a\\+b", "\\(ab\\)*", "a\\|ab", "b*a",
+                                 ".", "a.b", "[ab]\\{2\\}", "a*b*", "\\(a\\|b\\)\\+"};
+    char s[8];
+    size_t p;
+
+    for (p = 0; p < sizeof(pats) / sizeof(pats[0]); p++) {
+        int len, code;
+
+        for (len = 0; len <= 5; len++) {
+            for (code = 0; code < (1 << len); code++) {
+                size_t from, b, e, bso = 0, beo = 0;
+                int found;
+                int i;
+
+                for (i = 0; i < len; i++) {
+                    s[i] = (code >> i) & 1 ? 'b' : 'a';
+                }
+                s[len] = '\0';
+                for (from = 0; from <= (size_t)len; from++) {
+                    size_t so = 99, eo = 99;
+                    int got = span(pats[p], 0, s, from, &so, &eo);
+
+                    found = 0;
+                    for (b = from; b <= (size_t)len && !found; b++) {
+                        for (e = (size_t)len + 1; e-- > b;) {
+                            if (whole(pats[p], s, b, e)) {
+                                found = 1;
+                                bso = b;
+                                beo = e;
+                                break;
+                            }
+                        }
+                    }
+                    CHECK(got == found);
+                    if (got != found) {
+                        printf("  pat %s line '%s' from %zu: span %d model %d\n", pats[p], s,
+                               from, got, found);
+                    }
+                    if (got == 1 && found) {
+                        CHECK(so == bso && eo == beo);
+                        if (so != bso || eo != beo) {
+                            printf("  pat %s line %s from %zu: got %zu-%zu want %zu-%zu\n",
+                                   pats[p], s, from, so, eo, bso, beo);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 int main(void)
 {
     test_bre_anchors_and_dots();
@@ -350,6 +478,9 @@ int main(void)
     test_literal_search();
     test_literal_and_engine_agree();
     test_read_line();
+    test_empty_line_anchor();
+    test_span();
+    test_span_sweep();
 
     if (failures == 0) {
         printf("PASS sh_grep\n");

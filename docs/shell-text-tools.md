@@ -1,4 +1,4 @@
-# grep, head, tail, wc, sort and uniq: design notes
+# grep, sed, head, tail, wc, sort and uniq: design notes
 
 The source for these six builtins keeps comments to one line each. This page holds the rationale that did not fit on one line, grouped by tool; each entry names the file and symbol it belongs to.
 
@@ -39,6 +39,32 @@ With -i the range test runs on folded bytes instead of storing each range twice,
 ### `src/sshd_builtins.c`: grep multi-file errors
 
 With several files, an unreadable file makes grep exit 2 no matter what another file matches: an error outranks a match, because a partial result the user cannot tell is incomplete from a complete one would be the worse answer.
+
+### `src/sh_grep.c`: sh_grep_span
+
+sed needs where a match is, which the yes-or-no walk never tracked. `sh_grep_span()` reuses the same walk in a second mode: it starts a match at one offset only (no reseeding at every byte), records the position of each hit, and stops when no consuming state is left, so the last hit is the longest end. The leftmost start that hits wins. Anchors are judged against the whole line, so `^` cannot match at a later offset. The two degenerate anchors `^` and `$` are not "every line" for a span: they are empty at the start and at the end, which is what `s/^/> /` and `s/$/ </` rely on. Checked against a brute-force model over every `{a,b}` line up to five bytes.
+
+### `src/sh_grep.c`: `^$` and `^X$` on an empty line
+
+Both used to match an empty line wrongly, found while writing the span model. `^$` was compiled as "matches all" (so `grep -v '^$'` kept nothing and `grep '^$'` printed every line), and in `^a$` the CAT's right operand (the `$`) was started at once because `node_can_be_empty()` called a BOL node empty without asking about its body, so a pattern that needs a byte matched `""`. `^$` is now its own case (`blank_only`) and a BOL is empty only when its body is.
+
+## sed
+
+### `src/sh_sed.c`: the pure core
+
+Parsing and applying a program carry no I/O so the host test can run them: `sh_sed_add()` turns script text into at most 32 commands, atomically (a failed script leaves the program as it was), and `sh_sed_apply()` runs one line through them, handing each printed line to a callback. `cmd_sed()` in `src/sshd_builtins.c` is only options, files and the sink.
+
+### `src/sh_sed.c`: what is refused, and why it is not guessed
+
+The engine has no capture groups, so `\1` in a replacement is refused instead of being quietly treated as a literal `1`. `\n` and `\t` are refused for the same reason: GNU reads them as a newline and a tab, and passing the letter through would be a silent difference. The `s` flags `p`, `i`, a number and `w` are refused, not ignored. A refusal quotes the start of the command it stopped at, so `1,5d` says which command was a line address.
+
+### `src/sh_sed.c`: empty matches
+
+`s/x*/-/g` on `abc` is `-a-b-c-`, and `s/a*/x/g` on `baaac` is `xbxcx`: an empty match directly after the previous match is skipped (one byte is copied and the walk goes on), and an empty match advances by one byte. This is GNU's rule, pinned against `gsed` by `scripts/test_sh_sed.py`.
+
+### `src/sshd_builtins.c`: sed stops on a bad line
+
+grep skips an over-long line and carries on because a skipped line there only shortens a report. For sed the output is a replacement for the input, so a skipped line would hand back a shorter file with an exit status the caller may not check. A too-long line, or a substitution result over `SH_SED_SPACE_MAX`, therefore stops the run with the line number. Options are parsed and every script is compiled before any input is opened, so a refused script or `-i` writes and reads nothing.
 
 ## head and tail
 

@@ -167,6 +167,7 @@ add_executable(${VITA_SERVER_NAME}
   src/sh_du.c
   src/sh_grep.c
   src/sh_headtail.c
+  src/sh_sed.c
   src/sh_textops.c
   src/sh_curl_name.c
   src/sh_wget_args.c

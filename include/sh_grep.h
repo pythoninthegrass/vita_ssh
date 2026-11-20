@@ -35,6 +35,10 @@ void sh_grep_free(sh_grep_t *re);
 /* Matches one line, honoring -v: 1 to print, 0 to skip, -1 with errno EAGAIN on step limit. */
 int sh_grep_match(const sh_grep_t *re, const char *line, int invert);
 
+/* Finds the leftmost-longest match starting at or after from: 1 with [*so, *eo), 0 for none, -1
+ * with errno EAGAIN on the step limit. ^ and $ are judged against the whole line, not from. */
+int sh_grep_span(const sh_grep_t *re, const char *line, size_t from, size_t *so, size_t *eo);
+
 /* Why sh_grep_compile failed, for the error line. Valid after a NULL return. */
 const char *sh_grep_compile_error(char *dst, size_t dstlen);
 

@@ -22,6 +22,7 @@
 #include "sshd_curl.h"
 #include "sh_grep.h"
 #include "sh_headtail.h"
+#include "sh_sed.h"
 #include "sh_textops.h"
 #include "sh_wget_args.h"
 
@@ -1278,6 +1279,275 @@ static int cmd_grep(sh_session_t *s, int argc, char **argv)
     if (had_error) {
         return 2;
     }
+    return status;
+}
+
+/* ------------------------------------------------------------------ */
+/* sed                                                                  */
+/* ------------------------------------------------------------------ */
+
+/* A script file is read whole, so it is capped; one-liners are what sed here is for. */
+#define SED_SCRIPT_FILE_MAX 4096
+
+static void sed_emit(void *ctx, const char *line, size_t len)
+{
+    to_sink_t *gs = ctx;
+
+    to_put(gs, line, len);
+    to_put(gs, "\n", 1);
+}
+
+/* Reads a -f script file into text (NUL-terminated); 0, or -1 after printing why. */
+static int sed_read_script_file(sh_session_t *s, const char *path, char *text, size_t cap)
+{
+    sh_target_t t;
+    struct stat st;
+    size_t have = 0;
+    int fd;
+
+    if (resolve_arg(s, "sed", path, &t) != 0) {
+        return -1;
+    }
+    if (t.kind == SH_TARGET_ROOT || t.kind == SH_TARGET_PSEUDO_DIR ||
+        (stat_target(&t, &st) == 0 && S_ISDIR(st.st_mode))) {
+        sh_eprintf(s, "sed: %s: Is a directory\n", path);
+        return -1;
+    }
+    fd = sh_target_open(&t);
+    if (fd == -1) {
+        sh_eprintf(s, "sed: %s: %s\n", path, strerror(errno));
+        return -1;
+    }
+    for (;;) {
+        ssize_t got = sh_target_read(fd, text + have, cap - have);
+
+        if (got <= 0) {
+            break;
+        }
+        have += (size_t)got;
+        if (have == cap) {
+            sh_target_close(fd);
+            sh_eprintf(s, "sed: %s: script too long (limit %d bytes)\n", path,
+                       SED_SCRIPT_FILE_MAX);
+            return -1;
+        }
+    }
+    sh_target_close(fd);
+    text[have] = '\0';
+    return 0;
+}
+
+/* Runs the program over one source: 0 at its end, 1 when q ran, -1 after printing a failure. */
+static int sed_stream(sh_session_t *s, sh_sed_t *prog, int quiet, grep_src_t *src,
+                      const char *name, char *line, to_sink_t *gs)
+{
+    long lineno = 0;
+    int eof = 0;
+
+    while (!sh_session_interrupted(s)) {
+        int n = sh_grep_read_line(grep_fill, src, line, SH_GREP_LINE_MAX, &eof);
+        int r;
+
+        if (eof) {
+            return 0;
+        }
+        lineno++;
+        if (n < 0) {
+            /* A skipped line would silently shorten the output, so the stream stops here. */
+            to_flush(gs);
+            sh_eprintf(s, "sed: %s: line %ld: too long (limit %d bytes)\n", name, lineno,
+                       SH_GREP_LINE_MAX);
+            return -1;
+        }
+        r = sh_sed_apply(prog, line, quiet, sed_emit, gs);
+        if (r < 0) {
+            to_flush(gs);
+            if (errno == ERANGE) {
+                sh_eprintf(s, "sed: %s: line %ld: result longer than %d bytes\n", name,
+                           lineno, SH_SED_SPACE_MAX);
+            } else if (errno == EAGAIN) {
+                sh_eprintf(s, "sed: %s: line %ld: pattern too expensive to match\n", name,
+                           lineno);
+            } else {
+                sh_eprintf(s, "sed: out of memory\n");
+            }
+            return -1;
+        }
+        if (r == SH_SED_QUIT) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int cmd_sed(sh_session_t *s, int argc, char **argv)
+{
+    const char *targets[MAX_ARGS];
+    char why[160];
+    char *line = NULL;
+    char *scriptbuf = NULL;
+    sh_sed_t *prog = sh_sed_new();
+    to_sink_t gs;
+    int quiet = 0, have_script = 0, files = 0, status = 0, i;
+
+    gs.s = s;
+    gs.with_count = 0;
+    gs.used = 0;
+    if (prog == NULL) {
+        sh_eprintf(s, "sed: out of memory\n");
+        return 1;
+    }
+
+    for (i = 1; i < argc; i++) {
+        const char *f;
+
+        if (strcmp(argv[i], "--") == 0) {
+            i++;
+            break;
+        }
+        if (argv[i][0] != '-' || argv[i][1] == '\0') {
+            break;
+        }
+        if (strncmp(argv[i], "--in-place", 10) == 0) {
+            f = "i";
+        } else if (argv[i][1] == '-') {
+            sh_eprintf(s, "sed: unrecognized option '%s'\n", argv[i]);
+            goto usage_error;
+        } else {
+            f = argv[i] + 1;
+        }
+        for (; *f != '\0'; f++) {
+            const char *text = NULL;
+
+            switch (*f) {
+            case 'n':
+                quiet = 1;
+                continue;
+            case 'i':
+                sh_eprintf(s, "sed: -i (editing a file in place) is not supported; write to a new file with > and mv it over the old one\n");
+                goto usage_error;
+            case 'E':
+            case 'r':
+                sh_eprintf(s, "sed: -%c (extended regular expressions) is not supported; patterns are POSIX basic, as in grep\n", *f);
+                goto usage_error;
+            case 'e':
+            case 'f':
+                if (f[1] != '\0') {
+                    text = f + 1;
+                } else if (i + 1 < argc) {
+                    text = argv[++i];
+                } else {
+                    sh_eprintf(s, "sed: option requires an argument -- %c\n", *f);
+                    goto usage_error;
+                }
+                if (*f == 'f') {
+                    if (scriptbuf == NULL) {
+                        scriptbuf = malloc(SED_SCRIPT_FILE_MAX);
+                        if (scriptbuf == NULL) {
+                            sh_eprintf(s, "sed: out of memory\n");
+                            goto usage_error;
+                        }
+                    }
+                    if (sed_read_script_file(s, text, scriptbuf, SED_SCRIPT_FILE_MAX) != 0) {
+                        goto usage_error;
+                    }
+                    text = scriptbuf;
+                }
+                if (sh_sed_add(prog, text, why, sizeof(why)) != 0) {
+                    sh_eprintf(s, "sed: %s\n", why);
+                    goto usage_error;
+                }
+                have_script = 1;
+                f += strlen(f) - 1; /* the rest of the cluster was the argument */
+                continue;
+            default:
+                sh_eprintf(s, "sed: illegal option -- %c\n", *f);
+                goto usage_error;
+            }
+        }
+    }
+    if (!have_script) {
+        if (i >= argc) {
+            sh_eprintf(s, "usage: sed [-n] [-e SCRIPT]... [-f FILE]... [SCRIPT] [FILE...]\n");
+            sh_eprintf(s, "sed: %s\n", "missing script");
+            goto usage_error;
+        }
+        if (sh_sed_add(prog, argv[i++], why, sizeof(why)) != 0) {
+            sh_eprintf(s, "sed: %s\n", why);
+            goto usage_error;
+        }
+    }
+    for (; i < argc && files < MAX_ARGS; i++) {
+        targets[files++] = argv[i];
+    }
+
+    line = malloc(SH_GREP_LINE_MAX);
+    if (line == NULL) {
+        sh_eprintf(s, "sed: out of memory\n");
+        goto usage_error;
+    }
+
+    if (files == 0) {
+        grep_src_t src;
+
+        src.s = s;
+        src.fd = -1;
+        src.file_eof = 0;
+        src.rbuf = NULL;
+        if (sed_stream(s, prog, quiet, &src, "(standard input)", line, &gs) < 0) {
+            status = 1;
+        }
+        to_flush(&gs);
+        goto done;
+    }
+
+    for (i = 0; i < files; i++) {
+        sh_target_t t;
+        struct stat st;
+        grep_src_t src;
+        int fd, r;
+
+        if (resolve_arg(s, "sed", targets[i], &t) != 0) {
+            status = 2;
+            continue;
+        }
+        if (t.kind == SH_TARGET_ROOT || t.kind == SH_TARGET_PSEUDO_DIR ||
+            (stat_target(&t, &st) == 0 && S_ISDIR(st.st_mode))) {
+            sh_eprintf(s, "sed: couldn't edit %s: not a regular file\n", targets[i]);
+            status = 2;
+            continue;
+        }
+        fd = sh_target_open(&t);
+        if (fd == -1) {
+            sh_eprintf(s, "sed: %s: %s\n", targets[i], strerror(errno));
+            status = 2;
+            continue;
+        }
+        src.s = s;
+        src.fd = fd;
+        src.file_eof = 0;
+        src.rbuf = malloc(GREP_RBUF);
+        src.rpos = src.rlen = 0;
+        r = sed_stream(s, prog, quiet, &src, targets[i], line, &gs);
+        to_flush(&gs);
+        free(src.rbuf);
+        sh_target_close(fd);
+        if (r < 0) {
+            status = 1;
+            break;
+        }
+        if (r > 0) {
+            break; /* q stops the whole run, not just this file */
+        }
+    }
+    goto done;
+
+usage_error:
+    status = 1;
+done:
+    free(line);
+    free(scriptbuf);
+    sh_sed_free(prog);
     return status;
 }
 
@@ -4011,6 +4281,8 @@ static const sh_builtin_t builtins[] = {
     {"pwd", cmd_pwd, "pwd -- print the working directory"},
     {"rm", cmd_rm, "rm [-r] [-f] PATH... -- delete; -r for directories"},
     {"rmdir", cmd_rmdir, "rmdir DIR... -- remove an empty directory"},
+    {"sed", cmd_sed,
+     "sed [-n] [-e SCRIPT]... [-f FILE] [SCRIPT] [FILE...] -- s/RE/TEXT/[g], d, p, q; -n quiet; no -i, addresses or hold space"},
     {"sort", cmd_sort,
      "sort [-n] [-r] [-u] [FILE] -- order lines, -n numeric, -r reverse, -u unique keys"},
     {"stat", cmd_stat, "stat PATH... -- size, mode and modification time"},

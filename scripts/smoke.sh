@@ -134,6 +134,29 @@ run_exec() {
   $V "ls /ux0/data/$T"  >/dev/null 2>&1; RC=$?; check "rm -r removes the tree"      1 "$RC"
   $V "rm /nosuchfile"   >/dev/null 2>&1; RC=$?; check "rm missing errs honestly"    1 "$RC"
 
+  # --- TASK-016.04: sed ----------------------------------------------------
+  # A small stream editor: s, d, p, q and -n; everything else is refused before a line is read.
+  $V "echo 'old old' > /ux0/data/$T-sed.txt ; echo keep >> /ux0/data/$T-sed.txt ; echo old >> /ux0/data/$T-sed.txt" >/dev/null 2>&1
+  OUT=$($V "echo 'old old' | sed 's/old/new/'" 2>/dev/null);          check "sed: first match only" "new old" "$OUT"
+  OUT=$($V "echo 'old old' | sed 's/old/new/g'" 2>/dev/null);         check "sed: g replaces all" "new new" "$OUT"
+  OUT=$($V "echo /ux0/a/x | sed 's|/ux0/a|/ux0/b|'" 2>/dev/null);     check "sed: alternate delimiter" "/ux0/b/x" "$OUT"
+  OUT=$($V "echo abc | sed 's/x*/-/g'" 2>/dev/null);                  check "sed: empty matches walk like GNU" "-a-b-c-" "$OUT"
+  OUT=$($V "echo abc | sed 's/b/[&]/'" 2>/dev/null);                  check "sed: & is the match" "a[b]c" "$OUT"
+  OUT=$($V "sed -n -e 's/old/X/p' /ux0/data/$T-sed.txt" 2>&1 | grep -v 'closed by remote host'); case $OUT in *"flag 'p'"*) check "sed: s///p is refused by name" ok ok ;; *) check "sed: s///p is refused by name: got \"$OUT\"" ok fail ;; esac
+  OUT=$($V "sed -n p /ux0/data/$T-sed.txt | wc -l" 2>/dev/null);     check "sed: -n p prints each line once" 3 "$(printf '%s' "$OUT" | tr -d ' ')"
+  OUT=$($V "sed d /ux0/data/$T-sed.txt" 2>/dev/null);                 check "sed: d deletes every line" "" "$OUT"
+  OUT=$($V "sed q /ux0/data/$T-sed.txt" 2>/dev/null);                 check "sed: q stops after the first line" "old old" "$OUT"
+  OUT=$($V "sed -e 's/old/a/' -e 's/a/b/' /ux0/data/$T-sed.txt | head -n 1" 2>/dev/null); check "sed: -e scripts apply in order" "b old" "$OUT"
+  OUT=$($V "cat /ux0/data/$T-sed.txt | sed 's/keep/kept/' | grep -c kept" 2>/dev/null);    check "sed: reads a pipe" 1 "$OUT"
+  $V "sed -i s/old/new/ /ux0/data/$T-sed.txt" >/dev/null 2>&1; RC=$?; check "sed: -i is refused" 1 "$RC"
+  OUT=$($V "grep -c old /ux0/data/$T-sed.txt" 2>/dev/null);           check "sed: -i left the file alone" 2 "$OUT"
+  OUT=$($V "sed 1,2d /ux0/data/$T-sed.txt" 2>&1 | grep -v 'closed by remote host'); case $OUT in *"line addresses are not supported: 1,2d"*) check "sed: a range is refused by name" ok ok ;; *) check "sed: a range is refused by name: got \"$OUT\"" ok fail ;; esac
+  OUT=$($V "sed h /ux0/data/$T-sed.txt" 2>&1 | grep -v 'closed by remote host'); case $OUT in *"hold space"*) check "sed: hold space is refused by name" ok ok ;; *) check "sed: hold space is refused by name: got \"$OUT\"" ok fail ;; esac
+  OUT=$($V "sed 's/a/b' /ux0/data/$T-sed.txt" 2>&1 | grep -v 'closed by remote host'); case $OUT in *"sed: unterminated"*) check "sed: a bad script reports sed: reason" ok ok ;; *) check "sed: a bad script reports sed: reason: got \"$OUT\"" ok fail ;; esac
+  OUT=$($V "sed 's/old/X/' /nosuchsedfile /ux0/data/$T-sed.txt | grep -c '^X old'" 2>/dev/null | tail -n 1); check "sed: a missing file does not stop the others" 1 "$OUT"
+  $V "sed p /nosuchsedfile" >/dev/null 2>&1; RC=$?; check "sed: a missing file is status 2" 2 "$RC"
+  $V "rm /ux0/data/$T-sed.txt" >/dev/null 2>&1
+
   # --- TASK-015.02: pipelines ----------------------------------------------
   # Segments run one after another in the server; the `|` word must stand alone, like `>`.
   OUT=$($V "echo x | cat" 2>/dev/null);               check "pipe: echo x | cat" x "$OUT"

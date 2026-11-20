@@ -254,7 +254,7 @@ than to libc, and POSIX paths are mapped onto sceIo devices at the boundary.
 
 ```
 :  alias  cat  cd  cp  curl  date  devices  df  du  echo  env  exit  export  false  grep  head  help
-ls   mkdir  mv   printenv  pwd     rm   rmdir  sort  stat  tail  touch  true  unalias  uname  uniq  unset  vcmd  vpk  wc  wget  whoami
+ls   mkdir  mv   printenv  pwd     rm   rmdir  sed  sort  stat  tail  touch  true  unalias  uname  uniq  unset  vcmd  vpk  wc  wget  whoami
 ```
 
 `env` and `printenv [NAME...]` report this session's own variables, so two sessions never
@@ -292,6 +292,30 @@ unreadable file). A file that cannot be read is reported as `grep: FILE: reason`
 other files are still searched. A line longer than **4096 bytes** is reported as too long
 rather than matched, never silently truncated into a wrong answer; and a pattern too
 expensive to match in the step budget is refused rather than allowed to hang the session.
+
+`sed [-n] [-e SCRIPT]... [-f FILE] [SCRIPT] [FILE...]` is a deliberately small stream editor that
+reads files or the session's stdin (`cat f | sed 's/a/b/'`) and writes to stdout. **Supported
+subset:** `s/RE/TEXT/` (first match on each line) and `s/RE/TEXT/g` (all of them) with any
+delimiter (`s|/ux0/a|/ux0/b|`; `\|` is a literal `|` there), `d` (delete the line), `p`
+(print it again), `q` (print the line, then stop reading, across files too), and `-n` to
+turn off the automatic print. Commands are separated by `;` or a newline, `#` starts a
+comment, and several `-e` or `-f` scripts apply in the order given. `RE` is exactly grep's
+POSIX basic syntax, from the same engine, and a match is the leftmost, then longest, as in
+GNU sed; in `TEXT`, `&` is the match and `\&`, `\\` and `\DELIM` are themselves. Anything
+else is **refused with a message that names it, before any line is read**: line addresses
+and ranges (`1,5d`, `/x/d`, `$d`), hold space (`h H g G x`), labels and branches, `{ }`
+blocks, `y a i c w r` and the other commands, back-references (`\1`), `\n` or `\t` in
+`TEXT`, the `s` flags other than `g` (`p`, `i`, a number, `w`), an empty `RE`, `-E`/`-r`,
+and `-i`. `-i` in particular is never accepted quietly: rewriting a file nobody asked to
+rewrite is the failure to avoid, so to edit a file write a new one and move it over the
+old (`sed 's/a/b/' f > f.new ; mv f.new f`). Differences from GNU sed that remain: every
+output line ends in a newline, including a last line that had none; a line over **4096
+bytes** stops the run with `sed: FILE: line N: too long`, and so does a substitution whose
+result passes **8192 bytes**, rather than truncating or skipping a line and handing back a
+shorter file than the input; at most 32 commands, and a replacement of at most 255 bytes.
+Exit status is **0** on success, **1** for a bad script or option or a stopped run, and
+**2** when a file could not be read (`sed: FILE: reason`), in which case the other files
+are still processed.
 
 `head [-n N | -c N] [FILE]` prints the first N lines (**10** by default) or the first N
 bytes, and `tail [-n N | -c N] [FILE]` the last — the whole file when it holds fewer lines

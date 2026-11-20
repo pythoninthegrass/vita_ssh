@@ -49,6 +49,7 @@ struct sh_grep_re {
     int root;
     int icase;
     int matches_all; /* the empty pattern: every line, no walk needed */
+    int blank_only;  /* "^$": only an empty line */
     int anchored;    /* the pattern began with ^, so a match may start only at 0 */
     int literal;     /* no metacharacters at all, so sh_grep_find answers exactly */
     char *lit;
@@ -658,6 +659,10 @@ sh_grep_t *sh_grep_compile(const char *pattern, int flags)
     memcpy(re->text, pattern, plen + 1);
     re->icase = (flags & SH_GREP_ICASE) ? 1 : 0;
 
+    if (strcmp(pattern, "^$") == 0) {
+        re->blank_only = 1;
+        return re;
+    }
     if (plen == 0 || strcmp(pattern, "^") == 0 || strcmp(pattern, "$") == 0) {
         /* The empty pattern and the two degenerate anchors match every line. */
         re->matches_all = 1;
@@ -673,11 +678,6 @@ sh_grep_t *sh_grep_compile(const char *pattern, int flags)
     } else {
         /* No trailing anchor: the parser must see the whole pattern. */
         slen = plen;
-    }
-    if (slen == 0 || (slen == 1 && pattern[0] == '^')) {
-        /* "^", "$", "^$": every line has a start and an end. */
-        re->matches_all = 1;
-        return re;
     }
     memcpy(stripped, pattern, slen);
     stripped[slen] = '\0';
@@ -1013,6 +1013,7 @@ static int node_can_be_empty(const sh_grep_t *re, int node)
     case OP_REP:
         return n->min == 0 || node_can_be_empty(re, n->a);
     case OP_BOL:
+        return node_can_be_empty(re, n->a); /* ^ itself consumes nothing, its body might */
     case OP_EOL:
         return 1; /* passable without consuming */
     default:
@@ -1094,8 +1095,10 @@ static void closure_seeds(matcher_t *m, const int *seed, int n, size_t at)
     }
 }
 
+/* Search mode (best NULL) answers whether any match exists. Span mode starts a match at `start`
+ * only and records in *best the end of the longest one, -1 when none. */
 static int walk(const sh_grep_t *re, const char *line, size_t len, unsigned int *slots,
-                int *pending, int *live)
+                int *pending, int *live, size_t start, long *best)
 {
     matcher_t m;
     size_t pos;
@@ -1115,15 +1118,22 @@ static int walk(const sh_grep_t *re, const char *line, size_t len, unsigned int 
     m.failed = 0;
     m.hit = 0;
 
-    closure(&m, re->root, 0, 0);
+    if (best != NULL) {
+        *best = -1;
+    }
+    closure(&m, re->root, 0, start);
     if (m.failed) {
         errno = EAGAIN;
         return -1;
     }
     if (m.hit) {
-        return 1;
+        if (best == NULL) {
+            return 1;
+        }
+        *best = (long)start;
+        m.hit = 0;
     }
-    for (pos = 0; pos < len; pos++) {
+    for (pos = start; pos < len; pos++) {
         unsigned char ch = (unsigned char)line[pos];
         int seed[2 * LIVE_PAIRS];
         int nseed = 0;
@@ -1157,7 +1167,10 @@ static int walk(const sh_grep_t *re, const char *line, size_t len, unsigned int 
                 }
             }
         }
-        if (!re->anchored) {
+        if (best != NULL && nseed == 0) {
+            break; /* no state is left to extend, so the longest match is already known */
+        }
+        if (best == NULL && !re->anchored) {
             /* A search may begin at any byte, so the entry is seeded at every position unless ^. */
             if (nseed + 1 < 2 * LIVE_PAIRS) {
                 seed[nseed++] = re->root;
@@ -1179,10 +1192,14 @@ static int walk(const sh_grep_t *re, const char *line, size_t len, unsigned int 
             return -1;
         }
         if (m.hit) {
-            return 1;
+            if (best == NULL) {
+                return 1;
+            }
+            *best = (long)(pos + 1);
+            m.hit = 0;
         }
     }
-    return m.hit;
+    return best != NULL ? *best >= 0 : m.hit;
 }
 
 int sh_grep_match(const sh_grep_t *re, const char *line, int invert)
@@ -1195,6 +1212,10 @@ int sh_grep_match(const sh_grep_t *re, const char *line, int invert)
     if (re == NULL || line == NULL) {
         errno = EINVAL;
         return -1;
+    }
+    if (re->blank_only) {
+        hit = line[0] == '\0';
+        return invert ? !hit : hit;
     }
     if (re->matches_all) {
         return invert ? 0 : 1;
@@ -1213,7 +1234,7 @@ int sh_grep_match(const sh_grep_t *re, const char *line, int invert)
         errno = ENOMEM;
         return -1;
     }
-    hit = walk(re, line, strlen(line), slots, pending, live);
+    hit = walk(re, line, strlen(line), slots, pending, live, 0, NULL);
     free(slots);
     free(pending);
     free(live);
@@ -1221,6 +1242,75 @@ int sh_grep_match(const sh_grep_t *re, const char *line, int invert)
         return -1;
     }
     return invert ? !hit : hit;
+}
+
+int sh_grep_span(const sh_grep_t *re, const char *line, size_t from, size_t *so, size_t *eo)
+{
+    size_t len, start;
+    unsigned int *slots;
+    int *pending;
+    int *live;
+    long best = -1;
+    int r = 0;
+
+    if (re == NULL || line == NULL || so == NULL || eo == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+    len = strlen(line);
+    if (from > len) {
+        return 0;
+    }
+    if (re->blank_only) {
+        *so = *eo = 0;
+        return len == 0 && from == 0;
+    }
+    if (re->matches_all) {
+        /* Empty at from for "", only at the start for "^", only at the end for "$". */
+        size_t at = re->text[0] == '^' ? 0 : re->text[0] == '$' ? len : from;
+
+        if (at < from) {
+            return 0;
+        }
+        *so = *eo = at;
+        return 1;
+    }
+    if (re->literal) {
+        const char *at = sh_grep_find(line + from, re->lit, re->lit_len, re->icase);
+
+        if (at == NULL) {
+            return 0;
+        }
+        *so = (size_t)(at - line);
+        *eo = *so + re->lit_len;
+        return 1;
+    }
+    slots = calloc(SET_SLOTS, sizeof(*slots));
+    pending = calloc(2 * LIVE_PAIRS, sizeof(*pending));
+    live = calloc(2 * LIVE_PAIRS, sizeof(*live));
+    if (slots == NULL || pending == NULL || live == NULL) {
+        free(slots);
+        free(pending);
+        free(live);
+        errno = ENOMEM;
+        return -1;
+    }
+    /* The leftmost start that matches wins; at that start the longest end wins. */
+    for (start = from; start <= len; start++) {
+        memset(slots, 0, (size_t)SET_SLOTS * sizeof(*slots));
+        r = walk(re, line, len, slots, pending, live, start, &best);
+        if (r != 0) {
+            break;
+        }
+    }
+    free(slots);
+    free(pending);
+    free(live);
+    if (r > 0) {
+        *so = start;
+        *eo = (size_t)best;
+    }
+    return r;
 }
 
 #ifdef SH_GREP_DEBUG
