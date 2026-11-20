@@ -72,16 +72,16 @@ Approach: same split as sed. A pure module (no I/O, no Vita APIs) does parsing a
 3. -F: default splits on runs of blank/tab with ends trimmed; a single character splits literally and keeps empty fields; \t is a tab. A multi-character -F is a regex (ERE) in real awk and the engine is BRE, so it is refused as unsupported rather than silently differing.
 4. Everything else is refused at compile time, before any line is read, so there is never partial output: awk: unsupported: CONSTRUCT for BEGIN, END, assignment, arithmetic (including $(NF-1)), if/while/for/do, functions and calls, getline, ~ and !~, !, &&, ||, a second rule, -v and -f. Anything not understood at all is awk: reason (syntax error), never a literal. Unknown identifiers are variables, hence unsupported: variables.
 5. Bounds: line 4096 (SH_GREP_LINE_MAX, via sh_grep_read_line), fields 64, print args 16, output line 8192; each overflow is reported with the line number and stops the run, as sed does.
-6. cmd_awk() in src/sshd_builtins.c: resolve_arg() for files, stdin with no file, grep_src_t/grep_fill, to_sink_t for output, alphabetical row in builtins[]. The per-file loop is the same as cmd_sed's; put it in one helper that awk uses, and leave cmd_sed alone until Lance says whether to convert it (rewriting working code needs his permission).
+6. cmd_awk() in src/sshd_builtins.c: resolve_arg() for files, stdin with no file, grep_src_t/grep_fill, to_sink_t for output, alphabetical row in builtins[]. The per-file loop is the same as cmd_sed's; put it in one helper (filter_over_sources) that both awk and sed use; Lance approved converting cmd_sed.
 7. TDD: scripts/test_sh_awk.c (checks plus a driver mode) and scripts/test_sh_awk.py (ASan/UBSan build, then worked examples and every {a,b} line up to a few bytes pinned against real awk, under timeout). Write both first and watch them fail before the module exists.
 8. Docs and checks: README awk subset (DoD 3), docs/shell-text-tools.md rationale, AGENTS.md host-check list and server source list, scripts/smoke.sh awk section.
 9. Verify: host tests, task build (both VPKs), then install with vpk install -r over ssh and run smoke.sh on the Vita (find the network per CLAUDE.local.md first).
 
-Risks: awk number-versus-string comparison corners (pinned against real awk); the file-loop helper must not change sed's behavior (not touching sed).
+Risks: awk number-versus-string comparison corners (pinned against real awk); the file-loop helper must not change sed's behavior (sed's non-regular-file message is the one intended change).
 
 Plan adjustment (routine, within scope): awk regexes are POSIX extended and the grep engine is basic, so /a+/ or /(a|b)/ would silently mean something else. sh_awk.c translates ERE to the engine's BRE spelling outside bracket expressions (unescaped + ? | ( ) { } gain a backslash, escaped ones lose it) and the host test pins the result against real awk (BWK awk 20200816 and gawk 5.4.1 are both installed) rather than refusing. Also: a bare word in a comparison (the task's own `$3 == x` example) is an uninitialized variable in real awk, so it is refused as unsupported: variable; the string form `$3 == "x"` is what works. -Ft (tab in POSIX awks) is refused by name because a literal t split is never what was meant.
 
-Final adjustments: field bound is 128, not 64. A missing field compares as the empty string, not 0 (both real awks, found by the pin run). cmd_awk shares filter_over_sources() (new); cmd_sed was not converted and sed_emit was renamed sink_emit_line since awk uses it too.
+Final adjustments: field bound is 128, not 64. A missing field compares as the empty string, not 0 (both real awks, found by the pin run). cmd_awk and cmd_sed share filter_over_sources() (new), and sed_emit was renamed sink_emit_line since awk uses it too.
 <!-- SECTION:PLAN:END -->
 
 ## Final Summary
@@ -91,7 +91,7 @@ Added awk as a field-action subset: new pure module include/sh_awk.h + src/sh_aw
 
 Verification: scripts/test_sh_awk.py (ASan/UBSan, plus about 130 worked examples and every {a,b} line to four bytes pinned against BWK awk and gawk; the pin run caught a wrong assumption about missing fields). task build produces both VPKs, no warnings. Installed with vpk install -r on the Vita (office network); scripts/smoke.sh exec: 190 pass, 0 fail, including 16 new awk checks. Device check of bounds: a 200-field line and a 5000-byte line each stopped with the named error and status 2; NR-only programs are not stopped by a wide line. README, docs/shell-text-tools.md, AGENTS.md updated.
 
-Decisions for review: AC4's `$3 == x` is written `$3 == "x"` because a bare word is a variable in awk; cmd_sed's file loop still duplicates filter_over_sources() (not converted without permission).
+Decisions: AC4's `$3 == x` is written `$3 == "x"` because a bare word is a variable in awk (AC reworded); cmd_sed was converted to filter_over_sources() with Lance's approval.
 
 Follow-up: cmd_sed now runs through filter_over_sources() too (sed_run adapter); sed's non-regular-file message is now 'sed: FILE: not a regular file'. Re-verified on the Vita: smoke.sh exec 190 pass, 0 fail.
 <!-- SECTION:FINAL_SUMMARY:END -->
