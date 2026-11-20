@@ -39,7 +39,7 @@ int load_network_modules() {
     return 0;
 }
 
-int init_network() {
+int init_network_start() {
     net_memid = sceKernelAllocMemBlock("NetMem", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW, 512 * 1024, NULL);
     if (net_memid < 0) {
         net_log("Error reserving memory block: 0x%08X", net_memid);
@@ -75,6 +75,32 @@ int init_network() {
         return ret;
     }
 
+    return 0;
+}
+
+int network_connected() {
+    int state = 0;
+
+    return sceNetCtlInetGetState(&state) == 0 && state == SCE_NETCTL_STATE_CONNECTED;
+}
+
+void network_hold_wireless() {
+    /* The WLAN chip has its own power-save, separate from the system
+     * idle timer: left alone it drops the association after a few
+     * seconds of silence, and a client that connects during the down
+     * half of that cycle gets "No route to host" at connect(). A
+     * server that must be reachable while nobody is typing asks the
+     * power manager to keep wireless at full availability. */
+    int ret = scePowerSetUsingWireless(SCE_TRUE);
+    net_log("wireless hold: scePowerSetUsingWireless(TRUE) -> %d", ret);
+}
+
+int init_network() {
+    int ret = init_network_start();
+    if (ret < 0) {
+        return ret;
+    }
+
     net_log("Waiting for network connection...");
     int state = 0;
     int timeout = 10;
@@ -82,14 +108,7 @@ int init_network() {
         ret = sceNetCtlInetGetState(&state);
         if (ret == 0 && state == SCE_NETCTL_STATE_CONNECTED) {
             net_log("Network ready and connected");
-            /* The WLAN chip has its own power-save, separate from the system
-             * idle timer: left alone it drops the association after a few
-             * seconds of silence, and a client that connects during the down
-             * half of that cycle gets "No route to host" at connect(). A
-             * server that must be reachable while nobody is typing asks the
-             * power manager to keep wireless at full availability. */
-            ret = scePowerSetUsingWireless(SCE_TRUE);
-            net_log("wireless hold: scePowerSetUsingWireless(TRUE) -> %d", ret);
+            network_hold_wireless();
             return 0;
         }
         net_log("Network state: %d, ret: 0x%08X", state, ret);
@@ -97,7 +116,7 @@ int init_network() {
     }
 
     net_log("Could not connect to network: state=%d", state);
-    sceKernelFreeMemBlock(net_memid);
+    cleanup_network();
     return -1;
 }
 

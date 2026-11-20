@@ -8,6 +8,10 @@
 #endif
 
 int init_network();
+/* init_network() in two halves, for a caller that waits for Wi-Fi its own way. */
+int init_network_start();
+int network_connected();
+void network_hold_wireless();
 void cleanup_network();
 int load_network_modules();
 

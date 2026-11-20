@@ -343,17 +343,58 @@ static void local_ip(char *dst, size_t dstlen)
     }
 }
 
-static int bring_up_network(void)
+static int start_pressed(void)
+{
+    static SceCtrlData pad;
+    static int held;
+
+    sceCtrlPeekBufferPositive(0, &pad, 1);
+    if ((pad.buttons & SCE_CTRL_START) != 0) {
+        if (++held > 30) { /* about a second at 30fps: no accidental exits */
+            return 1;
+        }
+        return 0;
+    }
+    held = 0;
+    return 0;
+}
+
+/* Waits for Wi-Fi with no deadline, drawing the normal console so only the address (0.0.0.0) differs; exiting would just send the joiner back to relaunch. */
+static int wait_for_network(vita2d_pgf *font, const sh_auth_t *auth)
+{
+    char ip[64];
+
+    sh_console_log("Waiting for network connection...");
+    listen_port = SSHD_PORT_PRIMARY;
+    while (!quit_requested) {
+        if (network_connected()) {
+            sh_console_log("Network ready and connected");
+            network_hold_wireless();
+            return 0;
+        }
+        local_ip(ip, sizeof(ip));
+        draw_console(font, auth, ip);
+        if (start_pressed()) {
+            quit_requested = 1;
+            break;
+        }
+        sceKernelDelayThread(33 * 1000);
+    }
+    sh_console_log("stopped waiting for the network");
+    return -1;
+}
+
+static int bring_up_network(vita2d_pgf *font, const sh_auth_t *auth)
 {
     if (load_network_modules() != 0) {
         sh_console_log("error: network modules failed to load");
         return -1;
     }
-    if (init_network() != 0) {
-        sh_console_log("error: sceNet did not come up (is Wi-Fi connected?)");
+    if (init_network_start() != 0) {
+        sh_console_log("error: sceNet did not come up");
         return -1;
     }
-    return 0;
+    return wait_for_network(font, auth);
 }
 
 /* ------------------------------------------------------------------ */
@@ -697,22 +738,6 @@ static void refresh_ip(char *ip, size_t len)
 /* the loop                                                           */
 /* ------------------------------------------------------------------ */
 
-static int start_pressed(void)
-{
-    static SceCtrlData pad;
-    static int held;
-
-    sceCtrlPeekBufferPositive(0, &pad, 1);
-    if ((pad.buttons & SCE_CTRL_START) != 0) {
-        if (++held > 30) { /* about a second at 30fps: no accidental exits */
-            return 1;
-        }
-        return 0;
-    }
-    held = 0;
-    return 0;
-}
-
 static void server_loop(ssh_bind *bind, const sh_auth_t *auth, vita2d_pgf *font)
 {
     unsigned long long next_draw = 0;
@@ -884,10 +909,10 @@ static int server_thread(SceSize args, void *argp)
 
     if (ssh_init() != SSH_OK) {
         sh_console_log("error: ssh_init failed");
-    } else if (bring_up_network() != 0) {
-        /* keep going: the console must show why nothing is listening */
     } else if (sh_auth_prepare(&auth) != 0) {
         sh_console_log("error: cannot start without a host key");
+    } else if (bring_up_network(font, &auth) != 0) {
+        /* keep going: the console must show why nothing is listening */
     } else {
         sh_listen_init(&listener_health);
         ports[0] = SSHD_PORT_PRIMARY;
