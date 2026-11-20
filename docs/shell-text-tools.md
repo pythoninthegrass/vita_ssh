@@ -1,6 +1,6 @@
-# grep, sed, head, tail, wc, sort and uniq: design notes
+# grep, sed, awk, head, tail, wc, sort and uniq: design notes
 
-The source for these six builtins keeps comments to one line each. This page holds the rationale that did not fit on one line, grouped by tool; each entry names the file and symbol it belongs to.
+The source for these builtins keeps comments to one line each. This page holds the rationale that did not fit on one line, grouped by tool; each entry names the file and symbol it belongs to.
 
 ## grep
 
@@ -65,6 +65,32 @@ The engine has no capture groups, so `\1` in a replacement is refused instead of
 ### `src/sshd_builtins.c`: sed stops on a bad line
 
 grep skips an over-long line and carries on because a skipped line there only shortens a report. For sed the output is a replacement for the input, so a skipped line would hand back a shorter file with an exit status the caller may not check. A too-long line, or a substitution result over `SH_SED_SPACE_MAX`, therefore stops the run with the line number. Options are parsed and every script is compiled before any input is opened, so a refused script or `-i` writes and reads nothing.
+
+## awk
+
+### `src/sh_awk.c`: the pure core
+
+Compiling a program and running it on a line carry no I/O so the host test can run them: `sh_awk_compile()` parses one rule and the field separator, atomically, and `sh_awk_apply()` splits one line, tests the pattern and hands each printed line to a callback. NR lives in the program object, not in the file loop, so it carries across files as awk's does. `cmd_awk()` in `src/sshd_builtins.c` is options and the sink; the per-file loop is `filter_over_sources()`, shared with `cmd_sed()`.
+
+### `src/sh_awk.c`: refusal, not tolerance
+
+The point of the subset is that an awk which drops a statement it does not understand prints numbers that look right and are wrong. Every construct outside the subset is therefore named and refused at compile time, before any line is read, so a refusal never follows partial output. A word that is not `NF`, `NR` or `print` is a variable, a call or an assignment, and the message says which. A bare word in a comparison is refused as a variable even though the task text wrote `$3 == x`: in awk that `x` is an uninitialized variable, so accepting it as a literal would answer differently from every real awk.
+
+### `src/sh_awk.c`: ERE spelled for the BRE engine
+
+awk's regexes are POSIX extended and the grep engine is basic, where `+ ? | ( ) { }` are ordinary bytes and their backslashed forms are the operators. `ere_to_bre()` swaps the spelling outside bracket expressions (an unescaped one gains a backslash, an escaped one loses it), so `/^[0-9]+$/` and `/a\+b/` mean what they mean in awk. The BRE rules that differ the other way are refused rather than guessed: a `^` that is not at the start of the expression, group or alternative, a `$` that is not at the end, and a backslash before a letter or digit (`\d`, `\1`, `\n`). The tests pin the translation against BWK awk and gawk.
+
+### `src/sh_awk.c`: number or string
+
+A field looks numeric when it is a decimal number with optional sign, fraction and exponent and optional surrounding blanks, and then it compares as a number against a number (a literal, `NF` or `NR`); against a string literal, or when either side is not numeric, the comparison is on bytes. A field the line does not have is the empty string and is not 0: `$3 == 0` and `$3 > -1` are false on a two-field line in both BWK awk and gawk, which `scripts/test_sh_awk.py` checks. A number prints as an integer when it is integral and `%.6g` otherwise, so `print 1.50` is `1.5` and `print 007` is `7`.
+
+### `src/sh_awk.c`: -F
+
+A single character (other than a blank, which is the default) splits exactly there, including a regex metacharacter like `|` or `.`, and keeps empty fields; `\t` is a tab. Longer values are regular expressions in real awk and are refused instead of being read as literal text. `-Ft` is a tab in the POSIX awks and a split on the letter `t` anywhere else, so it is refused by name.
+
+### `src/sshd_builtins.c`: awk stops on a bad line
+
+As with sed, the output stands in for the input, so a line over 4096 bytes, a line with more than `SH_AWK_FIELD_MAX` fields or a print over `SH_AWK_OUT_MAX` stops the run with the line number. The fields are only split when the program reads one (`needs_fields`), so a program that uses only `NR` or `$0` is never stopped by a wide line.
 
 ## head and tail
 

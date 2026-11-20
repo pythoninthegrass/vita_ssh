@@ -253,7 +253,7 @@ running in the server's own process, the working directory belongs to the sessio
 than to libc, and POSIX paths are mapped onto sceIo devices at the boundary.
 
 ```
-:  alias  cat  cd  cp  curl  date  devices  df  du  echo  env  exit  export  false  grep  head  help
+:  alias  awk  cat  cd  cp  curl  date  devices  df  du  echo  env  exit  export  false  grep  head  help
 ls   mkdir  mv   printenv  pwd     rm   rmdir  sed  sort  stat  tail  touch  true  unalias  uname  uniq  unset  vcmd  vpk  wc  wget  whoami
 ```
 
@@ -316,6 +316,8 @@ shorter file than the input; at most 32 commands, and a replacement of at most 2
 Exit status is **0** on success, **1** for a bad script or option or a stopped run, and
 **2** when a file could not be read (`sed: FILE: reason`), in which case the other files
 are still processed.
+
+`awk [-F SEP] 'PROGRAM' [FILE...]` is a deliberately small awk for pulling fields out of lines: it reads files or the session's stdin (`ls /ux0 | awk '{print $1}'`) and writes to stdout. **Supported subset:** one rule, `[PATTERN] { print ARG, ARG... }`. The pattern is a `/regex/` (POSIX extended, as in awk, run on the same engine as grep) or a comparison `OPERAND == != < <= > >= OPERAND`; with no pattern every line is used and with no action the line is printed. An operand or print argument is a field `$1`, `$2`, ... (`$0` is the whole line, `$NF` the last one), `NF`, `NR`, a number or a `"string"`. A field is compared as a number when it looks like one and the other side is a number, otherwise as a string, as awk does, and a field the line does not have is the empty string. `print` joins its comma-separated arguments with one space; several `print` statements may be separated by `;`. Fields split on runs of blanks and tabs, or with `-F SEP` on one character exactly (`-F:`, `-F ,`, `-F '\t'`), keeping empty fields, so `a::b` has three. `NR` counts across files. Anything else is **refused with a message that names it, before any line is read**, so there is never partial output: `BEGIN` and `END`, variables and assignment (including `$1 = x` and `NF = 2`), arithmetic (including `$(NF-1)`), `if`, `while`, `for` and `do`, functions and calls (`length`, `substr`, `printf`), `getline`, `next`, `exit`, `~` and `!~`, `!`, `&&`, `||`, `?:`, ranges (`/a/,/b/`), more than one rule, output redirection (`print > file`), string concatenation (`print $1 $2`; separate arguments with commas), `-v`, `-f`, `-Ft` and an `-F` longer than one character (real awk reads it as a regular expression). A bare word such as the `x` in `$3 == x` is a variable in awk, so write `$3 == "x"`. A program it cannot parse is `awk: reason` with status 2, never treated as text. Bounds: a line over **4096 bytes**, a line with more than **128 fields**, or a print longer than **8192 bytes** stops the run with `awk: FILE: line N: ...` rather than being cut; at most 16 arguments per `print`, 8 statements and 128 bytes per string literal. Exit status is **0** on success and **2** for a bad program or option, an unreadable file (the other files are still read), or a stopped run.
 
 `head [-n N | -c N] [FILE]` prints the first N lines (**10** by default) or the first N
 bytes, and `tail [-n N | -c N] [FILE]` the last — the whole file when it holds fewer lines

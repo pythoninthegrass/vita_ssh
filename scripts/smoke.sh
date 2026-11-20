@@ -157,6 +157,27 @@ run_exec() {
   $V "sed p /nosuchsedfile" >/dev/null 2>&1; RC=$?; check "sed: a missing file is status 2" 2 "$RC"
   $V "rm /ux0/data/$T-sed.txt" >/dev/null 2>&1
 
+  # --- TASK-016.05: awk ----------------------------------------------------
+  # One [pattern] { print ... } rule over fields; everything else is refused before a line is read.
+  $V "echo 'a b c d' > /ux0/data/$T-awk.txt ; echo 'e f g' >> /ux0/data/$T-awk.txt ; echo 'x:y::z' >> /ux0/data/$T-awk.txt" >/dev/null 2>&1
+  OUT=$($V "awk '{print \$1, \$3}' /ux0/data/$T-awk.txt | head -n 2" 2>/dev/null | tr '\n' '|'); check "awk: print two fields" "a c|e g|" "$OUT"
+  OUT=$($V "echo 'a  b' | awk '{print \$0}'" 2>/dev/null);              check "awk: \$0 is the whole line" "a  b" "$OUT"
+  OUT=$($V "awk -F: '{print NF}' /ux0/data/$T-awk.txt | tail -n 1" 2>/dev/null); check "awk: -F keeps empty fields" 4 "$OUT"
+  OUT=$($V "awk '{print NR, NF}' /ux0/data/$T-awk.txt | head -n 2" 2>/dev/null | tr '\n' '|'); check "awk: NR and NF" "1 4|2 3|" "$OUT"
+  OUT=$($V "awk 'NR > 2' /ux0/data/$T-awk.txt" 2>/dev/null);             check "awk: NR pattern" "x:y::z" "$OUT"
+  OUT=$($V "awk '/^e/ {print \$2}' /ux0/data/$T-awk.txt" 2>/dev/null);   check "awk: regex pattern" "f" "$OUT"
+  OUT=$($V "awk '\$3 == \"g\" {print \$1}' /ux0/data/$T-awk.txt" 2>/dev/null); check "awk: field comparison" "e" "$OUT"
+  OUT=$($V "echo 12 | awk '/^[0-9]+\$/'" 2>/dev/null);                  check "awk: regex is extended" "12" "$OUT"
+  OUT=$($V "cat /ux0/data/$T-awk.txt | awk '{print \$NF}' | head -n 1" 2>/dev/null); check "awk: reads a pipe" "d" "$OUT"
+  OUT=$($V "awk '{x = 1}' /ux0/data/$T-awk.txt" 2>&1 | grep -v 'closed by remote host'); case $OUT in *"awk: unsupported: assignment"*) check "awk: assignment is refused by name" ok ok ;; *) check "awk: assignment is refused by name: got \"$OUT\"" ok fail ;; esac
+  OUT=$($V "awk 'BEGIN {print 1}'" 2>&1 | grep -v 'closed by remote host'); case $OUT in *"awk: unsupported: BEGIN"*) check "awk: BEGIN is refused by name" ok ok ;; *) check "awk: BEGIN is refused by name: got \"$OUT\"" ok fail ;; esac
+  $V "awk '{print \$1; x = 1}' /ux0/data/$T-awk.txt" >/dev/null 2>&1; RC=$?; check "awk: a refusal exits nonzero" 2 "$RC"
+  OUT=$($V "awk '{print \$1; x = 1}' /ux0/data/$T-awk.txt" 2>&1 | grep -c '^[aex]$'); check "awk: a refusal prints no record first" 0 "$OUT"
+  OUT=$($V "awk '{print' /ux0/data/$T-awk.txt" 2>&1 | grep -v 'closed by remote host'); case $OUT in *"awk: missing }"*) check "awk: a bad program reports awk: reason" ok ok ;; *) check "awk: a bad program reports awk: reason: got \"$OUT\"" ok fail ;; esac
+  OUT=$($V "awk '{print \$1}' /nosuchawkfile /ux0/data/$T-awk.txt | head -n 1" 2>/dev/null | tail -n 1); check "awk: a missing file does not stop the others" "a" "$OUT"
+  $V "awk '{print}' /nosuchawkfile" >/dev/null 2>&1; RC=$?; check "awk: a missing file is status 2" 2 "$RC"
+  $V "rm /ux0/data/$T-awk.txt" >/dev/null 2>&1
+
   # --- TASK-015.02: pipelines ----------------------------------------------
   # Segments run one after another in the server; the `|` word must stand alone, like `>`.
   OUT=$($V "echo x | cat" 2>/dev/null);               check "pipe: echo x | cat" x "$OUT"

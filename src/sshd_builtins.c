@@ -22,6 +22,7 @@
 #include "sshd_curl.h"
 #include "sh_grep.h"
 #include "sh_headtail.h"
+#include "sh_awk.h"
 #include "sh_sed.h"
 #include "sh_textops.h"
 #include "sh_wget_args.h"
@@ -1289,7 +1290,7 @@ static int cmd_grep(sh_session_t *s, int argc, char **argv)
 /* A script file is read whole, so it is capped; one-liners are what sed here is for. */
 #define SED_SCRIPT_FILE_MAX 4096
 
-static void sed_emit(void *ctx, const char *line, size_t len)
+static void sink_emit_line(void *ctx, const char *line, size_t len)
 {
     to_sink_t *gs = ctx;
 
@@ -1337,6 +1338,64 @@ static int sed_read_script_file(sh_session_t *s, const char *path, char *text, s
     return 0;
 }
 
+/* One filter's work on one open source: 0 at its end, 1 to stop the whole run, -1 after printing a failure. */
+typedef int (*filter_run_fn)(void *ctx, grep_src_t *src, const char *name);
+
+/* Runs a filter over each file, or stdin with none. Status: 0, 2 for an unreadable file, or fail_status when a run failed. */
+static int filter_over_sources(sh_session_t *s, const char *cmd, const char *const *targets,
+                               int files, filter_run_fn run, void *ctx, int fail_status)
+{
+    int status = 0, i;
+
+    if (files == 0) {
+        grep_src_t src;
+
+        src.s = s;
+        src.fd = -1;
+        src.file_eof = 0;
+        src.rbuf = NULL;
+        return run(ctx, &src, "(standard input)") < 0 ? fail_status : 0;
+    }
+    for (i = 0; i < files; i++) {
+        sh_target_t t;
+        struct stat st;
+        grep_src_t src;
+        int fd, r;
+
+        if (resolve_arg(s, cmd, targets[i], &t) != 0) {
+            status = 2;
+            continue;
+        }
+        if (t.kind == SH_TARGET_ROOT || t.kind == SH_TARGET_PSEUDO_DIR ||
+            (stat_target(&t, &st) == 0 && S_ISDIR(st.st_mode))) {
+            sh_eprintf(s, "%s: %s: not a regular file\n", cmd, targets[i]);
+            status = 2;
+            continue;
+        }
+        fd = sh_target_open(&t);
+        if (fd == -1) {
+            sh_eprintf(s, "%s: %s: %s\n", cmd, targets[i], strerror(errno));
+            status = 2;
+            continue;
+        }
+        src.s = s;
+        src.fd = fd;
+        src.file_eof = 0;
+        src.rbuf = malloc(GREP_RBUF);
+        src.rpos = src.rlen = 0;
+        r = run(ctx, &src, targets[i]);
+        free(src.rbuf);
+        sh_target_close(fd);
+        if (r < 0) {
+            return fail_status;
+        }
+        if (r > 0) {
+            break;
+        }
+    }
+    return status;
+}
+
 /* Runs the program over one source: 0 at its end, 1 when q ran, -1 after printing a failure. */
 static int sed_stream(sh_session_t *s, sh_sed_t *prog, int quiet, grep_src_t *src,
                       const char *name, char *line, to_sink_t *gs)
@@ -1359,7 +1418,7 @@ static int sed_stream(sh_session_t *s, sh_sed_t *prog, int quiet, grep_src_t *sr
                        SH_GREP_LINE_MAX);
             return -1;
         }
-        r = sh_sed_apply(prog, line, quiet, sed_emit, gs);
+        r = sh_sed_apply(prog, line, quiet, sink_emit_line, gs);
         if (r < 0) {
             to_flush(gs);
             if (errno == ERANGE) {
@@ -1380,6 +1439,23 @@ static int sed_stream(sh_session_t *s, sh_sed_t *prog, int quiet, grep_src_t *sr
     return 0;
 }
 
+typedef struct {
+    sh_session_t *s;
+    sh_sed_t *prog;
+    int quiet;
+    char *line;
+    to_sink_t *gs;
+} sed_run_t;
+
+static int sed_run(void *vctx, grep_src_t *src, const char *name)
+{
+    sed_run_t *run = vctx;
+    int r = sed_stream(run->s, run->prog, run->quiet, src, name, run->line, run->gs);
+
+    to_flush(run->gs);
+    return r;
+}
+
 static int cmd_sed(sh_session_t *s, int argc, char **argv)
 {
     const char *targets[MAX_ARGS];
@@ -1388,6 +1464,7 @@ static int cmd_sed(sh_session_t *s, int argc, char **argv)
     char *scriptbuf = NULL;
     sh_sed_t *prog = sh_sed_new();
     to_sink_t gs;
+    sed_run_t run;
     int quiet = 0, have_script = 0, files = 0, status = 0, i;
 
     gs.s = s;
@@ -1487,59 +1564,12 @@ static int cmd_sed(sh_session_t *s, int argc, char **argv)
         goto usage_error;
     }
 
-    if (files == 0) {
-        grep_src_t src;
-
-        src.s = s;
-        src.fd = -1;
-        src.file_eof = 0;
-        src.rbuf = NULL;
-        if (sed_stream(s, prog, quiet, &src, "(standard input)", line, &gs) < 0) {
-            status = 1;
-        }
-        to_flush(&gs);
-        goto done;
-    }
-
-    for (i = 0; i < files; i++) {
-        sh_target_t t;
-        struct stat st;
-        grep_src_t src;
-        int fd, r;
-
-        if (resolve_arg(s, "sed", targets[i], &t) != 0) {
-            status = 2;
-            continue;
-        }
-        if (t.kind == SH_TARGET_ROOT || t.kind == SH_TARGET_PSEUDO_DIR ||
-            (stat_target(&t, &st) == 0 && S_ISDIR(st.st_mode))) {
-            sh_eprintf(s, "sed: couldn't edit %s: not a regular file\n", targets[i]);
-            status = 2;
-            continue;
-        }
-        fd = sh_target_open(&t);
-        if (fd == -1) {
-            sh_eprintf(s, "sed: %s: %s\n", targets[i], strerror(errno));
-            status = 2;
-            continue;
-        }
-        src.s = s;
-        src.fd = fd;
-        src.file_eof = 0;
-        src.rbuf = malloc(GREP_RBUF);
-        src.rpos = src.rlen = 0;
-        r = sed_stream(s, prog, quiet, &src, targets[i], line, &gs);
-        to_flush(&gs);
-        free(src.rbuf);
-        sh_target_close(fd);
-        if (r < 0) {
-            status = 1;
-            break;
-        }
-        if (r > 0) {
-            break; /* q stops the whole run, not just this file */
-        }
-    }
+    run.s = s;
+    run.prog = prog;
+    run.quiet = quiet;
+    run.line = line;
+    run.gs = &gs;
+    status = filter_over_sources(s, "sed", targets, files, sed_run, &run, 1);
     goto done;
 
 usage_error:
@@ -1548,6 +1578,130 @@ done:
     free(line);
     free(scriptbuf);
     sh_sed_free(prog);
+    return status;
+}
+
+/* ------------------------------------------------------------------ */
+/* awk                                                                  */
+/* ------------------------------------------------------------------ */
+
+typedef struct {
+    sh_session_t *s;
+    sh_awk_t *prog;
+    char *line;
+    to_sink_t *gs;
+} awk_run_t;
+
+static int awk_stream(void *vctx, grep_src_t *src, const char *name)
+{
+    awk_run_t *run = vctx;
+    sh_session_t *s = run->s;
+    long lineno = 0;
+    int eof = 0;
+
+    while (!sh_session_interrupted(s)) {
+        int n = sh_grep_read_line(grep_fill, src, run->line, SH_GREP_LINE_MAX, &eof);
+
+        if (eof) {
+            break;
+        }
+        lineno++;
+        if (n < 0) {
+            /* A skipped line would silently drop a record, so the stream stops here. */
+            to_flush(run->gs);
+            sh_eprintf(s, "awk: %s: line %ld: too long (limit %d bytes)\n", name, lineno,
+                       SH_GREP_LINE_MAX);
+            return -1;
+        }
+        if (sh_awk_apply(run->prog, run->line, sink_emit_line, run->gs) != 0) {
+            to_flush(run->gs);
+            if (errno == ERANGE) {
+                sh_eprintf(s, "awk: %s: line %ld: more than %d fields or a print longer than %d bytes\n",
+                           name, lineno, SH_AWK_FIELD_MAX, SH_AWK_OUT_MAX);
+            } else if (errno == EAGAIN) {
+                sh_eprintf(s, "awk: %s: line %ld: pattern too expensive to match\n", name,
+                           lineno);
+            } else {
+                sh_eprintf(s, "awk: out of memory\n");
+            }
+            return -1;
+        }
+    }
+    to_flush(run->gs);
+    return 0;
+}
+
+static int cmd_awk(sh_session_t *s, int argc, char **argv)
+{
+    const char *targets[MAX_ARGS];
+    const char *fs = NULL;
+    char why[160];
+    sh_awk_t *prog = sh_awk_new();
+    to_sink_t gs;
+    awk_run_t run;
+    int files = 0, status = 2, i;
+
+    gs.s = s;
+    gs.with_count = 0;
+    gs.used = 0;
+    run.s = s;
+    run.prog = prog;
+    run.line = NULL;
+    run.gs = &gs;
+    if (prog == NULL) {
+        sh_eprintf(s, "awk: out of memory\n");
+        return 2;
+    }
+
+    for (i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--") == 0) {
+            i++;
+            break;
+        }
+        if (argv[i][0] != '-' || argv[i][1] == '\0') {
+            break;
+        }
+        if (argv[i][1] == 'F') {
+            if (argv[i][2] != '\0') {
+                fs = argv[i] + 2;
+            } else if (i + 1 < argc) {
+                fs = argv[++i];
+            } else {
+                sh_eprintf(s, "awk: option requires an argument -- F\n");
+                goto done;
+            }
+        } else if (argv[i][1] == 'v' || argv[i][1] == 'f') {
+            sh_eprintf(s, "awk: unsupported: -%c (%s)\n", argv[i][1],
+                       argv[i][1] == 'v' ? "variable assignment" : "program file");
+            goto done;
+        } else {
+            sh_eprintf(s, "awk: illegal option -- %c\n", argv[i][1]);
+            goto done;
+        }
+    }
+    if (i >= argc) {
+        sh_eprintf(s, "usage: awk [-F SEP] 'PROGRAM' [FILE...]\n");
+        sh_eprintf(s, "awk: missing program\n");
+        goto done;
+    }
+    if (sh_awk_compile(prog, argv[i++], fs, why, sizeof(why)) != 0) {
+        sh_eprintf(s, "awk: %s\n", why);
+        goto done;
+    }
+    for (; i < argc && files < MAX_ARGS; i++) {
+        targets[files++] = argv[i];
+    }
+
+    run.line = malloc(SH_GREP_LINE_MAX);
+    if (run.line == NULL) {
+        sh_eprintf(s, "awk: out of memory\n");
+        goto done;
+    }
+    status = filter_over_sources(s, "awk", targets, files, awk_stream, &run, 2);
+
+done:
+    free(run.line);
+    sh_awk_free(prog);
     return status;
 }
 
@@ -4253,6 +4407,8 @@ static const sh_builtin_t builtins[] = {
     {":", cmd_true, ": [ARG...] -- do nothing, successfully"},
     {"alias", cmd_alias,
      "alias [NAME[=VALUE]]... -- list aliases, show one, or define one; expands as the command word"},
+    {"awk", cmd_awk,
+     "awk [-F SEP] 'PROGRAM' [FILE...] -- [PATTERN] {print FIELDS} over files or stdin; $N NF NR, /RE/ or a comparison"},
     {"cat", cmd_cat, "cat FILE... -- write a file to the terminal"},
     {"cd", cmd_cd, "cd [DIR] -- change the working directory (no argument: $HOME)"},
     {"cp", cmd_cp, "cp [-r] SRC... DST -- copy; -r for directories"},
